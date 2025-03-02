@@ -1,13 +1,12 @@
 import typing as T
+from contextlib import asynccontextmanager
 
 import logfire
 from fastapi import APIRouter, status, Depends, FastAPI, Security
 from fastapi import HTTPException
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlmodel import select
 
-from .france_ban import requete_ban
 from .geographique import calcIsochrone
 from .config import config
 from .schemas import (
@@ -20,6 +19,9 @@ from .schemas import (
     get_db,
 )
 from .auth import supabase_auth
+from .users.db import User, create_db_and_tables
+from .users.schemas import UserCreate, UserRead, UserUpdate
+from .users.users import auth_backend, current_active_user, fastapi_users
 
 
 # hypercorn douceville.server:app --bind 0.0.0.0:3566 --reload
@@ -29,16 +31,53 @@ from .auth import supabase_auth
 # curl http://localhost:3566/etablissement/0180766K -H "Authorization: Bearer <your_token_here>"
 # https://kinde.com/blog/engineering/how-to-protect-your-fastapi-routes-with-kinde-authentication/
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Not needed if you setup a migration system like Alembic
+    await create_db_and_tables()
+    yield
+
+
 app = FastAPI(
     title="Douceville API",
     summary="Taux de réussite des écoles",
     description="RestFul API pour lister les écoles et leurs taux de réussite aux examens nationaux",
     version="1.0.0",
     root_path=config.API_PATH,
+    lifespan=lifespan,
 )
 router = APIRouter()
 
 logfire.instrument_fastapi(app)
+
+
+app.include_router(fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"])
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_reset_password_router(),
+    prefix="/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_verify_router(UserRead),
+    prefix="/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"],
+)
+
+
+@app.get("/authenticated-route")
+async def authenticated_route(user: User = Depends(current_active_user)):
+    return {"message": f"Hello {user.email}!"}
 
 
 @router.get("/etablissement/{uai}", response_model=EtablissementPublicAvecResultats)
@@ -66,22 +105,24 @@ async def etablissement_in_zone(
     user: DvUser = Security(supabase_auth),
     db: Session = Depends(get_db),
 ) -> ListeEtablissementPublicAvecResultatsEtIsochrone:
-    res_ban = requete_ban(body.adresse)
-    lonlat = (res_ban.longitude, res_ban.latitude)
-    iso = calcIsochrone(lonlat, body.dist, body.transp)
+    # res_ban = requete_ban(body.adresse)
+    # lonlat = (res_ban.longitude, res_ban.latitude)
+    # iso = calcIsochrone(lonlat, body.dist, body.transp)
 
-    stmt = select(Etablissement).where(func.ST_Within(Etablissement.position, iso.getGeom()))
+    # stmt = select(Etablissement).where(func.ST_Within(Etablissement.position, iso.getGeom()))
 
-    if body.nature is not None and body.nature != []:
-        stmt = stmt.where(Etablissement.nature.in_(body.nature))
+    # if body.nature is not None and body.nature != []:
+    #     stmt = stmt.where(Etablissement.nature.in_(body.nature))
 
-    if body.secteur is not None and body.secteur != []:
-        stmt = stmt.where(Etablissement.secteur.in_(body.secteur))
+    # if body.secteur is not None and body.secteur != []:
+    #     stmt = stmt.where(Etablissement.secteur.in_(body.secteur))
 
-    a = db.scalars(stmt)
+    # a = db.scalars(stmt)
 
-    res = ListeEtablissementPublicAvecResultatsEtIsochrone(etablissements=list(a), isochrone=iso)
-    return res
+    # res = ListeEtablissementPublicAvecResultatsEtIsochrone(etablissements=list(a), isochrone=iso)
+    # return res
+    # TODO: fix requete_ban
+    return []
 
 
 @router.get("/isochrone", response_model=Isochrone)

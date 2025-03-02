@@ -10,6 +10,12 @@ from .config import config
 from .schemas import Isochrone
 from . import logger
 
+# Isochrone : https://www.geoportail.gouv.fr/depot/swagger/itineraire.html
+# curl -X GET "https://data.geopf.fr/navigation/isochrone?point=2.337306%2C48.849319&resource=bdtopo-valhalla&costValue=300&costType=time&profile=car&direction=departure&constraints=%7B%22constraintType%22%3A%22banned%22%2C%22key%22%3A%22wayType%22%2C%22operator%22%3A%22%3D%22%2C%22value%22%3A%22autoroute%22%7D&distanceUnit=meter&timeUnit=second&crs=EPSG%3A4326" -H "accept: application/json"
+
+# Geocodage : https://data.geopf.fr/geocodage/openapi
+# curl -X 'GET' 'https://data.geopf.fr/geocodage/search?q=73%20Avenue%20de%20Paris%20Saint-Mand%C3%A9&autocomplete=0&index=address&limit=10&returntruegeometry=false' -H 'accept: application/json'
+
 
 def calcIsochrone(
     lonlat: T.Tuple[float, float],

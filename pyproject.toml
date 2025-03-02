@@ -12,7 +12,7 @@ authors = [
     { name = "Yann de Thé", email = "yann@gmail.com" },
 ]
 dependencies = [
-    "asgiref>=3.0.0",
+    "fastapi-users[redis,sqlalchemy,oauth]>=14.0.1",
     "fastapi[standard]>=0.115",
     "fastparquet>=2022",
     "geoalchemy2[shapely]>=0.14.6",
@@ -21,15 +21,11 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "logfire[fastapi]>=2",
     "numpy>=2",
-    "openrouteservice>=0.1",
     "pandas>=2",
     "psycopg2-binary>=2.9.6",
     "pydantic-settings>=2.0.0",
-    "pyjwt[crypto]>=2.8.0",
-    "python-jose[cryptography]>=3.3.0",
     "rich>=13.4.2",
     "sqlmodel>=0.0.14",
-    "supabase>=2.10.0",
     "typer>=0.12.3",
 ]
 

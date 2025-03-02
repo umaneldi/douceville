@@ -1,0 +1,1 @@
+- [src/douceville/server.py#L124](src/douceville/server.py#L124): fix requete_ban
