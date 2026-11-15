@@ -1,12 +1,6 @@
 #! /bin/sh
 
-
-rm -rf *.whl *.log dist
-uv build
-cp dist/*.whl .
-uv export --no-editable --no-emit-project -o requirements.txt > /dev/null
-sudo docker compose -f docker-compose.dev.yml -p dvtest stop
+# Rebuild and restart the local dev stack (PostGIS db).
+# The Go backend is run separately with: go run ./cmd/server
 sudo docker compose -f docker-compose.dev.yml -p dvtest up --build --remove-orphans -d
 sudo docker compose -f docker-compose.dev.yml -p dvtest logs -f
-
-rm -f *.whl requirements.txt

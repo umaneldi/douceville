@@ -1,45 +1,32 @@
-# Stage 1: Build
-FROM python:3.11
+# syntax=docker/dockerfile:1
 
-ARG LOGFIRE_TOKEN
-ARG LOGLEVEL
-ARG OPENROUTESERVICE_KEY
-ARG POSTGRES_HOST
-ARG ADDOK_HOST
-ARG POSTGRES_DB
-ARG POSTGRES_USER
-ARG POSTGRES_PASSWORD
-ARG API_PATH
-ARG NEXT_PUBLIC_SUPABASE_URL
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
-ARG SUPABASE_TEST_USER
-ARG SUPABASE_TEST_PASSWORD
-ARG SUPABASE_JWT_SECRET
-ARG SUPABASE_ADMIN_KEY
+# Stage 1: build the static Go binary.
+FROM golang:1.26 AS build
 
-ENV LOGFIRE_TOKEN=$LOGFIRE_TOKEN
-ENV LOGLEVEL=$LOGLEVEL
-ENV OPENROUTESERVICE_KEY=$OPENROUTESERVICE_KEY
-ENV POSTGRES_HOST=$POSTGRES_HOST
-ENV ADDOK_HOST=$ADDOK_HOST
-ENV POSTGRES_DB=$POSTGRES_DB
-ENV POSTGRES_USER=$POSTGRES_USER
-ENV POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-ENV API_PATH=$API_PATH
-ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
-ENV SUPABASE_TEST_USER=$SUPABASE_TEST_USER
-ENV SUPABASE_TEST_PASSWORD=$SUPABASE_TEST_PASSWORD
-ENV SUPABASE_JWT_SECRET=$SUPABASE_JWT_SECRET
-ENV SUPABASE_ADMIN_KEY=$SUPABASE_ADMIN_KEY
+WORKDIR /src
 
-ENV SQLALCHEMY_TRACK_MODIFICATIONS=False
+# Download dependencies first so they are cached as long as go.mod/go.sum are unchanged.
+COPY go.mod go.sum ./
+RUN go mod download
 
-RUN apt update && apt install gcc libpq-dev libgeos-dev
+# Copy the source and build.
+COPY cmd ./cmd
+COPY internal ./internal
 
-WORKDIR /code
+# CGO disabled -> fully static binary (pgx is pure Go), usable in a minimal base image.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/douceville ./cmd/server
 
-COPY dist/*.whl /code
-RUN pip install -U /code/*.whl && rm -f /code/*.whl
+# Stage 2: minimal runtime image.
+# distroless/static ships CA certificates (needed for HTTPS calls to OpenRouteService)
+# and runs as a non-root user by default.
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=build /out/douceville /douceville
+
+# Runtime configuration (POSTGRES_*, ADDOK_HOST, OPENROUTESERVICE_KEY,
+# SUPABASE_JWT_SECRET, API_PATH, ...) is provided via the container environment
+# (see docker-compose.yml), not baked into the image.
 EXPOSE 3566
-CMD ["hypercorn", "douceville.server:app", "--bind", "0.0.0.0:3566"]
+
+ENTRYPOINT ["/douceville"]

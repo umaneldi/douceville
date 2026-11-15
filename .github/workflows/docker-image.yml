@@ -6,70 +6,34 @@ on:
       - '**'
 
 jobs:
-  build_wheel:
-    name: Publication workflow
+  test:
+    name: Build and test (Go)
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgis/postgis
-        env:
-          POSTGRES_PASSWORD: douceville
-          POSTGRES_USER: douceville
-          POSTGRES_DB: douceville
-        options: >-
-          --health-cmd "pg_isready -U douceville"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version-file: "pyproject.toml"
+          go-version-file: go.mod
 
-      - name: Install the project
-        run: uv sync --all-extras --all-groups
+      - name: Build
+        run: go build ./...
 
-      - name: Run tests
-        # For example, using `pytest`
-        run: uv run pytest
-        env:
-          LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
-          LOGLEVEL: ${{ vars.LOGLEVEL }}
-          OPENROUTESERVICE_KEY: ${{ secrets.OPENROUTESERVICE_KEY }}
-          POSTGRES_HOST: ${{ vars.POSTGRES_HOST }}
-          ADDOK_HOST: ${{ vars.ADDOK_HOST }}
-          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
-          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ vars.POSTGRES_PASSWORD }}
-          API_PATH: ${{ vars.API_PATH }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          SUPABASE_TEST_USER: ${{ vars.SUPABASE_TEST_USER }}
-          SUPABASE_TEST_PASSWORD: ${{ secrets.SUPABASE_TEST_PASSWORD }}
-          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
-          SUPABASE_ADMIN_KEY: ${{ secrets.SUPABASE_ADMIN_KEY }}
+      - name: Vet
+        run: go vet ./...
 
-      - name: Build wheel and install
-        run: |
-          python -m pip install --user --upgrade build
-          python -m build
+      - name: Test
+        run: go test ./...
 
-      - name: Archive production artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Python wheel file
-          path: dist/*.whl
+  docker:
+    name: Build and push image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3

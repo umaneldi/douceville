@@ -5,28 +5,23 @@ build-backend = "hatchling.build"
 [project]
 name = "douceville"
 dynamic = ["version"]
-description = ""
+description = "Outils d'import de données (ETL) pour Douceville. L'API HTTP est servie par le backend Go."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
     { name = "Yann de Thé", email = "yann@gmail.com" },
 ]
 dependencies = [
-    "asgiref>=3.0.0",
-    "fastapi[standard]>=0.115",
     "fastparquet>=2022",
     "geoalchemy2[shapely]>=0.14.6",
-    "geopy>=0.93",
-    "hypercorn>=0.15",
-    "itsdangerous>=2.2.0",
-    "logfire[fastapi]>=2",
+    "logfire>=2",
     "numpy>=2",
     "openrouteservice>=0.1",
     "pandas>=2",
     "psycopg2-binary>=2.9.6",
     "pydantic-settings>=2.0.0",
-    "pyjwt[crypto]>=2.8.0",
     "python-jose[cryptography]>=3.3.0",
+    "requests>=2.31.0",
     "rich>=13.4.2",
     "sqlmodel>=0.0.14",
     "supabase>=2.10.0",
@@ -65,8 +60,6 @@ doc = [
     "pylint>=3.3.2",
 ]
 test = [
-    "httpx>=0.27.2",
-    "pytest-asyncio>=0.25.0",
     "pytest>=8.3.4",
     "pytest-cov>=6.0.0",
     "pytest-html>=4.1.1",
@@ -75,7 +68,6 @@ test = [
     "pytest-picked>=0.5.1",
     "pytest-sugar>=1.0.0",
     "pytest-xdist>=3.6.1",
-    "requests>=2.31.0",
 ]
 
 [tool.pdm.scripts]

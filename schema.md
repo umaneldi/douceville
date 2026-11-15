@@ -9,7 +9,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées automatiquement via `SQLModel.metadata.create_all(engine)` (voir `get_engine()` et `create_db_and_tables()` dans `src/douceville/schemas.py`). Il n'existe pas de fichier de migration SQL.
 - **Chaîne de connexion** : `postgresql+psycopg2://<user>:<password>@<host>/<db>` construite dans `src/douceville/config.py` à partir des variables d'environnement `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_DB`.
 
-La base ne contient que **deux tables physiques** : `etablissement` et `resultat`. Les autres classes du module `schemas.py` sont des modèles Pydantic/SQLModel non persistés (DTO d'entrée/sortie de l'API, objets métier comme `Isochrone`).
+La base contient **trois tables physiques** : `etablissement`, `resultat` et `utilisateur`. Les deux premières sont gérées par le backend Python (SQLModel) ; la table `utilisateur` est introduite par le backend Go (voir plus bas). Les autres classes du module `schemas.py` sont des modèles Pydantic/SQLModel non persistés (DTO d'entrée/sortie de l'API, objets métier comme `Isochrone`).
 
 ## Diagramme relationnel
 
@@ -80,6 +80,23 @@ Résultat d'un examen pour un établissement et une année donnés. Définie par
 
 **Relations** : `etablissement` → l'`Etablissement` parent (`back_populates="resultats"`).
 
+## Table `utilisateur`
+
+Profil des utilisateurs authentifiés, introduite par le **backend Go**. Après
+validation du JWT (HS256, secret Supabase, audience `authenticated`), le backend
+récupère le profil dans cette table au lieu d'appeler l'API REST Supabase. La
+table est créée de façon idempotente au démarrage (`CREATE TABLE IF NOT EXISTS`,
+voir `migrations/001_utilisateur.sql` et `internal/store/queries.go`).
+
+| Colonne       | Type SQL   | Contraintes      | Description |
+|---------------|------------|------------------|-------------|
+| `id`          | `TEXT`     | **PK**           | Identifiant de l'utilisateur ; correspond au claim `sub` du JWT (UUID Supabase). |
+| `email`       | `TEXT`     | NULL             | Adresse e-mail. |
+| `first_name`  | `TEXT`     | NULL             | Prénom. |
+| `last_name`   | `TEXT`     | NULL             | Nom. |
+| `avatar_url`  | `TEXT`     | NULL             | URL de l'avatar. |
+| `permissions` | `TEXT[]`   | NOT NULL, défaut `'{}'` | Liste des permissions. |
+
 ## Modèles non persistés (hors base)
 
 Ces classes n'ont pas `table=True` et ne correspondent à aucune table ; elles servent aux échanges API ou à la logique métier :
@@ -92,6 +109,7 @@ Ces classes n'ont pas `table=True` et ne correspondent à aucune table ; elles s
 
 ## Références dans le code
 
-- Définition des tables : `src/douceville/schemas.py`
-- Connexion et initialisation : `src/douceville/config.py`
+- Définition des tables (Python) : `src/douceville/schemas.py`
+- Connexion et initialisation (Python) : `src/douceville/config.py`
+- Backend Go : modèles `internal/models/models.go`, accès DB `internal/store/queries.go`, migration `migrations/001_utilisateur.sql`
 - Infrastructure PostGIS : `docker-compose.yml`, `docker-compose.dev.yml`
