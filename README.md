@@ -4,18 +4,17 @@ Douceville aide à choisir où habiter en croisant une **adresse**, une **zone d
 mobilité** (isochrone) et les **établissements scolaires** accessibles dans cette
 zone, avec leurs résultats aux examens.
 
-Donnez une adresse, une distance (ou un temps) de trajet et un mode de transport :
-le service calcule la zone atteignable et renvoie la liste des établissements qui
-s'y trouvent.
+Donnez une adresse, un temps de trajet et un mode de transport : le service calcule
+la zone atteignable et affiche sur une carte les établissements qui s'y trouvent.
 
 ## Architecture
 
-Le projet est composé de deux parties :
+Une **image Docker unique** sert à la fois l'API et l'interface web :
 
-- **Backend HTTP (Go)** — l'API servie en production. Code dans `cmd/` et
-  `internal/`. Authentification par token Bearer (JWT Supabase).
-- **ETL (Python)** — outils d'import des données (parquet → PostgreSQL) et
-  gestion des tokens de test, exposés par la CLI `dv-cli`. Code dans `src/douceville/`.
+- **Backend (Go)** — API JSON sous `/api`, authentification native par JWT
+  (Bearer). Code dans `cmd/` et `internal/`.
+- **Frontend (HTML/JS/CSS)** — interface cartographique (Leaflet) servie à la
+  racine `/`, embarquée dans le binaire via `//go:embed`. Code dans `web/`.
 
 Les données sont stockées dans **PostgreSQL + PostGIS**. Deux services externes
 sont utilisés :
@@ -24,42 +23,54 @@ sont utilisés :
 - [addok / Base Adresse Nationale](https://github.com/BaseAdresseNationale/addok-docker)
   pour le géocodage des adresses.
 
-Le schéma de base de données est documenté dans [`schema.md`](schema.md).
+Le schéma de base de données est documenté dans [`schema.md`](schema.md). Les tables
+sont créées au démarrage par un petit runner de migrations
+(`internal/store/migrate.go`, SQL embarqué dans `internal/store/migrations/`).
+
+> **Données.** Ce dépôt ne contient pas d'ETL : les tables `etablissement` et
+> `resultat` sont créées vides, les données sont chargées par un moyen externe
+> (dump PostgreSQL restauré, chargeur dédié…).
 
 ## API
 
-Toutes les routes sont montées sous `API_PATH` (vide par défaut) et protégées par
-le middleware d'authentification Bearer.
+Toutes les routes sont sous `/api`. Les routes d'authentification sont publiques ;
+les autres exigent un header `Authorization: Bearer <token>`.
 
-| Méthode | Route                  | Description                                                        |
-| ------- | ---------------------- | ------------------------------------------------------------------ |
-| `GET`   | `/etablissement/{uai}` | Détail d'un établissement par son UAI.                              |
-| `POST`  | `/etablissements`      | Établissements dans la zone atteignable depuis une adresse.        |
-| `GET`   | `/isochrone`           | Isochrone depuis des coordonnées (`lat`, `lon`, `dist`, `transp`). |
-| `GET`   | `/user`                | Profil de l'utilisateur authentifié.                               |
+| Méthode | Route                      | Auth | Description                                                   |
+| ------- | -------------------------- | :--: | ------------------------------------------------------------- |
+| `POST`  | `/api/auth/register`       |  —   | Inscription (email + mot de passe). Renvoie `{token, user}`.  |
+| `POST`  | `/api/auth/login`          |  —   | Connexion. Renvoie `{token, user}`.                           |
+| `GET`   | `/api/user`                |  ✓   | Profil de l'utilisateur authentifié.                          |
+| `GET`   | `/api/etablissement/{uai}` |  ✓   | Détail d'un établissement par son UAI.                        |
+| `POST`  | `/api/etablissements`      |  ✓   | Établissements dans la zone atteignable depuis une adresse.   |
+| `GET`   | `/api/isochrone`           |  ✓   | Isochrone depuis des coordonnées (`lat`, `lon`, `dist`, `transp`). |
 
-Le corps de `POST /etablissements` attend un JSON du type :
+Exemple de corps pour `POST /api/etablissements` (`dist` est un **temps en secondes**) :
 
 ```json
 {
   "adresse": "1 rue de la Paix, Paris",
-  "dist": 15,
+  "dist": 900,
   "transp": "driving-car",
-  "nature": null,
-  "secteur": null
+  "nature": ["Lycée", "Collège"],
+  "secteur": ["public"]
 }
 ```
 
+### Authentification
+
+L'auth est **native** (plus de Supabase). À l'inscription, le backend génère un
+identifiant (UUID), hache le mot de passe (PBKDF2-SHA256) et émet un JWT HS256
+signé avec `JWT_SECRET`. Le frontend stocke le token et l'envoie en Bearer.
+
 ## Configuration
 
-La configuration se fait par variables d'environnement. Copiez
-[`sample.env`](sample.env) en `.env` et renseignez les valeurs.
-
-Variables lues par le backend Go :
+Copiez [`sample.env`](sample.env) en `.env` et renseignez les valeurs. Variables
+lues par le backend :
 
 | Variable               | Défaut        | Rôle                                               |
 | ---------------------- | ------------- | -------------------------------------------------- |
-| `SUPABASE_JWT_SECRET`  | — (requis)    | Secret de validation des tokens Bearer.            |
+| `JWT_SECRET`           | — (requis)    | Secret de signature/validation des JWT. `openssl rand -hex 32`. |
 | `POSTGRES_HOST`        | `localhost`   | Hôte PostgreSQL.                                   |
 | `POSTGRES_PORT`        | `5432`        | Port PostgreSQL.                                   |
 | `POSTGRES_DB`          | `douceville`  | Nom de la base.                                    |
@@ -67,48 +78,45 @@ Variables lues par le backend Go :
 | `POSTGRES_PASSWORD`    | `douceville`  | Mot de passe PostgreSQL.                           |
 | `ADDOK_HOST`           | — (vide)      | Hôte du service de géocodage addok.                |
 | `OPENROUTESERVICE_KEY` | — (vide)      | Clé API OpenRouteService.                          |
-| `API_PATH`             | — (vide)      | Préfixe de montage des routes (ex. `/api`).        |
 | `LISTEN_ADDR`          | `:3566`       | Adresse d'écoute du serveur HTTP.                  |
 | `LOGLEVEL`             | `INFO`        | Niveau de log.                                     |
 
-Les autres variables Supabase de `sample.env` ne servent qu'à la CLI Python
-(`dv-cli token …`).
-
 ## Développement
 
-### Backend Go
-
-Nécessite Go 1.26+.
+Nécessite Go 1.26+ et une base PostGIS.
 
 ```bash
-go build ./cmd/server    # compiler
-go run ./cmd/server      # lancer le serveur
-go test ./...            # exécuter les tests
+# 1. Lancer PostGIS (compose de dev)
+./restart.sh
+
+# 2. Lancer le serveur (sert l'UI sur http://localhost:3566 et l'API sur /api)
+JWT_SECRET=dev-secret go run ./cmd/server
+
+# Qualité
+go build ./...
+go vet ./...
+go test ./...
 ```
 
-### ETL Python
-
-Nécessite Python 3.11+ et [uv](https://docs.astral.sh/uv/).
-
-```bash
-uv sync                               # installer les dépendances
-uv run dv-cli import etab <path>      # importer les établissements (parquet)
-uv run dv-cli import resultats <path> # importer les résultats (parquet)
-uv run dv-cli token create            # créer un token de test
-uv run dv-cli token check <token>     # vérifier un token
-```
+Le frontend est en HTML/CSS/JS statique (sans étape de build) dans `web/` ; il est
+embarqué dans le binaire à la compilation. Modifier un fichier de `web/` nécessite
+donc une recompilation (`go run` / `go build`).
 
 ## Déploiement
 
-L'image est construite à partir du [`Dockerfile`](Dockerfile) multi-stage
-(binaire statique Go sur base `distroless`).
+L'image est construite à partir du [`Dockerfile`](Dockerfile) multi-stage (binaire
+statique Go sur base `distroless`), qui embarque l'UI et les migrations.
 
 ```bash
-docker build -t ydethe/douceville:latest .
+docker build -t douceville .
+docker run -p 3566:3566 \
+  -e JWT_SECRET=... -e POSTGRES_HOST=... -e POSTGRES_PASSWORD=... \
+  douceville
 ```
 
 Le déploiement de production utilise [`docker-compose.yml`](docker-compose.yml)
-(backend + PostGIS, exposition via Traefik). Le service écoute sur le port `3566`.
+(application + PostGIS, exposition via Traefik). Le conteneur écoute sur `3566` et
+sert l'UI **et** l'API.
 
 ## Licence
 

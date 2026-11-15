@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/ydethe/douceville/internal/models"
 )
 
@@ -41,6 +44,61 @@ func (s *PgStore) GetUser(ctx context.Context, id string) (*models.DvUser, error
 		return nil, err
 	}
 	return &u, nil
+}
+
+// GetUserByEmail implémente Store.GetUserByEmail (hash du mot de passe inclus).
+func (s *PgStore) GetUserByEmail(ctx context.Context, email string) (*models.UserRecord, error) {
+	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions, password_hash
+		FROM utilisateur WHERE lower(email) = lower($1)`
+
+	var u models.UserRecord
+	err := s.pool.QueryRow(ctx, q, email).Scan(
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.PasswordHash,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+// CreateUser implémente Store.CreateUser. L'identifiant est un UUID v4 généré
+// côté application (il alimente le claim `sub` des JWT émis).
+func (s *PgStore) CreateUser(ctx context.Context, email, passwordHash string, firstName, lastName *string) (*models.DvUser, error) {
+	id, err := newUUID()
+	if err != nil {
+		return nil, err
+	}
+
+	const q = `INSERT INTO utilisateur (id, email, first_name, last_name, password_hash, permissions)
+		VALUES ($1, $2, $3, $4, $5, '{}')
+		RETURNING id, email, first_name, last_name, avatar_url, permissions`
+
+	var u models.DvUser
+	err = s.pool.QueryRow(ctx, q, id, email, firstName, lastName, passwordHash).Scan(
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			return nil, ErrEmailTaken
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+// newUUID génère un UUID v4 (RFC 4122) à partir de crypto/rand.
+func newUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant RFC 4122
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 // GetEtablissementByUAI implémente Store.GetEtablissementByUAI.
@@ -129,19 +187,3 @@ func (s *PgStore) resultatsForUAI(ctx context.Context, uai string) ([]models.Res
 	}
 	return results, rows.Err()
 }
-
-// EnsureUserTable crée la table `utilisateur` si elle n'existe pas (migration idempotente).
-func (s *PgStore) EnsureUserTable(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, createUserTableSQL)
-	return err
-}
-
-// createUserTableSQL est la DDL de la table de profils.
-const createUserTableSQL = `CREATE TABLE IF NOT EXISTS utilisateur (
-	id          TEXT PRIMARY KEY,
-	email       TEXT,
-	first_name  TEXT,
-	last_name   TEXT,
-	avatar_url  TEXT,
-	permissions TEXT[] NOT NULL DEFAULT '{}'
-)`

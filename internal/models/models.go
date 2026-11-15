@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// DvUser représente un utilisateur authentifié.
+// DvUser représente un utilisateur authentifié (forme publique, sérialisée en JSON).
 type DvUser struct {
 	ID          string   `json:"id"`
 	Login       string   `json:"login"`
@@ -17,6 +17,27 @@ type DvUser struct {
 	Email       *string  `json:"email"`
 	AvatarURL   *string  `json:"avatar_url"`
 	Permissions []string `json:"permissions"`
+}
+
+// UserRecord est la représentation interne d'un utilisateur, incluant le hash
+// du mot de passe. Il ne doit jamais être sérialisé vers le client.
+type UserRecord struct {
+	DvUser
+	PasswordHash string `json:"-"`
+}
+
+// Credentials est le corps des requêtes d'inscription et de connexion.
+type Credentials struct {
+	Email     string  `json:"email"`
+	Password  string  `json:"password"`
+	FirstName *string `json:"first_name"`
+	LastName  *string `json:"last_name"`
+}
+
+// AuthResponse est renvoyé par /auth/register et /auth/login.
+type AuthResponse struct {
+	Token string `json:"token"`
+	User  DvUser `json:"user"`
 }
 
 // Resultat est un résultat d'examen rattaché à un établissement.

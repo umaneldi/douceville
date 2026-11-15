@@ -5,11 +5,10 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 ## Vue d'ensemble
 
 - **SGBD** : PostgreSQL avec l'extension **PostGIS** (image Docker `postgis/postgis`).
-- **ORM** : [SQLModel](https://sqlmodel.tiangolo.com/) (couche au-dessus de SQLAlchemy) combiné à [GeoAlchemy2](https://geoalchemy-2.readthedocs.io/) pour les types géographiques.
-- **Création du schéma** : les tables sont créées automatiquement via `SQLModel.metadata.create_all(engine)` (voir `get_engine()` et `create_db_and_tables()` dans `src/douceville/schemas.py`). Il n'existe pas de fichier de migration SQL.
-- **Chaîne de connexion** : `postgresql+psycopg2://<user>:<password>@<host>/<db>` construite dans `src/douceville/config.py` à partir des variables d'environnement `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_DB`.
+- **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
+- **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **trois tables physiques** : `etablissement`, `resultat` et `utilisateur`. Les deux premières sont gérées par le backend Python (SQLModel) ; la table `utilisateur` est introduite par le backend Go (voir plus bas). Les autres classes du module `schemas.py` sont des modèles Pydantic/SQLModel non persistés (DTO d'entrée/sortie de l'API, objets métier comme `Isochrone`).
+La base contient **trois tables physiques** : `etablissement`, `resultat` et `utilisateur`, toutes créées par les migrations Go. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -39,7 +38,7 @@ Relation : etablissement (1) ──< (N) resultat
 
 ## Table `etablissement`
 
-Établissement scolaire (lycée, collège, etc.). Définie par la classe `Etablissement` (`EtablissementBase` + `table=True`).
+Établissement scolaire (lycée, collège, etc.). Créée par `internal/store/migrations/003_etablissement_resultat.sql`.
 
 | Colonne       | Type SQL              | Contraintes                     | Description |
 |---------------|-----------------------|---------------------------------|-------------|
@@ -50,21 +49,21 @@ Relation : etablissement (1) ──< (N) resultat
 | `lieu_dit`    | `VARCHAR`             | NULL                            | Lieu-dit. |
 | `code_postal` | `VARCHAR`             | NOT NULL                        | Code postal. |
 | `commune`     | `VARCHAR`             | NOT NULL                        | Commune. |
-| `position`    | `GEOMETRY(POINT)`     | NOT NULL                        | Position géographique (PostGIS). Exposée en GeoJSON côté API via `ST_AsGeoJSON`. |
+| `position`    | `geometry(Point)` (SRID 0) | NOT NULL                   | Position géographique (PostGIS), SRID 0 pour rester cohérent avec les isochrones (`ST_GeomFromEWKT` sans SRID). Index GiST. Exposée en GeoJSON côté API via `ST_AsGeoJSON`. |
 | `departement` | `VARCHAR`             | NOT NULL                        | Code / nom du département. |
 | `academie`    | `VARCHAR`             | NULL                            | Académie de rattachement. |
 | `secteur`     | `VARCHAR`             | NOT NULL                        | Secteur (`public` / `privé`). |
 | `ouverture`   | `TIMESTAMP`           | NULL                            | Date d'ouverture. |
 | `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement (ex. `lycée`, `collège`). |
 
-**Relations** : `resultats` → liste des `Resultat` liés (`back_populates="etablissement"`, suppression en cascade).
+**Relations** : un établissement a plusieurs `resultat` (FK `resultat.etablissement_uai` → `etablissement.UAI`, suppression en cascade).
 
 ### Détails sur `position`
-La colonne est déclarée via GeoAlchemy2 : `Column(Geometry("POINT"))`. En lecture, un validateur Pydantic (`convert_geom_to_geojson`) convertit le `WKBElement` PostGIS en GeoJSON. En écriture, la valeur peut être fournie en WKT (ex. `"POINT(1.4401531 43.6085909)"`).
+La colonne est de type `geometry(Point)` (SRID 0). En lecture, l'API la renvoie en GeoJSON via `ST_AsGeoJSON(position)` (voir `etabColumns` dans `internal/store/queries.go`). Les données doivent être insérées en SRID 0 (ex. `ST_GeomFromText('POINT(1.4401531 43.6085909)')`) pour que `ST_Within` fonctionne avec les isochrones.
 
 ## Table `resultat`
 
-Résultat d'un examen pour un établissement et une année donnés. Définie par la classe `Resultat` (`ResultatBase` + `table=True`).
+Résultat d'un examen pour un établissement et une année donnés. Créée par `internal/store/migrations/003_etablissement_resultat.sql`.
 
 | Colonne             | Type SQL   | Contraintes                              | Description |
 |---------------------|------------|------------------------------------------|-------------|
@@ -78,38 +77,38 @@ Résultat d'un examen pour un établissement et une année donnés. Définie par
 
 **Contrainte d'unicité** : `UNIQUE (diplome, annee, etablissement_uai)` — un seul résultat par couple (diplôme, année) et par établissement.
 
-**Relations** : `etablissement` → l'`Etablissement` parent (`back_populates="resultats"`).
-
 ## Table `utilisateur`
 
-Profil des utilisateurs authentifiés, introduite par le **backend Go**. Après
-validation du JWT (HS256, secret Supabase, audience `authenticated`), le backend
-récupère le profil dans cette table au lieu d'appeler l'API REST Supabase. La
-table est créée de façon idempotente au démarrage (`CREATE TABLE IF NOT EXISTS`,
-voir `migrations/001_utilisateur.sql` et `internal/store/queries.go`).
+Profil et identifiants des utilisateurs, support de l'**authentification native**
+du backend Go (plus de Supabase). À l'inscription, le backend génère un UUID v4
+(`id`), hache le mot de passe (PBKDF2-SHA256, `internal/auth/password.go`) et émet
+un JWT HS256 (`aud=douceville`) signé avec `JWT_SECRET`. À chaque requête protégée,
+le middleware valide le JWT puis récupère le profil par `id` (claim `sub`).
+Colonnes créées par `migrations/001_utilisateur.sql` et `migrations/002_auth.sql`.
 
-| Colonne       | Type SQL   | Contraintes      | Description |
-|---------------|------------|------------------|-------------|
-| `id`          | `TEXT`     | **PK**           | Identifiant de l'utilisateur ; correspond au claim `sub` du JWT (UUID Supabase). |
-| `email`       | `TEXT`     | NULL             | Adresse e-mail. |
-| `first_name`  | `TEXT`     | NULL             | Prénom. |
-| `last_name`   | `TEXT`     | NULL             | Nom. |
-| `avatar_url`  | `TEXT`     | NULL             | URL de l'avatar. |
-| `permissions` | `TEXT[]`   | NOT NULL, défaut `'{}'` | Liste des permissions. |
+| Colonne         | Type SQL   | Contraintes                    | Description |
+|-----------------|------------|--------------------------------|-------------|
+| `id`            | `TEXT`     | **PK**                         | UUID v4 généré à l'inscription ; alimente le claim `sub` du JWT. |
+| `email`         | `TEXT`     | **UNIQUE** (`lower(email)`)    | Adresse e-mail (identifiant de connexion). |
+| `password_hash` | `TEXT`     | NULL                           | Hash PBKDF2-SHA256 salé (`pbkdf2_sha256$iter$salt$hash`). |
+| `first_name`    | `TEXT`     | NULL                           | Prénom. |
+| `last_name`     | `TEXT`     | NULL                           | Nom. |
+| `avatar_url`    | `TEXT`     | NULL                           | URL de l'avatar. |
+| `permissions`   | `TEXT[]`   | NOT NULL, défaut `'{}'`        | Liste des permissions. |
 
-## Modèles non persistés (hors base)
+## Objets non persistés (hors base)
 
-Ces classes n'ont pas `table=True` et ne correspondent à aucune table ; elles servent aux échanges API ou à la logique métier :
+Structures Go d'échange API (`internal/models/models.go`), sans table associée :
 
-- `DvUser` — représentation d'un utilisateur authentifié (auth gérée par **Supabase**, hors de cette base).
-- `EtablissementCreate`, `EtablissementPublic`, `EtablissementUpdate`, `EtablissementPublicAvecResultats` — DTO pour la table `etablissement`.
-- `ResultatCreate`, `ResultatPublic`, `ResultatUpdate`, `ResultatPublicAvecEtablissement` — DTO pour la table `resultat`.
+- `DvUser` / `UserRecord` — profil public / interne (hash du mot de passe, jamais sérialisé).
+- `Credentials`, `AuthResponse` — corps des requêtes `/api/auth/*` et réponse `{token, user}`.
+- `Etablissement`, `Resultat` — projections lues depuis la base.
 - `Isochrone` — zone d'accessibilité (géométrie `POLYGON`) calculée à la volée, non stockée.
-- `ListeEtablissementPublicAvecResultatsEtIsochrone`, `QueryParameters` — structures de requête/réponse de l'API.
+- `ListeEtablissementsAvecIsochrone`, `QueryParameters` — réponse/requête de `POST /api/etablissements`.
 
 ## Références dans le code
 
-- Définition des tables (Python) : `src/douceville/schemas.py`
-- Connexion et initialisation (Python) : `src/douceville/config.py`
-- Backend Go : modèles `internal/models/models.go`, accès DB `internal/store/queries.go`, migration `migrations/001_utilisateur.sql`
-- Infrastructure PostGIS : `docker-compose.yml`, `docker-compose.dev.yml`
+- Migrations SQL : `internal/store/migrations/*.sql` (runner : `internal/store/migrate.go`).
+- Accès base : `internal/store/queries.go` ; modèles : `internal/models/models.go`.
+- Auth : `internal/auth/` (JWT `jwt.go`, mots de passe `password.go`, middleware `middleware.go`).
+- Infrastructure PostGIS : `docker-compose.yml`, `docker-compose.dev.yml`.

@@ -16,8 +16,7 @@ services:
       - POSTGRES_DB=$POSTGRES_DB
       - POSTGRES_USER=$POSTGRES_USER
       - POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-      - API_PATH=$API_PATH
-      - SUPABASE_JWT_SECRET=$SUPABASE_JWT_SECRET
+      - JWT_SECRET=$JWT_SECRET
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.$COMPOSE_PROJECT_NAME.rule=Host(`$HOST`)"

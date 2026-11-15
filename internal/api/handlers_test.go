@@ -16,14 +16,25 @@ import (
 // --- Mocks ---
 
 type mockStore struct {
-	etab *models.Etablissement
-	zone []models.Etablissement
-	user *models.DvUser
-	err  error
+	etab      *models.Etablissement
+	zone      []models.Etablissement
+	user      *models.DvUser
+	rec       *models.UserRecord
+	err       error
+	createErr error
 }
 
 func (m mockStore) GetUser(ctx context.Context, id string) (*models.DvUser, error) {
 	return m.user, m.err
+}
+func (m mockStore) GetUserByEmail(ctx context.Context, email string) (*models.UserRecord, error) {
+	return m.rec, m.err
+}
+func (m mockStore) CreateUser(ctx context.Context, email, passwordHash string, firstName, lastName *string) (*models.DvUser, error) {
+	if m.createErr != nil {
+		return nil, m.createErr
+	}
+	return &models.DvUser{ID: "new-id", Email: &email}, nil
 }
 func (m mockStore) GetEtablissementByUAI(ctx context.Context, uai string) (*models.Etablissement, error) {
 	return m.etab, m.err

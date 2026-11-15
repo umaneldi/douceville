@@ -33,17 +33,18 @@ func main() {
 	}
 
 	st := store.New(pool)
-	if err := st.EnsureUserTable(ctx); err != nil {
+	if err := st.Migrate(ctx); err != nil {
 		log.Fatalf("migration: %v", err)
 	}
 
 	handlers := &api.Handlers{
-		Store:    st,
-		Isochron: geo.NewORSClient(cfg.OpenRouteServiceKey, nil),
-		Geocoder: geo.NewBANClient(cfg.ADDOKHost, nil),
+		Store:     st,
+		Isochron:  geo.NewORSClient(cfg.OpenRouteServiceKey, nil),
+		Geocoder:  geo.NewBANClient(cfg.ADDOKHost, nil),
+		JWTSecret: cfg.JWTSecret,
 	}
 
-	router := api.NewRouter(cfg.APIPath, cfg.SupabaseJWTSecret, handlers, st)
+	router := api.NewRouter(cfg.JWTSecret, handlers, st)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -51,7 +52,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	log.Printf("Douceville API listening on %s (api_path=%q)", cfg.ListenAddr, cfg.APIPath)
+	log.Printf("Douceville listening on %s (UI at /, API at /api)", cfg.ListenAddr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server: %v", err)
 	}

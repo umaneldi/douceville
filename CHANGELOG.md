@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 <small>[Compare with latest](https://github.com/ydethe/douceville/compare/v1.4.2...HEAD)</small>
 
+### Added
+
+- Native authentication in the Go backend (self-issued HS256 JWT, PBKDF2-SHA256 password hashing) with open self-service registration, replacing Supabase.
+- `POST /api/auth/register` and `POST /api/auth/login` endpoints returning `{token, user}`.
+- Brand-new web UI (vanilla HTML/CSS/JS + Leaflet map) served from the binary, with login/register, address search, isochrone and school markers.
+- Embedded SQL migration runner (`internal/store/migrate.go`) that creates the `utilisateur`, `etablissement` and `resultat` tables at startup.
+
+### Changed
+
+- Single monolithic Docker image now serves both the UI (at `/`) and the JSON API (at `/api`).
+- `utilisateur` table gains `password_hash` and a unique `lower(email)` index.
+
+### Removed
+
+- All legacy Python code (ETL, Supabase helpers): `src/`, `tests/`, `pyproject.toml`, `uv.lock`.
+- Supabase integration and the `SUPABASE_*` / `NEXT_PUBLIC_SUPABASE_*` / `API_PATH` configuration (now `JWT_SECRET`).
+
 <!-- insertion marker -->
 ## [v1.4.2](https://github.com/ydethe/douceville/releases/tag/v1.4.2) - 2024-12-17
 

@@ -9,9 +9,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the source and build.
+# Copy the source and build. The web/ assets and SQL migrations are embedded
+# into the binary via //go:embed, so they must be present at compile time.
 COPY cmd ./cmd
 COPY internal ./internal
+COPY web ./web
 
 # CGO disabled -> fully static binary (pgx is pure Go), usable in a minimal base image.
 RUN --mount=type=cache,target=/root/.cache/go-build \
@@ -25,8 +27,9 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/douceville /douceville
 
 # Runtime configuration (POSTGRES_*, ADDOK_HOST, OPENROUTESERVICE_KEY,
-# SUPABASE_JWT_SECRET, API_PATH, ...) is provided via the container environment
+# JWT_SECRET, ...) is provided via the container environment
 # (see docker-compose.yml), not baked into the image.
+# The single binary serves both the UI (at /) and the JSON API (at /api).
 EXPOSE 3566
 
 ENTRYPOINT ["/douceville"]

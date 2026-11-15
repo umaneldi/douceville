@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Douceville — Villes et écoles</title>
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <!-- Écran d'authentification -->
+  <div id="auth" class="auth-screen" hidden>
+    <form id="auth-form" class="auth-card" autocomplete="on">
+      <h1 class="brand">Douceville</h1>
+      <p class="tagline">Trouvez où habiter, à portée d'école.</p>
+
+      <div class="field name-fields" data-register-only hidden>
+        <input id="first-name" type="text" placeholder="Prénom (optionnel)" autocomplete="given-name" />
+        <input id="last-name" type="text" placeholder="Nom (optionnel)" autocomplete="family-name" />
+      </div>
+      <div class="field">
+        <input id="email" type="email" placeholder="Adresse e-mail" required autocomplete="email" />
+      </div>
+      <div class="field">
+        <input id="password" type="password" placeholder="Mot de passe" required
+               minlength="8" autocomplete="current-password" />
+      </div>
+
+      <p id="auth-error" class="error" role="alert" hidden></p>
+
+      <button id="auth-submit" type="submit" class="btn-primary">Se connecter</button>
+      <p class="switch">
+        <span id="switch-text">Pas encore de compte ?</span>
+        <a href="#" id="switch-mode">Créer un compte</a>
+      </p>
+    </form>
+  </div>
+
+  <!-- Application principale -->
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <span class="brand-sm">Douceville</span>
+      <div class="spacer"></div>
+      <span id="user-label" class="user-label"></span>
+      <button id="logout" class="btn-ghost">Déconnexion</button>
+    </header>
+
+    <div class="layout">
+      <aside class="panel">
+        <form id="search-form">
+          <label class="lbl" for="address">Adresse de départ</label>
+          <input id="address" type="text" placeholder="12 rue de la Paix, Paris" required />
+
+          <label class="lbl" for="time">Temps de trajet : <strong id="time-val">15</strong> min</label>
+          <input id="time" type="range" min="5" max="60" step="5" value="15" />
+
+          <label class="lbl" for="transp">Mode de transport</label>
+          <select id="transp">
+            <option value="driving-car">Voiture</option>
+            <option value="cycling-regular">Vélo</option>
+            <option value="foot-walking">À pied</option>
+          </select>
+
+          <fieldset class="filters">
+            <legend>Nature</legend>
+            <label><input type="checkbox" name="nature" value="Maternelle" /> Maternelle</label>
+            <label><input type="checkbox" name="nature" value="Elementaire" /> Élémentaire</label>
+            <label><input type="checkbox" name="nature" value="Collège" /> Collège</label>
+            <label><input type="checkbox" name="nature" value="Lycée" /> Lycée</label>
+          </fieldset>
+
+          <fieldset class="filters">
+            <legend>Secteur</legend>
+            <label><input type="checkbox" name="secteur" value="public" /> Public</label>
+            <label><input type="checkbox" name="secteur" value="privé" /> Privé</label>
+          </fieldset>
+
+          <button id="search-btn" type="submit" class="btn-primary">Rechercher</button>
+          <p id="search-status" class="status"></p>
+        </form>
+
+        <div id="results-summary" class="results-summary" hidden></div>
+      </aside>
+
+      <main id="map" class="map"></main>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>

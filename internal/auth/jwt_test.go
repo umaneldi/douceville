@@ -23,7 +23,7 @@ func validClaims() jwt.MapClaims {
 	return jwt.MapClaims{
 		"sub":   "user-123",
 		"email": "alice@example.com",
-		"aud":   "authenticated",
+		"aud":   "douceville",
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	}
 }

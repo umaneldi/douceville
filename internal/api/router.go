@@ -2,36 +2,61 @@ package api
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/ydethe/douceville/internal/auth"
+	"github.com/ydethe/douceville/web"
 )
 
-// NewRouter construit le routeur chi. Toutes les routes sont montées sous apiPath
-// (équivalent du root_path FastAPI) et protégées par le middleware d'auth Bearer.
-func NewRouter(apiPath, jwtSecret string, h *Handlers, users auth.UserLookup) http.Handler {
+// NewRouter construit le routeur de l'application monolithique : l'API JSON est
+// montée sous /api, et l'interface web statique (embarquée) est servie à la racine.
+func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 
-	authenticated := chi.NewRouter()
-	authenticated.Use(auth.Middleware(jwtSecret, users))
+	r.Route("/api", func(api chi.Router) {
+		// Routes publiques (authentification).
+		api.Post("/auth/register", h.register)
+		api.Post("/auth/login", h.login)
 
-	authenticated.Get("/etablissement/{uai}", h.readEtablissement)
-	authenticated.Post("/etablissements", h.etablissementsInZone)
-	authenticated.Get("/isochrone", h.isochrone)
-	authenticated.Get("/user", h.getUser)
+		// Routes protégées par un token Bearer.
+		api.Group(func(protected chi.Router) {
+			protected.Use(auth.Middleware(jwtSecret, users))
+			protected.Get("/etablissement/{uai}", h.readEtablissement)
+			protected.Post("/etablissements", h.etablissementsInZone)
+			protected.Get("/isochrone", h.isochrone)
+			protected.Get("/user", h.getUser)
+		})
+	})
 
-	if apiPath == "" {
-		r.Mount("/", authenticated)
-	} else {
-		r.Mount(apiPath, authenticated)
-	}
+	r.Handle("/*", spaHandler())
 
 	return r
+}
+
+// spaHandler sert les fichiers statiques embarqués ; toute route inconnue
+// retombe sur index.html (application monopage).
+func spaHandler() http.HandlerFunc {
+	fileServer := http.FileServerFS(web.Files)
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p == "" {
+			p = "index.html"
+		}
+		if _, err := fs.Stat(web.Files, p); err != nil {
+			// Fichier inconnu : on sert l'application monopage.
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
+		}
+		fileServer.ServeHTTP(w, r)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

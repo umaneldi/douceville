@@ -1,5 +1,5 @@
 // Package config charge la configuration du service depuis les variables
-// d'environnement (équivalent de src/douceville/config.py côté Python).
+// d'environnement.
 package config
 
 import (
@@ -17,9 +17,10 @@ type Config struct {
 
 	ADDOKHost           string
 	OpenRouteServiceKey string
-	SupabaseJWTSecret   string
 
-	APIPath  string
+	// JWTSecret signe et valide les JWT émis par le backend (auth native).
+	JWTSecret string
+
 	LogLevel string
 
 	// ListenAddr est l'adresse d'écoute du serveur HTTP.
@@ -45,14 +46,13 @@ func Load() (Config, error) {
 		PostgresPassword:    env("POSTGRES_PASSWORD", "douceville"),
 		ADDOKHost:           env("ADDOK_HOST", ""),
 		OpenRouteServiceKey: env("OPENROUTESERVICE_KEY", ""),
-		SupabaseJWTSecret:   env("SUPABASE_JWT_SECRET", ""),
-		APIPath:             env("API_PATH", ""),
+		JWTSecret:           env("JWT_SECRET", ""),
 		LogLevel:            env("LOGLEVEL", "INFO"),
 		ListenAddr:          env("LISTEN_ADDR", ":3566"),
 	}
 
-	if c.SupabaseJWTSecret == "" {
-		return Config{}, fmt.Errorf("SUPABASE_JWT_SECRET is required")
+	if c.JWTSecret == "" {
+		return Config{}, fmt.Errorf("JWT_SECRET is required")
 	}
 
 	return c, nil

@@ -25,9 +25,10 @@ type Geocoder interface {
 
 // Handlers porte les dépendances des endpoints.
 type Handlers struct {
-	Store    store.Store
-	Isochron Isochroner
-	Geocoder Geocoder
+	Store     store.Store
+	Isochron  Isochroner
+	Geocoder  Geocoder
+	JWTSecret string
 }
 
 // readEtablissement gère GET /etablissement/{uai}.
