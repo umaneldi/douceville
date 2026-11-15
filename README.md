@@ -81,6 +81,53 @@ lues par le backend :
 | `LISTEN_ADDR`          | `:3566`       | Adresse d'écoute du serveur HTTP.                  |
 | `LOGLEVEL`             | `INFO`        | Niveau de log.                                     |
 
+## Lancer le service
+
+Le service a besoin de **deux choses** : une base **PostgreSQL/PostGIS** et un
+**`JWT_SECRET`**. Au démarrage, il applique ses migrations (création des tables)
+puis sert l'interface sur `http://localhost:3566` et l'API sur `/api`.
+
+### Option A — Docker (recommandé)
+
+```bash
+# 1. Une base PostGIS (ou utilisez la vôtre)
+docker run -d --name douceville-db \
+  -e POSTGRES_DB=douceville -e POSTGRES_USER=douceville -e POSTGRES_PASSWORD=douceville \
+  -p 5432:5432 postgis/postgis
+
+# 2. L'application (image monolithique : UI + API)
+docker build -t douceville .
+docker run --rm -p 3566:3566 \
+  -e JWT_SECRET="$(openssl rand -hex 32)" \
+  -e POSTGRES_HOST=host.docker.internal \
+  -e POSTGRES_PASSWORD=douceville \
+  douceville
+```
+
+### Option B — Depuis les sources (Go 1.26+)
+
+```bash
+# 1. Lancer PostGIS (compose de dev : service « db »)
+./restart.sh
+
+# 2. Lancer le serveur
+JWT_SECRET=dev-secret POSTGRES_HOST=localhost go run ./cmd/server
+```
+
+### Première utilisation
+
+1. Ouvrez `http://localhost:3566`.
+2. Cliquez sur **« Créer un compte »**, saisissez un e-mail et un mot de passe
+   (≥ 8 caractères) : l'inscription est ouverte et vous connecte directement.
+3. Saisissez une adresse, un temps de trajet et un mode de transport, puis
+   **Rechercher**.
+
+> **À noter.** La recherche d'établissements nécessite, en plus, un
+> `OPENROUTESERVICE_KEY` (isochrones), un `ADDOK_HOST` (géocodage) et des données
+> chargées dans les tables `etablissement`/`resultat` (il n'y a pas d'ETL dans ce
+> dépôt — voir plus haut). L'inscription, la connexion et l'interface fonctionnent
+> sans ces éléments.
+
 ## Développement
 
 Nécessite Go 1.26+ et une base PostGIS.
