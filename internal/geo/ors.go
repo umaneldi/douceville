@@ -59,7 +59,8 @@ func (c *ORSClient) CalcIsochrone(ctx context.Context, lonlat [2]float64, dist f
 	}
 	req.Header.Set("Authorization", c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	// ORS renvoie du GeoJSON et répond 406 si l'on n'accepte que application/json.
+	req.Header.Set("Accept", "application/geo+json, application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
