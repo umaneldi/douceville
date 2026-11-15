@@ -7,6 +7,12 @@ zone, avec leurs résultats aux examens.
 Donnez une adresse, un temps de trajet et un mode de transport : le service calcule
 la zone atteignable et affiche sur une carte les établissements qui s'y trouvent.
 
+## Sources de données
+
+https://www.data.gouv.fr/datasets/liste-des-etablissements-des-premier-et-second-degres-pour-les-secteurs-publics-et-prives-en-france
+https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-gt_v2/
+https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-valeur-ajoutee-colleges/
+
 ## Architecture
 
 Une **image Docker unique** sert à la fois l'API et l'interface web :

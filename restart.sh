@@ -2,5 +2,6 @@
 
 # Rebuild and restart the local dev stack (PostGIS db).
 # The Go backend is run separately with: go run ./cmd/server
-sudo docker compose -f docker-compose.dev.yml -p dvtest up --build --remove-orphans -d
-sudo docker compose -f docker-compose.dev.yml -p dvtest logs -f
+docker compose down
+docker compose up --force-recreate --remove-orphans -d
+docker compose logs -f

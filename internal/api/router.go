@@ -18,6 +18,7 @@ import (
 func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	r.Use(requestLogger)
 	r.Use(middleware.Recoverer)
 
 	r.Route("/api", func(api chi.Router) {

@@ -3,9 +3,11 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/ydethe/douceville/internal/models"
 )
 
@@ -27,22 +29,26 @@ func Middleware(secret string, users UserLookup) func(http.Handler) http.Handler
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token, ok := bearerToken(r)
 			if !ok {
+				logger(r).Warn("auth: missing or malformed bearer token")
 				writeError(w, http.StatusForbidden, "Not authenticated")
 				return
 			}
 
 			claims, err := ParseToken(token, secret)
 			if err != nil {
+				logger(r).Warn("auth: invalid token", "error", err)
 				writeError(w, http.StatusUnauthorized, err.Error())
 				return
 			}
 
 			user, err := users.GetUser(r.Context(), claims.Sub)
 			if err != nil {
+				logger(r).Error("auth: user lookup failed", "user_id", claims.Sub, "error", err)
 				writeError(w, http.StatusInternalServerError, "user lookup failed")
 				return
 			}
 			if user == nil {
+				logger(r).Warn("auth: token for unknown user", "user_id", claims.Sub)
 				writeError(w, http.StatusUnauthorized, "No user found")
 				return
 			}
@@ -50,10 +56,17 @@ func Middleware(secret string, users UserLookup) func(http.Handler) http.Handler
 			// Le login provient du claim email du token (comme en Python).
 			user.Login = claims.Email
 
+			logger(r).Debug("auth: request authenticated", "user_id", user.ID)
+
 			ctx := context.WithValue(r.Context(), ctxKey{}, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// logger renvoie le logger par défaut enrichi de l'identifiant de requête et du chemin.
+func logger(r *http.Request) *slog.Logger {
+	return slog.Default().With("request_id", middleware.GetReqID(r.Context()), "path", r.URL.Path)
 }
 
 // bearerToken extrait le token du header Authorization (schéma insensible à la casse).

@@ -3,8 +3,10 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,25 +19,32 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		fatal("config", err)
 	}
+
+	setupLogging(cfg.LogLevel)
 
 	ctx := context.Background()
 
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL())
 	if err != nil {
-		log.Fatalf("database: %v", err)
+		fatal("database", err)
 	}
 	defer pool.Close()
 
-	if err := pool.Ping(ctx); err != nil {
-		log.Fatalf("database ping: %v", err)
+	pingCtx, cancelPing := context.WithTimeout(ctx, 10*time.Second)
+	err = pool.Ping(pingCtx)
+	cancelPing()
+	if err != nil {
+		fatal("database ping", err)
 	}
+	slog.Info("database connected", "host", cfg.PostgresHost, "port", cfg.PostgresPort, "db", cfg.PostgresDB)
 
 	st := store.New(pool)
 	if err := st.Migrate(ctx); err != nil {
-		log.Fatalf("migration: %v", err)
+		fatal("migration", err)
 	}
+	slog.Info("database migrations applied")
 
 	handlers := &api.Handlers{
 		Store:     st,
@@ -50,10 +59,34 @@ func main() {
 		Addr:              cfg.ListenAddr,
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 	}
 
-	log.Printf("Douceville listening on %s (UI at /, API at /api)", cfg.ListenAddr)
+	slog.Info("Douceville listening (UI at /, API at /api)", "addr", cfg.ListenAddr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server: %v", err)
+		fatal("server", err)
 	}
+}
+
+// setupLogging installe un logger slog texte sur stdout, au niveau demandé
+// (DEBUG, INFO, WARN/WARNING, ERROR ; INFO par défaut).
+func setupLogging(level string) {
+	var lvl slog.Level
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "DEBUG":
+		lvl = slog.LevelDebug
+	case "WARN", "WARNING":
+		lvl = slog.LevelWarn
+	case "ERROR", "CRITICAL":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})))
+	slog.Debug("logging configured", "level", lvl.String())
+}
+
+func fatal(step string, err error) {
+	slog.Error(step+" failed", "error", err)
+	os.Exit(1)
 }
