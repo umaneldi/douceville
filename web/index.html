@@ -8,12 +8,15 @@
         href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
         crossorigin="" />
+  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="apple-touch-icon" href="logo.png" />
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
   <!-- Écran d'authentification -->
   <div id="auth" class="auth-screen" hidden>
     <form id="auth-form" class="auth-card" autocomplete="on">
+      <img src="logo.png" alt="" class="logo" />
       <h1 class="brand">Douceville</h1>
       <p class="tagline">Trouvez où habiter, à portée d'école.</p>
 
@@ -46,6 +49,7 @@
   <!-- Application principale -->
   <div id="app" class="app" hidden>
     <header class="topbar">
+      <img src="logo.png" alt="" class="logo-sm" />
       <span class="brand-sm">Douceville <span class="version">{{VERSION}}</span></span>
       <div class="spacer"></div>
       <span id="user-label" class="user-label"></span>

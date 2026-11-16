@@ -4,7 +4,7 @@ package web
 
 import "embed"
 
-//go:embed index.html app.css app.js
+//go:embed index.html app.css app.js logo.png
 var Files embed.FS
 
 // Version est la version de l'application affichée dans le titre de l'interface.
