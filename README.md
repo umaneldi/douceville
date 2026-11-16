@@ -9,7 +9,7 @@ la zone atteignable et affiche sur une carte les établissements qui s'y trouven
 
 ## Sources de données
 
-https://www.data.gouv.fr/datasets/liste-des-etablissements-des-premier-et-second-degres-pour-les-secteurs-publics-et-prives-en-france
+https://data.education.gouv.fr/explore/dataset/fr-en-adresse-et-geolocalisation-etablissements-premier-et-second-degre/information
 https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-gt_v2/
 https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-valeur-ajoutee-colleges/
 

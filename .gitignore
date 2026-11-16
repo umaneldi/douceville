@@ -34,3 +34,5 @@ addok-data/
 .vscode/
 .idea/
 .DS_Store
+__pycache__/
+.test_db/

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // BANResult est le point géocodé renvoyé par addok.
@@ -16,16 +17,25 @@ type BANResult struct {
 
 // BANClient interroge une instance addok (Base Adresse Nationale).
 type BANClient struct {
-	host string
-	http *http.Client
+	baseURL string
+	http    *http.Client
 }
 
-// NewBANClient crée un client addok ciblant http://<host>:7878.
+// PublicBANURL est l'API publique de géocodage BAN (Géoplateforme IGN, addok),
+// qui remplace api-adresse.data.gouv.fr.
+const PublicBANURL = "https://data.geopf.fr/geocodage"
+
+// NewBANClient crée un client addok ciblant http://<host>:7878, ou l'API
+// publique de la BAN si host est vide.
 func NewBANClient(host string, httpClient *http.Client) *BANClient {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &BANClient{host: host, http: httpClient}
+	baseURL := PublicBANURL
+	if host != "" {
+		baseURL = fmt.Sprintf("http://%s:7878", host)
+	}
+	return &BANClient{baseURL: baseURL, http: httpClient}
 }
 
 type banResponse struct {
@@ -38,7 +48,7 @@ type banResponse struct {
 
 // Geocode résout une adresse libre en coordonnées [lon, lat].
 func (c *BANClient) Geocode(ctx context.Context, query string) (BANResult, error) {
-	endpoint := fmt.Sprintf("http://%s:7878/search?q=%s", c.host, url.QueryEscape(query))
+	endpoint := fmt.Sprintf("%s/search?q=%s&limit=1", c.baseURL, url.QueryEscape(query))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

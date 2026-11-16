@@ -52,7 +52,7 @@ Relation : etablissement (1) ──< (N) resultat
 | `position`    | `geometry(Point)` (SRID 0) | NOT NULL                   | Position géographique (PostGIS), SRID 0 pour rester cohérent avec les isochrones (`ST_GeomFromEWKT` sans SRID). Index GiST. Exposée en GeoJSON côté API via `ST_AsGeoJSON`. |
 | `departement` | `VARCHAR`             | NOT NULL                        | Code / nom du département. |
 | `academie`    | `VARCHAR`             | NULL                            | Académie de rattachement. |
-| `secteur`     | `VARCHAR`             | NOT NULL                        | Secteur (`public` / `privé`). |
+| `secteur`     | `VARCHAR`             | NOT NULL                        | Secteur (`public` / `privé` (sous contrat) / `hors contrat`). |
 | `ouverture`   | `TIMESTAMP`           | NULL                            | Date d'ouverture. |
 | `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement (ex. `lycée`, `collège`). |
 

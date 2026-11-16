@@ -13,6 +13,9 @@
 
 * { box-sizing: border-box; }
 
+/* Les règles `display:` ci-dessous écraseraient sinon l'attribut `hidden`. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
