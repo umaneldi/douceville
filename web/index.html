@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Douceville — Villes et écoles</title>
+  <title>Douceville {{VERSION}} — Villes et écoles</title>
   <link rel="stylesheet"
         href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
@@ -46,7 +46,7 @@
   <!-- Application principale -->
   <div id="app" class="app" hidden>
     <header class="topbar">
-      <span class="brand-sm">Douceville</span>
+      <span class="brand-sm">Douceville <span class="version">{{VERSION}}</span></span>
       <div class="spacer"></div>
       <span id="user-label" class="user-label"></span>
       <button id="logout" class="btn-ghost">Déconnexion</button>

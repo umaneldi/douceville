@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"html"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -48,19 +49,37 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 // retombe sur index.html (application monopage).
 func spaHandler() http.HandlerFunc {
 	fileServer := http.FileServerFS(web.Files)
+	index := renderIndex()
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
-		if p == "" {
-			p = "index.html"
+		if p == "" || p == "index.html" {
+			serveIndex(w, index)
+			return
 		}
 		if _, err := fs.Stat(web.Files, p); err != nil {
 			// Fichier inconnu : on sert l'application monopage.
-			r = r.Clone(r.Context())
-			r.URL.Path = "/"
+			serveIndex(w, index)
+			return
 		}
 		fileServer.ServeHTTP(w, r)
 	}
+}
+
+// renderIndex lit index.html et y injecte la version de l'application.
+func renderIndex() []byte {
+	b, err := fs.ReadFile(web.Files, "index.html")
+	if err != nil {
+		panic("index.html embarqué introuvable : " + err.Error())
+	}
+	v := html.EscapeString(web.Version)
+	return []byte(strings.ReplaceAll(string(b), "{{VERSION}}", v))
+}
+
+func serveIndex(w http.ResponseWriter, index []byte) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(index)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

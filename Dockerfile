@@ -16,8 +16,12 @@ COPY internal ./internal
 COPY web ./web
 
 # CGO disabled -> fully static binary (pgx is pure Go), usable in a minimal base image.
+# VERSION (e.g. the git tag) is shown in the UI title.
+ARG VERSION=dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/douceville ./cmd/server
+    CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -ldflags="-s -w -X github.com/ydethe/douceville/web.Version=${VERSION}" \
+      -o /out/douceville ./cmd/server
 
 # Stage 2: minimal runtime image.
 # distroless/static ships CA certificates (needed for HTTPS calls to OpenRouteService)
