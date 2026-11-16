@@ -9,7 +9,12 @@
 Usage:
     uv run scripts/import_etablissements_parquet.py \
         fr-en-adresse-et-geolocalisation-etablissements-premier-et-second-degre.parquet \
-        [--dsn URL] [--dry-run]
+        [--dsn URL | --psql CMD] [--dry-run]
+
+To import into the docker-compose database without a direct connection:
+    uv run scripts/import_etablissements_parquet.py FILE.parquet \
+        --psql "docker exec -i douceville-geodb-1 psql -U douceville -d douceville"
+(use `docker exec -i`, not `-it`: the data is piped on stdin).
 
 The DSN defaults to the POSTGRES_* variables (environment, then ./.env), the
 same ones the Go server uses. Run the server once beforehand so that the
@@ -30,6 +35,8 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import shlex
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -143,6 +150,26 @@ def load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
+def copy_field(v) -> str:
+    """A value in COPY text format."""
+    if v is None:
+        return r"\N"
+    return str(v).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def run_psql(cmd: str, sql: str) -> list[str]:
+    """Pipe `sql` into the psql command `cmd`; return the fields of its last output line."""
+    script = "\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n" + sql
+    try:
+        proc = subprocess.run(shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE)
+    except OSError as e:
+        sys.exit(f"--psql: cannot run {cmd!r}: {e}")
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    if proc.returncode != 0 or not lines:
+        sys.exit(f"--psql: import failed (exit code {proc.returncode}); nothing was committed")
+    return lines[-1].split("|")
+
+
 def default_dsn() -> str:
     load_dotenv(Path.cwd() / ".env")
     env = os.environ.get
@@ -152,6 +179,15 @@ def default_dsn() -> str:
         f"/{env('POSTGRES_DB', 'douceville')}"
     )
 
+
+CREATE_TMP = """
+CREATE TEMP TABLE tmp_etab (
+    uai TEXT, nom TEXT, adresse TEXT, lieu_dit TEXT, code_postal TEXT, commune TEXT,
+    departement TEXT, academie TEXT, secteur TEXT, ouverture DATE, nature TEXT,
+    lon DOUBLE PRECISION, lat DOUBLE PRECISION,
+    x DOUBLE PRECISION, y DOUBLE PRECISION, srid INTEGER
+) ON COMMIT DROP
+"""
 
 UPSERT = """
 INSERT INTO etablissement ("UAI", nom, adresse, lieu_dit, code_postal, commune, position,
@@ -184,14 +220,7 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int]:
         cur.execute("SELECT to_regclass('etablissement')")
         if cur.fetchone()[0] is None:
             sys.exit("table 'etablissement' not found: start the Go server once to run the migrations")
-        cur.execute("""
-            CREATE TEMP TABLE tmp_etab (
-                uai TEXT, nom TEXT, adresse TEXT, lieu_dit TEXT, code_postal TEXT, commune TEXT,
-                departement TEXT, academie TEXT, secteur TEXT, ouverture DATE, nature TEXT,
-                lon DOUBLE PRECISION, lat DOUBLE PRECISION,
-                x DOUBLE PRECISION, y DOUBLE PRECISION, srid INTEGER
-            ) ON COMMIT DROP
-        """)
+        cur.execute(CREATE_TMP)
         with cur.copy("COPY tmp_etab FROM STDIN") as copy:
             for row in rows:
                 copy.write_row(row)
@@ -201,10 +230,32 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int]:
         return inserted, len(flags) - inserted
 
 
+def write_psql(cmd: str, rows: list[tuple]) -> tuple[int, int]:
+    """Same as write_db, through a psql command (e.g. `docker exec -i <container> psql ...`)."""
+    data = "".join("\t".join(map(copy_field, row)) + "\n" for row in rows)
+    inserted, updated = run_psql(cmd, f"""
+BEGIN;
+DO $$ BEGIN
+    IF to_regclass('etablissement') IS NULL THEN
+        RAISE EXCEPTION 'table etablissement not found: start the Go server once to run the migrations';
+    END IF;
+END $$;
+{CREATE_TMP};
+COPY tmp_etab FROM STDIN;
+{data}\\.
+WITH r AS ({UPSERT}) SELECT count(*) FILTER (WHERE inserted), count(*) FILTER (WHERE NOT inserted) FROM r;
+COMMIT;
+""")
+    return int(inserted), int(updated)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("parquet", type=Path, help="Parquet file from data.education.gouv.fr")
     parser.add_argument("--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)")
+    parser.add_argument("--psql", metavar="CMD",
+                        help="pipe the import into this psql command instead of connecting with --dsn, e.g. "
+                             "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'")
     parser.add_argument("--dry-run", action="store_true", help="parse and report, do not touch the database")
     args = parser.parse_args()
 
@@ -218,7 +269,10 @@ def main() -> None:
             print("  ", row)
         return
 
-    inserted, updated = write_db(args.dsn or default_dsn(), rows)
+    if args.psql:
+        inserted, updated = write_psql(args.psql, rows)
+    else:
+        inserted, updated = write_db(args.dsn or default_dsn(), rows)
     print(f"Inserted {inserted}, updated {updated} rows in {time.monotonic() - t0:.1f}s")
 
 

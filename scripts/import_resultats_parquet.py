@@ -13,7 +13,11 @@ Sources (Parquet exports):
 
 Usage:
     uv run scripts/import_resultats_parquet.py [--dir DIR] [--lycees FILE] [--lycees-pro FILE] \
-        [--colleges FILE] [--dnb FILE] [--dsn URL] [--dry-run]
+        [--colleges FILE] [--dnb FILE] [--dsn URL | --psql CMD] [--dry-run]
+
+To import into the docker-compose database without a direct connection, add
+    --psql "docker exec -i douceville-geodb-1 psql -U douceville -d douceville"
+(use `docker exec -i`, not `-it`: the data is piped on stdin).
 
 Each source is read from its --<source> FILE if given, else from DIR/<dataset>.parquet
 (e.g. DIR/fr-en-dnb-par-etablissement.parquet) if --dir is given and the file
@@ -55,6 +59,8 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import shlex
+import subprocess
 import sys
 import tempfile
 import time
@@ -225,6 +231,26 @@ def load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
+def copy_field(v) -> str:
+    """A value in COPY text format."""
+    if v is None:
+        return r"\N"
+    return str(v).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def run_psql(cmd: str, sql: str) -> list[str]:
+    """Pipe `sql` into the psql command `cmd`; return the fields of its last output line."""
+    script = "\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n" + sql
+    try:
+        proc = subprocess.run(shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE)
+    except OSError as e:
+        sys.exit(f"--psql: cannot run {cmd!r}: {e}")
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    if proc.returncode != 0 or not lines:
+        sys.exit(f"--psql: import failed (exit code {proc.returncode}); nothing was committed")
+    return lines[-1].split("|")
+
+
 def default_dsn() -> str:
     load_dotenv(Path.cwd() / ".env")
     env = os.environ.get
@@ -261,6 +287,14 @@ JOIN tmp_resultat t ON t.uai = pa.parent_uai AND t.diplome = %(diplome)s
 RETURNING uai
 """
 
+SEP_PARAMS = {"diplome": BAC_PRO, "max_distance": SEP_MAX_DISTANCE}
+
+CREATE_TMP = """
+CREATE TEMP TABLE tmp_resultat (
+    diplome TEXT, annee INTEGER, presents INTEGER, admis INTEGER, mentions INTEGER, uai TEXT
+) ON COMMIT DROP
+"""
+
 UPSERT = """
 INSERT INTO resultat (diplome, annee, presents, admis, mentions, etablissement_uai)
 SELECT t.diplome, t.annee, t.presents, t.admis, t.mentions, t.uai
@@ -279,21 +313,41 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int, int, int]:
         cur.execute("SELECT to_regclass('resultat'), to_regclass('etablissement')")
         if None in cur.fetchone():
             sys.exit("tables not found: start the Go server once to run the migrations")
-        cur.execute("""
-            CREATE TEMP TABLE tmp_resultat (
-                diplome TEXT, annee INTEGER, presents INTEGER, admis INTEGER, mentions INTEGER, uai TEXT
-            ) ON COMMIT DROP
-        """)
+        cur.execute(CREATE_TMP)
         with cur.copy("COPY tmp_resultat FROM STDIN") as copy:
             for row in rows:
                 copy.write_row(row)
-        cur.execute(SEP_COPY, {"diplome": BAC_PRO, "max_distance": SEP_MAX_DISTANCE})
+        cur.execute(SEP_COPY, SEP_PARAMS)
         copied = cur.fetchall()
         seps = len({r[0] for r in copied})
         cur.execute(UPSERT)
         flags = [r[0] for r in cur.fetchall()]
         inserted = sum(flags)
         return inserted, len(flags) - inserted, len(rows) + len(copied) - len(flags), seps
+
+
+def write_psql(cmd: str, rows: list[tuple]) -> tuple[int, int, int, int]:
+    """Same as write_db, through a psql command (e.g. `docker exec -i <container> psql ...`)."""
+    data = "".join("\t".join(map(copy_field, row)) + "\n" for row in rows)
+    sep_copy = SEP_COPY % {"diplome": "'" + BAC_PRO.replace("'", "''") + "'", "max_distance": SEP_MAX_DISTANCE}
+    inserted, updated, upserted, copied, seps = run_psql(cmd, f"""
+BEGIN;
+DO $$ BEGIN
+    IF to_regclass('resultat') IS NULL OR to_regclass('etablissement') IS NULL THEN
+        RAISE EXCEPTION 'tables not found: start the Go server once to run the migrations';
+    END IF;
+END $$;
+{CREATE_TMP};
+COPY tmp_resultat FROM STDIN;
+{data}\\.
+WITH c AS ({sep_copy}) SELECT count(*) AS copied, count(DISTINCT uai) AS seps FROM c
+\\gset
+WITH r AS ({UPSERT})
+SELECT count(*) FILTER (WHERE inserted), count(*) FILTER (WHERE NOT inserted), count(*), :copied, :seps FROM r;
+COMMIT;
+""")
+    inserted, updated, upserted, copied, seps = map(int, (inserted, updated, upserted, copied, seps))
+    return inserted, updated, len(rows) + copied - upserted, seps
 
 
 # (CLI option, dataset) in import order.
@@ -318,6 +372,9 @@ def main() -> None:
     parser.add_argument("--dir", type=Path,
                         help="folder holding already downloaded <dataset>.parquet files (missing ones are downloaded)")
     parser.add_argument("--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)")
+    parser.add_argument("--psql", metavar="CMD",
+                        help="pipe the import into this psql command instead of connecting with --dsn, e.g. "
+                             "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'")
     parser.add_argument("--dry-run", action="store_true", help="parse and report, do not touch the database")
     args = parser.parse_args()
     if args.dir and not args.dir.is_dir():
@@ -347,7 +404,10 @@ def main() -> None:
                 print("  ", row)
         return
 
-    inserted, updated, unknown, seps = write_db(args.dsn or default_dsn(), rows)
+    if args.psql:
+        inserted, updated, unknown, seps = write_psql(args.psql, rows)
+    else:
+        inserted, updated, unknown, seps = write_db(args.dsn or default_dsn(), rows)
     print(f"Inserted {inserted}, updated {updated} rows (incl. bac pro copied to {seps} SEP), "
           f"skipped {unknown} with unknown UAI in {time.monotonic() - t0:.1f}s")
 
