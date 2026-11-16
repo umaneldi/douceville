@@ -13,6 +13,7 @@ import (
 	"github.com/ydethe/douceville/internal/api"
 	"github.com/ydethe/douceville/internal/config"
 	"github.com/ydethe/douceville/internal/geo"
+	"github.com/ydethe/douceville/internal/mail"
 	"github.com/ydethe/douceville/internal/store"
 )
 
@@ -46,11 +47,27 @@ func main() {
 	}
 	slog.Info("database migrations applied")
 
+	var mailer mail.Sender = mail.LogSender{}
+	if cfg.SMTPHost != "" {
+		mailer = mail.NewSMTPSender(mail.SMTPConfig{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+		})
+		slog.Info("SMTP mailer configured", "host", cfg.SMTPHost, "port", cfg.SMTPPort)
+	} else {
+		slog.Warn("SMTP_HOST not set: verification e-mails will only be logged")
+	}
+
 	handlers := &api.Handlers{
 		Store:     st,
 		Isochron:  geo.NewORSClient(cfg.OpenRouteServiceKey, nil),
 		Geocoder:  geo.NewBANClient(cfg.ADDOKHost, nil),
 		JWTSecret: cfg.JWTSecret,
+		Mailer:    mailer,
+		PublicURL: cfg.PublicURL,
 	}
 
 	router := api.NewRouter(cfg.JWTSecret, handlers, st)

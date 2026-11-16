@@ -43,12 +43,16 @@ sont créées au démarrage par un petit runner de migrations
 ## API
 
 Toutes les routes sont sous `/api`. Les routes d'authentification sont publiques ;
-les autres exigent un header `Authorization: Bearer <token>`.
+les autres exigent un header `Authorization: Bearer <token>` **et** un compte de
+niveau `granted` ou `admin` (sinon `403`, `code=account_not_granted`).
 
 | Méthode | Route                      | Auth | Description                                                   |
 | ------- | -------------------------- | :--: | ------------------------------------------------------------- |
-| `POST`  | `/api/auth/register`       |  —   | Inscription (email + mot de passe). Renvoie `{token, user}`.  |
-| `POST`  | `/api/auth/login`          |  —   | Connexion. Renvoie `{token, user}`.                           |
+| `POST`  | `/api/auth/register`       |  —   | Inscription (email + mot de passe). Envoie un lien de vérification ; pas de token. |
+| `POST`  | `/api/auth/verify`         |  —   | Valide l'e-mail avec le jeton du lien (`{token}`) : le compte passe à `verified`. Pas de token tant que le compte n'est pas `granted`. |
+| `POST`  | `/api/auth/resend-verification` | — | Renvoie un lien de vérification (`{email}`). Réponse toujours `202`. |
+| `POST`  | `/api/auth/login`          |  —   | Connexion, réservée aux comptes `granted`/`admin` (sinon `403`, `code=email_not_verified` ou `account_not_granted`). Renvoie `{token, user}`. |
+| `POST`  | `/api/auth/logout`         |  ✓   | Déconnexion : révoque le token courant (`204`).               |
 | `GET`   | `/api/user`                |  ✓   | Profil de l'utilisateur authentifié.                          |
 | `GET`   | `/api/etablissement/{uai}` |  ✓   | Détail d'un établissement par son UAI.                        |
 | `POST`  | `/api/etablissements`      |  ✓   | Établissements dans la zone atteignable depuis une adresse.   |
@@ -69,8 +73,33 @@ Exemple de corps pour `POST /api/etablissements` (`dist` est un **temps en secon
 ### Authentification
 
 L'auth est **native** (plus de Supabase). À l'inscription, le backend génère un
-identifiant (UUID), hache le mot de passe (PBKDF2-SHA256) et émet un JWT HS256
-signé avec `JWT_SECRET`. Le frontend stocke le token et l'envoie en Bearer.
+identifiant (UUID), hache le mot de passe (PBKDF2-SHA256) et envoie par e-mail un
+lien de vérification `${PUBLIC_URL}/verify-email?token=…` (usage unique, valable
+24 h).
+
+Chaque compte a un niveau d'accès (`utilisateur.perms`, enum ordonné) :
+
+| Niveau       | Signification                                        | Accès |
+| ------------ | ---------------------------------------------------- | ----- |
+| `unverified` | Compte créé, e-mail non vérifié (niveau initial).    | aucun |
+| `verified`   | E-mail vérifié, en attente de validation.            | aucun |
+| `granted`    | Compte validé par un administrateur.                 | application |
+| `admin`      | Administrateur.                                      | application |
+
+Seuls les comptes `granted` et `admin` reçoivent un token. Le niveau est relu en base
+à chaque requête : rétrograder un compte lui retire l'accès immédiatement. Il n'y a
+pas encore d'interface d'administration ; la validation se fait en SQL :
+
+```sql
+UPDATE utilisateur SET perms = 'granted' WHERE lower(email) = lower('alice@example.com');
+```
+
+Les JWT HS256 sont signés avec `JWT_SECRET` et portent un identifiant unique
+(`jti`). La déconnexion révoque ce `jti` côté serveur (table `revoked_token`)
+jusqu'à l'expiration du token. Le frontend stocke le token et l'envoie en Bearer.
+
+Sans `SMTP_HOST`, les e-mails ne sont pas envoyés mais **journalisés** (niveau
+`WARN`, lien inclus) : pratique en développement.
 
 ## Configuration
 
@@ -89,6 +118,12 @@ lues par le backend :
 | `OPENROUTESERVICE_KEY` | — (vide)      | Clé API OpenRouteService.                          |
 | `LISTEN_ADDR`          | `:3566`       | Adresse d'écoute du serveur HTTP.                  |
 | `LOGLEVEL`             | `INFO`        | Niveau de log.                                     |
+| `PUBLIC_URL`           | `http://localhost:3566` | URL publique, base des liens envoyés par e-mail. |
+| `SMTP_HOST`            | — (vide)      | Serveur SMTP. Vide : e-mails journalisés, non envoyés. |
+| `SMTP_PORT`            | `587`         | Port SMTP (`465` : TLS implicite ; sinon STARTTLS si proposé). |
+| `SMTP_USERNAME`        | — (vide)      | Identifiant SMTP (pas d'authentification si vide). |
+| `SMTP_PASSWORD`        | — (vide)      | Mot de passe SMTP.                                 |
+| `SMTP_FROM`            | — (requis si `SMTP_HOST`) | Expéditeur, ex. `Douceville <no-reply@domaine.tld>`. |
 
 ## Lancer le service
 
@@ -127,8 +162,11 @@ JWT_SECRET=dev-secret POSTGRES_HOST=localhost go run ./cmd/server
 
 1. Ouvrez `http://localhost:3566`.
 2. Cliquez sur **« Créer un compte »**, saisissez un e-mail et un mot de passe
-   (≥ 8 caractères) : l'inscription est ouverte et vous connecte directement.
-3. Saisissez une adresse, un temps de trajet et un mode de transport, puis
+   (≥ 8 caractères), puis ouvrez le lien de vérification reçu par e-mail (sans
+   SMTP configuré, le lien apparaît dans les logs du serveur).
+3. Validez le compte (`perms = 'granted'`, voir [Authentification](#authentification)),
+   puis connectez-vous.
+4. Saisissez une adresse, un temps de trajet et un mode de transport, puis
    **Rechercher**.
 
 > **À noter.** La recherche d'établissements nécessite, en plus, un

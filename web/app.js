@@ -6,6 +6,10 @@
 const TOKEN_KEY = "douceville_token";
 let token = localStorage.getItem(TOKEN_KEY);
 let mode = "login"; // "login" | "register"
+const PENDING_MSG =
+  "Votre compte est en attente de validation par un administrateur. " +
+  "Vous pourrez vous connecter dès qu'il aura été approuvé.";
+let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
 let map, isoLayer, markerLayer;
 
 const $ = (sel) => document.querySelector(sel);
@@ -32,8 +36,18 @@ async function api(path, options = {}) {
     throw new Error("Session expirée, reconnectez-vous.");
   }
   const data = await res.json().catch(() => ({}));
+  if (res.status === 403 && data.code === "account_not_granted" && token) {
+    // Accès retiré par un administrateur → retour à l'écran de connexion.
+    setToken(null);
+    showAuth();
+    showInfo(PENDING_MSG, false);
+    throw new Error(PENDING_MSG);
+  }
   if (!res.ok) {
-    throw new Error(data.detail || `Erreur ${res.status}`);
+    const err = new Error(data.detail || `Erreur ${res.status}`);
+    err.status = res.status;
+    err.code = data.code;
+    throw err;
   }
   return data;
 }
@@ -56,7 +70,38 @@ function applyMode() {
   $("[data-register-only]").hidden = !isRegister;
   $("#password").autocomplete = isRegister ? "new-password" : "current-password";
   $("#auth-error").hidden = true;
+  $("#auth-info").hidden = true;
 }
+
+function showError(message) {
+  $("#auth-info").hidden = true;
+  const err = $("#auth-error");
+  err.textContent = message;
+  err.hidden = false;
+}
+
+// Affiche un message d'information, avec éventuellement le lien « Renvoyer ».
+function showInfo(message, withResend) {
+  $("#auth-error").hidden = true;
+  $("#auth-info-text").textContent = message;
+  $("#resend-link").hidden = !withResend;
+  $("#auth-info").hidden = false;
+}
+
+$("#resend-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  const email = pendingEmail || $("#email").value.trim();
+  if (!email) return;
+  try {
+    await api("/auth/resend-verification", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+    showInfo(`Si un compte non vérifié existe pour ${email}, un nouveau lien vient d'être envoyé.`, false);
+  } catch (ex) {
+    showError(ex.message);
+  }
+});
 
 $("#switch-mode").addEventListener("click", (e) => {
   e.preventDefault();
@@ -66,8 +111,8 @@ $("#switch-mode").addEventListener("click", (e) => {
 
 $("#auth-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const err = $("#auth-error");
-  err.hidden = true;
+  $("#auth-error").hidden = true;
+  $("#auth-info").hidden = true;
   const btn = $("#auth-submit");
   btn.disabled = true;
 
@@ -81,13 +126,34 @@ $("#auth-form").addEventListener("submit", async (e) => {
   }
 
   try {
-    const path = mode === "register" ? "/auth/register" : "/auth/login";
-    const data = await api(path, { method: "POST", body: JSON.stringify(body) });
-    setToken(data.token);
-    startApp(data.user);
+    if (mode === "register") {
+      const data = await api("/auth/register", { method: "POST", body: JSON.stringify(body) });
+      pendingEmail = data.email || body.email;
+      mode = "login";
+      applyMode();
+      $("#password").value = "";
+      showInfo(
+        `Compte créé ! Un e-mail de confirmation a été envoyé à ${pendingEmail}. ` +
+          "Cliquez sur le lien qu'il contient, puis attendez la validation de votre compte par un administrateur.",
+        true
+      );
+    } else {
+      const data = await api("/auth/login", { method: "POST", body: JSON.stringify(body) });
+      setToken(data.token);
+      startApp(data.user);
+    }
   } catch (ex) {
-    err.textContent = ex.message;
-    err.hidden = false;
+    if (ex.code === "email_not_verified") {
+      pendingEmail = body.email;
+      showInfo(
+        "Votre adresse e-mail n'est pas encore vérifiée. Consultez votre boîte de réception.",
+        true
+      );
+    } else if (ex.code === "account_not_granted") {
+      showInfo(PENDING_MSG, false);
+    } else {
+      showError(ex.message);
+    }
   } finally {
     btn.disabled = false;
   }
@@ -122,8 +188,19 @@ $("#time").addEventListener("input", (e) => {
   $("#time-val").textContent = e.target.value;
 });
 
-$("#logout").addEventListener("click", () => {
+$("#logout").addEventListener("click", async () => {
+  // Révoque le token côté serveur ; on se déconnecte localement quoi qu'il arrive.
+  try {
+    if (token) await api("/auth/logout", { method: "POST" });
+  } catch (_) {
+    /* token déjà invalide ou serveur injoignable */
+  }
   setToken(null);
+  if (isoLayer) isoLayer.clearLayers();
+  if (markerLayer) markerLayer.clearLayers();
+  $("#results-summary").hidden = true;
+  $("#search-status").textContent = "";
+  $("#password").value = "";
   showAuth();
   applyMode();
 });
@@ -244,6 +321,34 @@ function popupHtml(etab) {
 // ---------------------------------------------------------------------------
 (async function boot() {
   applyMode();
+
+  let verifyFailed = false;
+  let verifiedPending = false;
+
+  // Lien de vérification reçu par e-mail : /verify-email?token=...
+  if (location.pathname === "/verify-email") {
+    const verifyToken = new URLSearchParams(location.search).get("token");
+    // Retire le jeton de l'URL (historique, partage d'écran…).
+    history.replaceState(null, "", "/");
+    if (verifyToken) {
+      try {
+        const data = await api("/auth/verify", {
+          method: "POST",
+          body: JSON.stringify({ token: verifyToken }),
+        });
+        if (data.token) {
+          // Compte déjà autorisé : connexion directe.
+          setToken(data.token);
+          startApp(data.user);
+          return;
+        }
+        verifiedPending = true;
+      } catch (_) {
+        verifyFailed = true;
+      }
+    }
+  }
+
   if (token) {
     try {
       const user = await api("/user");
@@ -254,4 +359,12 @@ function popupHtml(etab) {
     }
   }
   showAuth();
+  if (verifiedPending) {
+    showInfo("Adresse e-mail vérifiée, merci ! " + PENDING_MSG, false);
+  } else if (verifyFailed) {
+    showInfo(
+      "Ce lien de vérification est invalide ou a expiré. Connectez-vous pour en recevoir un nouveau.",
+      false
+    );
+  }
 })();

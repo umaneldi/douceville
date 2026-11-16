@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ydethe/douceville/internal/auth"
 	"github.com/ydethe/douceville/internal/geo"
+	"github.com/ydethe/douceville/internal/mail"
 	"github.com/ydethe/douceville/internal/models"
 	"github.com/ydethe/douceville/internal/store"
 )
@@ -29,6 +30,10 @@ type Handlers struct {
 	Isochron  Isochroner
 	Geocoder  Geocoder
 	JWTSecret string
+	// Mailer envoie les e-mails de vérification.
+	Mailer mail.Sender
+	// PublicURL est la base des liens envoyés par e-mail (sans "/" final).
+	PublicURL string
 }
 
 // readEtablissement gère GET /etablissement/{uai}.

@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ydethe/douceville/internal/models"
@@ -19,6 +20,17 @@ type Store interface {
 	// CreateUser insère un nouvel utilisateur et renvoie son profil public.
 	// Renvoie ErrEmailTaken si l'email est déjà utilisé.
 	CreateUser(ctx context.Context, email, passwordHash string, firstName, lastName *string) (*models.DvUser, error)
+	// CreateEmailVerification enregistre un jeton de vérification (hashé) pour
+	// l'utilisateur, en remplaçant les jetons précédents.
+	CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
+	// VerifyEmail consomme le jeton et fait passer le compte de 'unverified' à
+	// 'verified'. Renvoie
+	// (nil, nil) si le jeton est inconnu, déjà utilisé ou expiré.
+	VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, error)
+	// RevokeToken révoque un JWT (déconnexion) jusqu'à sa date d'expiration.
+	RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error
+	// IsTokenRevoked indique si un JWT a été révoqué.
+	IsTokenRevoked(ctx context.Context, jti string) (bool, error)
 	// GetEtablissementByUAI renvoie un établissement et ses résultats, ou (nil, nil) si absent.
 	GetEtablissementByUAI(ctx context.Context, uai string) (*models.Etablissement, error)
 	// FindEtablissementsInZone renvoie les établissements contenus dans le polygone WKT,

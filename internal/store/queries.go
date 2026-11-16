@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -30,12 +31,12 @@ func scanEtablissement(row pgx.Row) (*models.Etablissement, error) {
 
 // GetUser implémente Store.GetUser.
 func (s *PgStore) GetUser(ctx context.Context, id string) (*models.DvUser, error) {
-	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions
+	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions, perms::text
 		FROM utilisateur WHERE id = $1`
 
 	var u models.DvUser
 	err := s.pool.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions,
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -48,12 +49,12 @@ func (s *PgStore) GetUser(ctx context.Context, id string) (*models.DvUser, error
 
 // GetUserByEmail implémente Store.GetUserByEmail (hash du mot de passe inclus).
 func (s *PgStore) GetUserByEmail(ctx context.Context, email string) (*models.UserRecord, error) {
-	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions, password_hash
+	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions, perms::text, password_hash
 		FROM utilisateur WHERE lower(email) = lower($1)`
 
 	var u models.UserRecord
 	err := s.pool.QueryRow(ctx, q, email).Scan(
-		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.PasswordHash,
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms, &u.PasswordHash,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -74,11 +75,11 @@ func (s *PgStore) CreateUser(ctx context.Context, email, passwordHash string, fi
 
 	const q = `INSERT INTO utilisateur (id, email, first_name, last_name, password_hash, permissions)
 		VALUES ($1, $2, $3, $4, $5, '{}')
-		RETURNING id, email, first_name, last_name, avatar_url, permissions`
+		RETURNING id, email, first_name, last_name, avatar_url, permissions, perms::text`
 
 	var u models.DvUser
 	err = s.pool.QueryRow(ctx, q, id, email, firstName, lastName, passwordHash).Scan(
-		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions,
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -88,6 +89,71 @@ func (s *PgStore) CreateUser(ctx context.Context, email, passwordHash string, fi
 		return nil, err
 	}
 	return &u, nil
+}
+
+// CreateEmailVerification implémente Store.CreateEmailVerification.
+func (s *PgStore) CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // sans effet après Commit
+
+	if _, err := tx.Exec(ctx, `DELETE FROM email_verification WHERE user_id = $1 OR expires_at < now()`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO email_verification (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
+		tokenHash, userID, expiresAt,
+	); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// VerifyEmail implémente Store.VerifyEmail. Le jeton est supprimé dans tous les
+// cas (usage unique) ; s'il n'a pas expiré, un compte 'unverified' passe à
+// 'verified' (un niveau supérieur n'est jamais rétrogradé).
+func (s *PgStore) VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, error) {
+	const q = `WITH t AS (
+			DELETE FROM email_verification WHERE token_hash = $1
+			RETURNING user_id, expires_at
+		)
+		UPDATE utilisateur u SET perms = GREATEST(u.perms, 'verified'::user_perms)
+		FROM t WHERE u.id = t.user_id AND t.expires_at > now()
+		RETURNING u.id, u.email, u.first_name, u.last_name, u.avatar_url, u.permissions, u.perms::text`
+
+	var u models.DvUser
+	err := s.pool.QueryRow(ctx, q, tokenHash).Scan(
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+// RevokeToken implémente Store.RevokeToken. Les révocations expirées sont
+// purgées au passage.
+func (s *PgStore) RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error {
+	if _, err := s.pool.Exec(ctx, `DELETE FROM revoked_token WHERE expires_at < now()`); err != nil {
+		return err
+	}
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO revoked_token (jti, expires_at) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING`,
+		jti, expiresAt,
+	)
+	return err
+}
+
+// IsTokenRevoked implémente Store.IsTokenRevoked.
+func (s *PgStore) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
+	var revoked bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM revoked_token WHERE jti = $1)`, jti).Scan(&revoked)
+	return revoked, err
 }
 
 // newUUID génère un UUID v4 (RFC 4122) à partir de crypto/rand.

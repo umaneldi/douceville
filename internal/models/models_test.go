@@ -56,3 +56,17 @@ func TestIsochroneJSONFields(t *testing.T) {
 		}
 	}
 }
+
+func TestPermsAtLeast(t *testing.T) {
+	order := []Perms{PermsUnverified, PermsVerified, PermsGranted, PermsAdmin}
+	for i, p := range order {
+		for j, min := range order {
+			if got, want := p.AtLeast(min), i >= j; got != want {
+				t.Errorf("%s.AtLeast(%s) = %v, want %v", p, min, got, want)
+			}
+		}
+	}
+	if Perms("bogus").AtLeast(PermsUnverified) {
+		t.Error("unknown perms must not reach any level")
+	}
+}

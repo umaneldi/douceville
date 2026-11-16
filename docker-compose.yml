@@ -15,3 +15,28 @@ services:
       POSTGRES_DB: douceville
       POSTGRES_USER: douceville
       POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+
+  douceville:
+    build: .
+    profiles: [app]
+    ports:
+      - 3566:3566
+    depends_on:
+      geodb:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: geodb
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: douceville
+      POSTGRES_USER: douceville
+      POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+      JWT_SECRET: $JWT_SECRET
+      OPENROUTESERVICE_KEY: $OPENROUTESERVICE_KEY
+      ADDOK_HOST: ${ADDOK_HOST:-}
+      LOGLEVEL: ${LOGLEVEL:-INFO}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3566}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}

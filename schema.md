@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **trois tables physiques** : `etablissement`, `resultat` et `utilisateur`, toutes créées par les migrations Go. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **cinq tables physiques** : `etablissement`, `resultat`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -84,7 +84,8 @@ du backend Go (plus de Supabase). À l'inscription, le backend génère un UUID 
 (`id`), hache le mot de passe (PBKDF2-SHA256, `internal/auth/password.go`) et émet
 un JWT HS256 (`aud=douceville`) signé avec `JWT_SECRET`. À chaque requête protégée,
 le middleware valide le JWT puis récupère le profil par `id` (claim `sub`).
-Colonnes créées par `migrations/001_utilisateur.sql` et `migrations/002_auth.sql`.
+Colonnes créées par `migrations/001_utilisateur.sql`, `migrations/002_auth.sql` et
+`migrations/004_email_verification_logout.sql`.
 
 | Colonne         | Type SQL   | Contraintes                    | Description |
 |-----------------|------------|--------------------------------|-------------|
@@ -95,6 +96,29 @@ Colonnes créées par `migrations/001_utilisateur.sql` et `migrations/002_auth.s
 | `last_name`     | `TEXT`     | NULL                           | Nom. |
 | `avatar_url`    | `TEXT`     | NULL                           | URL de l'avatar. |
 | `permissions`   | `TEXT[]`   | NOT NULL, défaut `'{}'`        | Liste des permissions. |
+| `perms`         | `user_perms` | NOT NULL, défaut `'unverified'` | Niveau d'accès, enum ordonné `unverified` < `verified` < `granted` < `admin`. Seuls `granted` et `admin` accèdent à l'application. Les comptes antérieurs à la migration 004 sont passés à `granted`. |
+
+## Table `email_verification`
+
+Jetons de vérification d'adresse e-mail (`migrations/004_email_verification_logout.sql`).
+Seul le hash du jeton est stocké ; un jeton est à usage unique et un nouvel envoi
+remplace les jetons précédents de l'utilisateur.
+
+| Colonne      | Type SQL      | Contraintes                         | Description |
+|--------------|---------------|-------------------------------------|-------------|
+| `token_hash` | `TEXT`        | **PK**                              | SHA-256 (hex) du jeton envoyé par e-mail. |
+| `user_id`    | `TEXT`        | NOT NULL, FK `utilisateur(id)` ON DELETE CASCADE | Utilisateur à vérifier. |
+| `expires_at` | `TIMESTAMPTZ` | NOT NULL                            | Expiration du lien (24 h). |
+
+## Table `revoked_token`
+
+JWT révoqués par déconnexion (`migrations/004_email_verification_logout.sql`). Les
+lignes expirées sont purgées à chaque nouvelle déconnexion.
+
+| Colonne      | Type SQL      | Contraintes | Description |
+|--------------|---------------|-------------|-------------|
+| `jti`        | `TEXT`        | **PK**      | Claim `jti` du token révoqué. |
+| `expires_at` | `TIMESTAMPTZ` | NOT NULL    | Expiration du token (au-delà, la ligne est inutile). |
 
 ## Objets non persistés (hors base)
 

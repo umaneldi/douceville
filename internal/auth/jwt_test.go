@@ -21,6 +21,7 @@ func makeToken(t *testing.T, claims jwt.MapClaims) string {
 
 func validClaims() jwt.MapClaims {
 	return jwt.MapClaims{
+		"jti":   "token-id",
 		"sub":   "user-123",
 		"email": "alice@example.com",
 		"aud":   "douceville",
@@ -81,6 +82,16 @@ func TestParseToken_WrongSigningMethod(t *testing.T) {
 
 	if _, err := ParseToken(s, testSecret); err == nil {
 		t.Fatal("expected error for alg=none token, got nil")
+	}
+}
+
+func TestParseToken_MissingJTI(t *testing.T) {
+	c := validClaims()
+	delete(c, "jti")
+	tok := makeToken(t, c)
+
+	if _, err := ParseToken(tok, testSecret); err == nil {
+		t.Fatal("expected error for missing jti, got nil")
 	}
 }
 

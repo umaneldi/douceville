@@ -25,6 +25,8 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 		// Routes publiques (authentification).
 		api.Post("/auth/register", h.register)
 		api.Post("/auth/login", h.login)
+		api.Post("/auth/verify", h.verifyEmail)
+		api.Post("/auth/resend-verification", h.resendVerification)
 
 		// Routes protégées par un token Bearer.
 		api.Group(func(protected chi.Router) {
@@ -33,6 +35,7 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 			protected.Post("/etablissements", h.etablissementsInZone)
 			protected.Get("/isochrone", h.isochrone)
 			protected.Get("/user", h.getUser)
+			protected.Post("/auth/logout", h.logout)
 		})
 	})
 

@@ -5,6 +5,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"time"
 
@@ -21,12 +23,21 @@ const DefaultTokenTTL = 7 * 24 * time.Hour
 type Claims struct {
 	Sub   string
 	Email string
+	// ID est l'identifiant unique du token (claim `jti`), utilisé pour la révocation.
+	ID string
+	// ExpiresAt est la date d'expiration du token (claim `exp`).
+	ExpiresAt time.Time
 }
 
 // IssueToken crée un JWT HS256 signé pour l'utilisateur donné.
 func IssueToken(userID, email, secret string, ttl time.Duration) (string, error) {
+	jti, err := randomToken(16)
+	if err != nil {
+		return "", err
+	}
 	now := time.Now()
 	claims := jwt.MapClaims{
+		"jti":   jti,
 		"sub":   userID,
 		"email": email,
 		"aud":   expectedAudience,
@@ -38,7 +49,8 @@ func IssueToken(userID, email, secret string, ttl time.Duration) (string, error)
 }
 
 // ParseToken valide la signature HS256, l'expiration et l'audience du token,
-// puis renvoie les claims `sub` et `email`.
+// puis renvoie les claims `sub`, `email`, `jti` et `exp`. Un token sans `jti`
+// (non révocable) est refusé.
 func ParseToken(tokenString, secret string) (Claims, error) {
 	parser := jwt.NewParser(
 		jwt.WithValidMethods([]string{"HS256"}),
@@ -59,7 +71,26 @@ func ParseToken(tokenString, secret string) (Claims, error) {
 		return Claims{}, errors.New("missing 'sub' claim")
 	}
 
+	jti, _ := mc["jti"].(string)
+	if jti == "" {
+		return Claims{}, errors.New("missing 'jti' claim")
+	}
+
+	exp, err := mc.GetExpirationTime()
+	if err != nil || exp == nil {
+		return Claims{}, errors.New("missing 'exp' claim")
+	}
+
 	email, _ := mc["email"].(string)
 
-	return Claims{Sub: sub, Email: email}, nil
+	return Claims{Sub: sub, Email: email, ID: jti, ExpiresAt: exp.Time}, nil
+}
+
+// randomToken renvoie n octets aléatoires encodés en base64url (sans padding).
+func randomToken(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }

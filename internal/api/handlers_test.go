@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ydethe/douceville/internal/geo"
@@ -22,6 +23,26 @@ type mockStore struct {
 	rec       *models.UserRecord
 	err       error
 	createErr error
+	// verified est renvoyé par VerifyEmail.
+	verified *models.DvUser
+	// revoked reçoit le jti passé à RevokeToken (si non nil).
+	revoked *string
+}
+
+func (m mockStore) CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
+	return m.err
+}
+func (m mockStore) VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, error) {
+	return m.verified, m.err
+}
+func (m mockStore) RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error {
+	if m.revoked != nil {
+		*m.revoked = jti
+	}
+	return m.err
+}
+func (m mockStore) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
+	return false, m.err
 }
 
 func (m mockStore) GetUser(ctx context.Context, id string) (*models.DvUser, error) {

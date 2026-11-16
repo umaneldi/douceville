@@ -11,19 +11,31 @@ import (
 	"github.com/ydethe/douceville/internal/models"
 )
 
-// UserLookup récupère le profil d'un utilisateur par son identifiant (claim sub).
-// Renvoie (nil, nil) si aucun utilisateur ne correspond.
+// UserLookup récupère le profil d'un utilisateur par son identifiant (claim sub)
+// et indique si un token a été révoqué (déconnexion).
 type UserLookup interface {
+	// GetUser renvoie (nil, nil) si aucun utilisateur ne correspond.
 	GetUser(ctx context.Context, id string) (*models.DvUser, error)
+	// IsTokenRevoked indique si le token d'identifiant jti a été révoqué.
+	IsTokenRevoked(ctx context.Context, jti string) (bool, error)
 }
 
+// CodeAccountNotGranted est le code d'erreur renvoyé quand un compte n'a pas
+// (ou plus) accès à l'application.
+const CodeAccountNotGranted = "account_not_granted"
+
 type ctxKey struct{}
+
+type claimsCtxKey struct{}
 
 // Middleware construit un middleware HTTP qui exige un token Bearer valide.
 //
 // Codes d'erreur (parité avec le backend Python) :
 //   - 403 si le header Authorization est absent ou si le schéma n'est pas Bearer ;
-//   - 401 si le token est invalide/expiré ou si l'utilisateur est inconnu.
+//   - 401 si le token est invalide/expiré/révoqué ou si l'utilisateur est inconnu.
+//   - 403 (code "account_not_granted") si le compte n'a pas au moins le niveau
+//     'granted' (niveau relu en base à chaque requête : un retrait d'accès est
+//     immédiat).
 func Middleware(secret string, users UserLookup) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +53,18 @@ func Middleware(secret string, users UserLookup) func(http.Handler) http.Handler
 				return
 			}
 
+			revoked, err := users.IsTokenRevoked(r.Context(), claims.ID)
+			if err != nil {
+				logger(r).Error("auth: revocation lookup failed", "user_id", claims.Sub, "error", err)
+				writeError(w, http.StatusInternalServerError, "token lookup failed")
+				return
+			}
+			if revoked {
+				logger(r).Warn("auth: revoked token", "user_id", claims.Sub)
+				writeError(w, http.StatusUnauthorized, "token has been revoked")
+				return
+			}
+
 			user, err := users.GetUser(r.Context(), claims.Sub)
 			if err != nil {
 				logger(r).Error("auth: user lookup failed", "user_id", claims.Sub, "error", err)
@@ -53,12 +77,22 @@ func Middleware(secret string, users UserLookup) func(http.Handler) http.Handler
 				return
 			}
 
+			if !user.Perms.AtLeast(models.PermsGranted) {
+				logger(r).Warn("auth: account not granted", "user_id", user.ID, "perms", user.Perms)
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"detail": "account not granted",
+					"code":   CodeAccountNotGranted,
+				})
+				return
+			}
+
 			// Le login provient du claim email du token (comme en Python).
 			user.Login = claims.Email
 
 			logger(r).Debug("auth: request authenticated", "user_id", user.ID)
 
 			ctx := context.WithValue(r.Context(), ctxKey{}, user)
+			ctx = context.WithValue(ctx, claimsCtxKey{}, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -88,8 +122,18 @@ func UserFromContext(ctx context.Context) (*models.DvUser, bool) {
 	return u, ok
 }
 
+// ClaimsFromContext renvoie les claims du token ayant authentifié la requête.
+func ClaimsFromContext(ctx context.Context) (Claims, bool) {
+	c, ok := ctx.Value(claimsCtxKey{}).(Claims)
+	return c, ok
+}
+
 func writeError(w http.ResponseWriter, status int, detail string) {
+	writeJSON(w, status, map[string]string{"detail": detail})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"detail": detail})
+	_ = json.NewEncoder(w).Encode(v)
 }
