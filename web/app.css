@@ -152,6 +152,43 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   padding: 0.15rem 0;
 }
 
+/* Slicer à deux poignées : deux <input range> superposés. */
+.dual-range { position: relative; height: 24px; margin: 0.3rem 0 0.5rem; }
+.dual-range-track {
+  position: absolute; left: 0; right: 0; top: 50%; height: 4px;
+  transform: translateY(-50%);
+  background: var(--border); border-radius: 2px;
+}
+.dual-range-fill { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 2px; }
+.dual-range input[type="range"] {
+  position: absolute; inset: 0; width: 100%; margin: 0;
+  background: none; pointer-events: none;
+  -webkit-appearance: none; appearance: none;
+}
+.dual-range input[type="range"]::-webkit-slider-runnable-track { background: none; }
+.dual-range input[type="range"]::-moz-range-track { background: none; }
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; pointer-events: auto; cursor: pointer;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--panel);
+}
+.dual-range input[type="range"]::-moz-range-thumb {
+  pointer-events: auto; cursor: pointer;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--panel);
+}
+.range-inputs { display: flex; gap: 0.5rem; justify-content: space-between; }
+.range-inputs label { font-size: 0.85rem; color: var(--muted); gap: 0.3rem; }
+.range-inputs input[type="number"] {
+  width: 4.2rem;
+  padding: 0.3rem 0.4rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
 .status { color: var(--muted); font-size: 0.85rem; min-height: 1.1rem; margin: 0.6rem 0 0; }
 .status.err { color: var(--error); }
 

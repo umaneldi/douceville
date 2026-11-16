@@ -83,6 +83,19 @@
             <label><input type="checkbox" name="secteur" value="hors contrat" /> Hors contrat</label>
           </fieldset>
 
+          <fieldset class="filters">
+            <legend>Taux de réussite (Admis / Présents)</legend>
+            <div class="dual-range">
+              <div class="dual-range-track"><div id="rate-fill" class="dual-range-fill"></div></div>
+              <input id="rate-min" type="range" min="0" max="100" step="1" value="0" aria-label="Taux minimum" />
+              <input id="rate-max" type="range" min="0" max="100" step="1" value="100" aria-label="Taux maximum" />
+            </div>
+            <div class="range-inputs">
+              <label>Min <input id="rate-min-txt" type="number" min="0" max="100" step="1" value="0" /> %</label>
+              <label>Max <input id="rate-max-txt" type="number" min="0" max="100" step="1" value="100" /> %</label>
+            </div>
+          </fieldset>
+
           <button id="search-btn" type="submit" class="btn-primary">Rechercher</button>
           <p id="search-status" class="status"></p>
         </form>

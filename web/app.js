@@ -11,6 +11,7 @@ const PENDING_MSG =
   "Vous pourrez vous connecter dès qu'il aura été approuvé.";
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
 let map, isoLayer, markerLayer;
+let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -198,6 +199,7 @@ $("#logout").addEventListener("click", async () => {
   setToken(null);
   if (isoLayer) isoLayer.clearLayers();
   if (markerLayer) markerLayer.clearLayers();
+  lastData = null;
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
   $("#password").value = "";
@@ -233,7 +235,6 @@ $("#search-form").addEventListener("submit", async (e) => {
       body: JSON.stringify(body),
     });
     render(data);
-    status.textContent = `${data.etablissements ? data.etablissements.length : 0} établissement(s) trouvé(s).`;
   } catch (ex) {
     status.textContent = ex.message;
     status.classList.add("err");
@@ -269,8 +270,25 @@ function render(data) {
     }
   }
 
-  const etabs = data.etablissements || [];
+  lastData = data;
+  const bounds = renderMarkers();
+
+  if (bounds.length) {
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+  } else if (iso && iso.lonlat) {
+    map.setView([iso.lonlat[1], iso.lonlat[0]], 12);
+  }
+}
+
+// (Re)dessine les marqueurs de la dernière recherche selon le filtre de taux
+// de réussite ; renvoie les positions affichées.
+function renderMarkers() {
   const bounds = [];
+  if (!markerLayer || !lastData) return bounds;
+  markerLayer.clearLayers();
+
+  const all = lastData.etablissements || [];
+  const etabs = all.filter(passesRateFilter);
   for (const etab of etabs) {
     const coords = etab.position && etab.position.coordinates;
     if (!coords) continue;
@@ -279,12 +297,101 @@ function render(data) {
     L.marker([lat, lon]).bindPopup(popupHtml(etab)).addTo(markerLayer);
   }
 
-  if (bounds.length) {
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
-  } else if (iso && iso.lonlat) {
-    map.setView([iso.lonlat[1], iso.lonlat[0]], 12);
-  }
+  const status = $("#search-status");
+  status.classList.remove("err");
+  status.textContent =
+    etabs.length === all.length
+      ? `${all.length} établissement(s) trouvé(s).`
+      : `${etabs.length} établissement(s) affiché(s) sur ${all.length} trouvé(s).`;
+  return bounds;
 }
+
+// ---------------------------------------------------------------------------
+// Filtre « taux de réussite » (Admis / Présents) : slicer + champs synchronisés
+// ---------------------------------------------------------------------------
+
+// Taux global d'un établissement en % (Σ admis / Σ présents), ou null.
+function successRate(etab) {
+  let presents = 0;
+  let admis = 0;
+  for (const r of etab.resultats || []) {
+    if (r.presents == null || r.admis == null || r.presents <= 0) continue;
+    presents += r.presents;
+    admis += r.admis;
+  }
+  return presents > 0 ? (100 * admis) / presents : null;
+}
+
+function rateBounds() {
+  return {
+    min: parseInt($("#rate-min").value, 10),
+    max: parseInt($("#rate-max").value, 10),
+  };
+}
+
+// Plage complète (0–100) : aucun filtrage. Sinon, les établissements sans
+// résultats d'examen sont masqués.
+function passesRateFilter(etab) {
+  const { min, max } = rateBounds();
+  if (min <= 0 && max >= 100) return true;
+  const rate = successRate(etab);
+  return rate != null && rate >= min && rate <= max;
+}
+
+function syncRateUI() {
+  const { min, max } = rateBounds();
+  $("#rate-min-txt").value = min;
+  $("#rate-max-txt").value = max;
+  const fill = $("#rate-fill");
+  fill.style.left = min + "%";
+  fill.style.right = 100 - max + "%";
+  // Poignées confondues : garder accessible celle qui peut encore bouger.
+  $("#rate-min").style.zIndex = min === max && min >= 50 ? 2 : "";
+}
+
+function setRate(which, value) {
+  const { min, max } = rateBounds();
+  let v = Math.round(Math.min(100, Math.max(0, value)));
+  if (which === "min") v = Math.min(v, max);
+  else v = Math.max(v, min);
+  $(`#rate-${which}`).value = v;
+}
+
+function onRateChange() {
+  syncRateUI();
+  renderMarkers();
+}
+
+for (const which of ["min", "max"]) {
+  const slider = $(`#rate-${which}`);
+  const txt = $(`#rate-${which}-txt`);
+
+  slider.addEventListener("input", () => {
+    setRate(which, parseInt(slider.value, 10)); // empêche min > max
+    onRateChange();
+  });
+
+  // Saisie en cours : on ne met à jour que si la valeur est utilisable,
+  // sans réécrire le champ pour ne pas gêner la frappe.
+  txt.addEventListener("input", () => {
+    const v = parseFloat(txt.value);
+    if (Number.isNaN(v)) return;
+    setRate(which, v);
+    const { min, max } = rateBounds();
+    const fill = $("#rate-fill");
+    fill.style.left = min + "%";
+    fill.style.right = 100 - max + "%";
+    renderMarkers();
+  });
+
+  // Validation (Entrée / perte du focus) : le champ reprend la valeur retenue.
+  txt.addEventListener("change", () => {
+    const v = parseFloat(txt.value);
+    if (!Number.isNaN(v)) setRate(which, v);
+    onRateChange();
+  });
+}
+syncRateUI();
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
@@ -301,6 +408,10 @@ function popupHtml(etab) {
   html += `</div>`;
 
   const res = etab.resultats || [];
+  const rate = successRate(etab);
+  if (rate != null) {
+    html += `<div class="popup-meta">Taux de réussite : <strong>${rate.toFixed(1)} %</strong></div>`;
+  }
   if (res.length) {
     html += `<table class="popup-table"><thead><tr>
       <th>Diplôme</th><th>Année</th><th>Présents</th><th>Admis</th><th>Mentions</th>

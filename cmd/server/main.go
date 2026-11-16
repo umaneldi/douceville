@@ -42,10 +42,19 @@ func main() {
 	slog.Info("database connected", "host", cfg.PostgresHost, "port", cfg.PostgresPort, "db", cfg.PostgresDB)
 
 	st := store.New(pool)
-	if err := st.Migrate(ctx); err != nil {
+	canMigrate, err := st.CanMigrate(ctx)
+	if err != nil {
 		fatal("migration", err)
 	}
-	slog.Info("database migrations applied")
+	if canMigrate {
+		if err := st.Migrate(ctx); err != nil {
+			fatal("migration", err)
+		}
+		slog.Info("database migrations applied")
+	} else {
+		slog.Warn("database user is read-only: migrations skipped, the schema must already be up to date",
+			"user", cfg.PostgresUser)
+	}
 
 	var mailer mail.Sender = mail.LogSender{}
 	if cfg.SMTPHost != "" {
