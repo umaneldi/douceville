@@ -12,10 +12,12 @@ Sources (Parquet exports):
   - fr-en-dnb-par-etablissement                      (brevet, 2006-2021)
 
 Usage:
-    uv run scripts/import_resultats_parquet.py [--lycees FILE] [--lycees-pro FILE] \
+    uv run scripts/import_resultats_parquet.py [--dir DIR] [--lycees FILE] [--lycees-pro FILE] \
         [--colleges FILE] [--dnb FILE] [--dsn URL] [--dry-run]
 
-Each source not given as a local file is downloaded from data.education.gouv.fr. The DSN defaults to the POSTGRES_* variables
+Each source is read from its --<source> FILE if given, else from DIR/<dataset>.parquet
+(e.g. DIR/fr-en-dnb-par-etablissement.parquet) if --dir is given and the file
+exists, else downloaded from data.education.gouv.fr. The DSN defaults to the POSTGRES_* variables
 (environment, then ./.env), the same ones the Go server uses. Import the
 établissements first (scripts/import_etablissements_parquet.py): results whose
 UAI is not in `etablissement` are skipped (foreign key).
@@ -36,6 +38,16 @@ One row per (diplome, annee, établissement):
     hold the brevet.
 Rows are keyed by UNIQUE (diplome, annee, etablissement_uai): existing rows are
 updated, new ones inserted. Rows are never deleted.
+
+Sections d'enseignement professionnel (SEP): their bac pro results are usually
+published under the UAI of the lycée they belong to. A SEP (établissement whose
+name starts with "Section d'enseignement professionnel", "Section
+professionnelle" or "SEP") without its own bac pro results gets a copy of the
+bac pro results of the nearest établissement that has some, in the same commune
+and within SEP_MAX_DISTANCE meters.
+
+Downloads are retried (data.education.gouv.fr intermittently answers 401); a
+source that still fails is skipped with a warning.
 """
 
 from __future__ import annotations
@@ -46,6 +58,7 @@ import os
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -180,11 +193,25 @@ def dedupe(rows: list[tuple]) -> list[tuple]:
     return list({(r[0], r[1], r[5]): r for r in rows}.values())
 
 
-def download(dataset: str, dest: Path) -> Path:
+DOWNLOAD_ATTEMPTS = 5
+
+
+def download(dataset: str, dest: Path) -> Path | None:
+    """Download a dataset export; None if it still fails after retries."""
     path = dest / f"{dataset}.parquet"
     print(f"Downloading {dataset}...")
-    urllib.request.urlretrieve(EXPORT_URL.format(dataset), path)
-    return path
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            urllib.request.urlretrieve(EXPORT_URL.format(dataset), path)
+            return path
+        except (urllib.error.URLError, OSError) as e:
+            if attempt == DOWNLOAD_ATTEMPTS:
+                print(f"  WARNING: {dataset} skipped, download failed {attempt} times: {e}", file=sys.stderr)
+                return None
+            delay = 2 ** attempt
+            print(f"  attempt {attempt} failed ({e}), retrying in {delay}s...")
+            time.sleep(delay)
+    return None
 
 
 def load_dotenv(path: Path) -> None:
@@ -208,6 +235,32 @@ def default_dsn() -> str:
     )
 
 
+SEP_MAX_DISTANCE = 1000  # meters
+
+# Copies into tmp_resultat the bac pro rows of each SEP's parent lycée (see the
+# module docstring). Positions are lon/lat stored with SRID 0.
+SEP_COPY = r"""
+WITH sep AS (
+    SELECT e."UAI" AS uai, e.commune, ST_SetSRID(e.position, 4326) AS pos
+    FROM etablissement e
+    WHERE e.nom ~* '^\s*(section\s+(d.\s*enseignement\s+)?professionnel|sep\M)'
+      AND NOT EXISTS (SELECT 1 FROM tmp_resultat t WHERE t.uai = e."UAI" AND t.diplome = %(diplome)s)
+),
+parent AS (
+    SELECT DISTINCT ON (s.uai) s.uai AS sep_uai, p."UAI" AS parent_uai
+    FROM sep s
+    JOIN etablissement p ON p.commune = s.commune AND p."UAI" <> s.uai
+    WHERE EXISTS (SELECT 1 FROM tmp_resultat t WHERE t.uai = p."UAI" AND t.diplome = %(diplome)s)
+      AND ST_DistanceSphere(s.pos, ST_SetSRID(p.position, 4326)) <= %(max_distance)s
+    ORDER BY s.uai, ST_DistanceSphere(s.pos, ST_SetSRID(p.position, 4326))
+)
+INSERT INTO tmp_resultat (diplome, annee, presents, admis, mentions, uai)
+SELECT t.diplome, t.annee, t.presents, t.admis, t.mentions, pa.sep_uai
+FROM parent pa
+JOIN tmp_resultat t ON t.uai = pa.parent_uai AND t.diplome = %(diplome)s
+RETURNING uai
+"""
+
 UPSERT = """
 INSERT INTO resultat (diplome, annee, presents, admis, mentions, etablissement_uai)
 SELECT t.diplome, t.annee, t.presents, t.admis, t.mentions, t.uai
@@ -221,7 +274,7 @@ RETURNING (xmax = 0) AS inserted
 """
 
 
-def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int, int]:
+def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int, int, int]:
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('resultat'), to_regclass('etablissement')")
         if None in cur.fetchone():
@@ -234,10 +287,13 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int, int]:
         with cur.copy("COPY tmp_resultat FROM STDIN") as copy:
             for row in rows:
                 copy.write_row(row)
+        cur.execute(SEP_COPY, {"diplome": BAC_PRO, "max_distance": SEP_MAX_DISTANCE})
+        copied = cur.fetchall()
+        seps = len({r[0] for r in copied})
         cur.execute(UPSERT)
         flags = [r[0] for r in cur.fetchall()]
         inserted = sum(flags)
-        return inserted, len(flags) - inserted, len(rows) - len(flags)
+        return inserted, len(flags) - inserted, len(rows) + len(copied) - len(flags), seps
 
 
 # (CLI option, dataset) in import order.
@@ -259,17 +315,29 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for opt, dataset in SOURCES:
         parser.add_argument(f"--{opt}", type=Path, help=f"{dataset} Parquet file (default: download)")
+    parser.add_argument("--dir", type=Path,
+                        help="folder holding already downloaded <dataset>.parquet files (missing ones are downloaded)")
     parser.add_argument("--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)")
     parser.add_argument("--dry-run", action="store_true", help="parse and report, do not touch the database")
     args = parser.parse_args()
+    if args.dir and not args.dir.is_dir():
+        sys.exit(f"--dir: {args.dir} is not a directory")
 
     t0 = time.monotonic()
     extracted = {}
     with tempfile.TemporaryDirectory(prefix="douceville-") as tmp:
         for opt, dataset in SOURCES:
-            path = getattr(args, opt.replace("-", "_")) or download(dataset, Path(tmp))
+            path = getattr(args, opt.replace("-", "_"))
+            if path is None and args.dir and (args.dir / f"{dataset}.parquet").is_file():
+                path = args.dir / f"{dataset}.parquet"
+                print(f"Using {path}")
+            path = path or download(dataset, Path(tmp))
+            if path is None:
+                continue
             extracted[dataset] = EXTRACTORS[dataset](path)
             print(f"  {dataset}: {len(extracted[dataset])} rows")
+    if not extracted:
+        sys.exit("no source could be loaded")
     rows = dedupe([row for part in extracted.values() for row in part])
     print(f"{len(rows)} résultats to upsert")
 
@@ -279,9 +347,9 @@ def main() -> None:
                 print("  ", row)
         return
 
-    inserted, updated, unknown = write_db(args.dsn or default_dsn(), rows)
-    print(f"Inserted {inserted}, updated {updated} rows, skipped {unknown} with unknown UAI "
-          f"in {time.monotonic() - t0:.1f}s")
+    inserted, updated, unknown, seps = write_db(args.dsn or default_dsn(), rows)
+    print(f"Inserted {inserted}, updated {updated} rows (incl. bac pro copied to {seps} SEP), "
+          f"skipped {unknown} with unknown UAI in {time.monotonic() - t0:.1f}s")
 
 
 if __name__ == "__main__":

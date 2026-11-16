@@ -219,7 +219,9 @@ function popupHtml(etab) {
   let html = `<div class="popup-title">${esc(etab.nom)}</div>`;
   const meta = [etab.nature, etab.secteur].filter(Boolean).join(" · ");
   const addr = [etab.adresse, etab.code_postal, etab.commune].filter(Boolean).join(", ");
-  html += `<div class="popup-meta">${esc(meta)}<br/>${esc(addr)}</div>`;
+  html += `<div class="popup-meta">${esc(meta)}<br/>${esc(addr)}`;
+  if (etab.UAI) html += `<br/>UAI : ${esc(etab.UAI)}`;
+  html += `</div>`;
 
   const res = etab.resultats || [];
   if (res.length) {
