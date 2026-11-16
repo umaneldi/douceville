@@ -1,6 +1,6 @@
 services:
   geodb:
-    image: postgis/postgis
+    image: postgis/postgis:18-3.7
     user: "0:0"
     ports:
       - 5432:5432
