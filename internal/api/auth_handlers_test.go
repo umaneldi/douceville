@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ydethe/douceville/internal/auth"
-	"github.com/ydethe/douceville/internal/models"
-	"github.com/ydethe/douceville/internal/store"
+	"github.com/umaneldi/douceville/internal/auth"
+	"github.com/umaneldi/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/store"
 )
 
 const testSecret = "unit-test-secret"

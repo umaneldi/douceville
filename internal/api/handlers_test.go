@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/ydethe/douceville/internal/geo"
-	"github.com/ydethe/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/geo"
+	"github.com/umaneldi/douceville/internal/models"
 )
 
 // --- Mocks ---

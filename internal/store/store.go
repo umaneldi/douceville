@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/ydethe/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/models"
 )
 
 // Store définit les opérations de persistance utilisées par l'API. L'interface

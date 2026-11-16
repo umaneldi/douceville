@@ -1,4 +1,4 @@
-module github.com/ydethe/douceville
+module github.com/umaneldi/douceville
 
 go 1.26.5
 

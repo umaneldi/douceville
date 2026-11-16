@@ -20,7 +20,7 @@ COPY web ./web
 ARG VERSION=dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -trimpath \
-      -ldflags="-s -w -X github.com/ydethe/douceville/web.Version=${VERSION}" \
+      -ldflags="-s -w -X github.com/umaneldi/douceville/web.Version=${VERSION}" \
       -o /out/douceville ./cmd/server
 
 # Stage 2: minimal runtime image.

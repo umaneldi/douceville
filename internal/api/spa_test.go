@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ydethe/douceville/web"
+	"github.com/umaneldi/douceville/web"
 )
 
 func TestSPAIndexShowsVersion(t *testing.T) {

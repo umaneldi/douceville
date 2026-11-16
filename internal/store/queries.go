@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/ydethe/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/models"
 )
 
 // colonnes sélectionnées pour un établissement. position est émise en GeoJSON.

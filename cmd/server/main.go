@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/ydethe/douceville/internal/api"
-	"github.com/ydethe/douceville/internal/config"
-	"github.com/ydethe/douceville/internal/geo"
-	"github.com/ydethe/douceville/internal/mail"
-	"github.com/ydethe/douceville/internal/store"
+	"github.com/umaneldi/douceville/internal/api"
+	"github.com/umaneldi/douceville/internal/config"
+	"github.com/umaneldi/douceville/internal/geo"
+	"github.com/umaneldi/douceville/internal/mail"
+	"github.com/umaneldi/douceville/internal/store"
 )
 
 func main() {

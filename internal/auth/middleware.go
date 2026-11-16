@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/ydethe/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/models"
 )
 
 // UserLookup récupère le profil d'un utilisateur par son identifiant (claim sub)

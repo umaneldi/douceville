@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/ydethe/douceville/internal/auth"
-	"github.com/ydethe/douceville/web"
+	"github.com/umaneldi/douceville/internal/auth"
+	"github.com/umaneldi/douceville/web"
 )
 
 // NewRouter construit le routeur de l'application monolithique : l'API JSON est

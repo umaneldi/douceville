@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ydethe/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/models"
 )
 
 type fakeUsers struct {

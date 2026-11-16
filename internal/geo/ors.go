@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/ydethe/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/models"
 )
 
 const orsBaseURL = "https://api.openrouteservice.org/v2/isochrones/"

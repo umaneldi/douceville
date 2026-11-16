@@ -7,11 +7,11 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/ydethe/douceville/internal/auth"
-	"github.com/ydethe/douceville/internal/geo"
-	"github.com/ydethe/douceville/internal/mail"
-	"github.com/ydethe/douceville/internal/models"
-	"github.com/ydethe/douceville/internal/store"
+	"github.com/umaneldi/douceville/internal/auth"
+	"github.com/umaneldi/douceville/internal/geo"
+	"github.com/umaneldi/douceville/internal/mail"
+	"github.com/umaneldi/douceville/internal/models"
+	"github.com/umaneldi/douceville/internal/store"
 )
 
 // Isochroner calcule une isochrone (implémenté par geo.ORSClient).
