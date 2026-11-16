@@ -78,7 +78,15 @@ func (s *SMTPSender) Send(ctx context.Context, to, subject, body string) error {
 		}
 	}
 	if s.cfg.Username != "" {
-		if err := c.Auth(smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.cfg.Host)); err != nil {
+		ok, mechs := c.Extension("AUTH")
+		if !ok {
+			return fmt.Errorf("smtp auth: server does not support authentication")
+		}
+		a, err := chooseAuth(mechs, s.cfg.Username, s.cfg.Password, s.cfg.Host)
+		if err != nil {
+			return err
+		}
+		if err := c.Auth(a); err != nil {
 			return fmt.Errorf("smtp auth: %w", err)
 		}
 	}
@@ -99,6 +107,58 @@ func (s *SMTPSender) Send(ctx context.Context, to, subject, body string) error {
 		return fmt.Errorf("smtp close data: %w", err)
 	}
 	return c.Quit()
+}
+
+// chooseAuth sélectionne un mécanisme parmi ceux annoncés par le serveur
+// (paramètre de l'extension AUTH), par ordre de préférence : PLAIN, LOGIN.
+func chooseAuth(advertised, username, password, host string) (smtp.Auth, error) {
+	mechs := map[string]bool{}
+	for _, m := range strings.Fields(strings.ToUpper(advertised)) {
+		mechs[m] = true
+	}
+	switch {
+	case mechs["PLAIN"]:
+		return smtp.PlainAuth("", username, password, host), nil
+	case mechs["LOGIN"]:
+		return &loginAuth{username: username, password: password, host: host}, nil
+	default:
+		return nil, fmt.Errorf("smtp auth: no supported mechanism (server offers %q)", advertised)
+	}
+}
+
+// loginAuth implémente le mécanisme AUTH LOGIN (non fourni par net/smtp).
+// Comme smtp.PlainAuth, il refuse d'envoyer les identifiants en clair hors TLS,
+// sauf vers localhost.
+type loginAuth struct {
+	username, password, host string
+}
+
+func (a *loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if !server.TLS && !isLocalhost(server.Name) {
+		return "", nil, fmt.Errorf("unencrypted connection")
+	}
+	if server.Name != a.host {
+		return "", nil, fmt.Errorf("wrong host name")
+	}
+	return "LOGIN", nil, nil
+}
+
+func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch prompt := strings.ToLower(strings.TrimSpace(string(fromServer))); {
+	case strings.HasPrefix(prompt, "username"):
+		return []byte(a.username), nil
+	case strings.HasPrefix(prompt, "password"):
+		return []byte(a.password), nil
+	default:
+		return nil, fmt.Errorf("unexpected LOGIN challenge %q", fromServer)
+	}
+}
+
+func isLocalhost(name string) bool {
+	return name == "localhost" || name == "127.0.0.1" || name == "::1"
 }
 
 // envelopeAddress extrait l'adresse nue d'un expéditeur "Nom <adresse>".
