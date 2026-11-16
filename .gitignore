@@ -1,0 +1,38 @@
+# Secrets & local env
+.env
+*.env
+!sample.env
+
+# Go build output
+/douceville
+/dist/
+*.test
+*.out
+coverage.*
+*.ttl
+
+# Data & generated artefacts (loaded/served at runtime, not versioned)
+data/
+dv_data/
+storage/
+logs/
+*.db
+*.bak
+*.zip
+*.parquet
+*.geojson
+*.xls*
+*.raw
+*.pkl
+
+# External service data dirs
+ors-docker/
+nominatim-data/
+addok-data/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+__pycache__/
+.test_db/
