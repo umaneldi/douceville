@@ -182,6 +182,11 @@ JWT_SECRET=dev-secret POSTGRES_HOST=localhost go run ./cmd/server
 > `uv run scripts/import_communes_csv.py v_commune_depuis_1943.csv [--dsn URL | --psql CMD]`.
 > Chargez-le **avant** les établissements : `etablissement.code_commune` y fait
 > référence (les codes absents sont enregistrés à NULL).
+>
+> Les données de délinquance par commune (table `securite`) se chargent ensuite
+> depuis le Parquet communal du SSMSI (data.gouv.fr) :
+> `uv run scripts/import_securite_parquet.py donnee-comm-data.gouv-parquet-….parquet [--dsn URL | --psql CMD]`.
+> `import.sh` enchaîne tous les imports dans le bon ordre.
 
 ## Développement
 

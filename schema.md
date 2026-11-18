@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **six tables physiques** : `etablissement`, `resultat`, `commune`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go. La table `commune` est créée vide et chargée par `scripts/import_communes_csv.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **sept tables physiques** : `etablissement`, `resultat`, `commune`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -41,6 +41,8 @@ Relation : etablissement (1) ──< (N) resultat
   - ON DELETE CASCADE (la suppression d'un établissement supprime ses résultats)
 Relation : commune (1) ──< (N) etablissement
   - clé étrangère : etablissement.code_commune → commune.code_commune (NULL autorisé)
+Relation : commune (1) ──< (N) securite
+  - clé étrangère : securite.code_commune → commune.code_commune
 ```
 
 ## Table `etablissement`
@@ -91,9 +93,25 @@ Référentiel des communes actuelles (Code officiel géographique INSEE, fichier
 
 | Colonne         | Type SQL | Contraintes | Description |
 |-----------------|----------|-------------|-------------|
-| `code_commune`  | `TEXT`   | **PK** (unique, NOT NULL) | Code INSEE de la commune (colonne `COM`, ex. `01001`, `2A004`) ; cible de la FK `etablissement.code_commune`. |
+| `code_commune`  | `TEXT`   | **PK** (unique, NOT NULL) | Code INSEE de la commune (colonne `COM`, ex. `01001`, `2A004`) ; cible des FK `etablissement.code_commune` et `securite.code_commune`. |
 | `nom`           | `TEXT`   | NOT NULL    | Nom en typographie riche (colonne `NCCENR`). |
 | `date_creation` | `DATE`   | NOT NULL    | Début de validité de la commune (colonne `DATE_DEBUT`). |
+
+## Table `securite`
+
+Délinquance enregistrée par la police et la gendarmerie, par commune, année et indicateur (SSMSI, « base statistique communale de la délinquance », fichier Parquet de data.gouv.fr). Créée par `internal/store/migrations/007_securite.sql`, chargée par `scripts/import_securite_parquet.py`. Les lignes des arrondissements de Paris/Lyon/Marseille sont ignorées (la commune parente figure déjà dans le fichier).
+
+| Colonne           | Type SQL           | Contraintes | Description |
+|-------------------|--------------------|-------------|-------------|
+| `code_commune`    | `TEXT`             | NOT NULL, **FK** → `commune.code_commune` | Code INSEE de la commune (colonne `CODGEO_2026`). |
+| `annee`           | `INTEGER`          | NOT NULL    | Année des faits. |
+| `indicateur`      | `TEXT`             | NOT NULL    | Indicateur (ex. `Cambriolages de logement`, `Violences sexuelles`). |
+| `unite_de_compte` | `TEXT`             | NOT NULL    | Unité comptée (`Victime`, `Infraction`, `Véhicule`, `Mis en cause`, `Victime entendue`). |
+| `nombre`          | `INTEGER`          | NULL        | Nombre de faits ; NULL si non diffusé. |
+| `taux_pour_mille` | `DOUBLE PRECISION` | NULL        | Taux pour 1 000 habitants (ou logements) ; NULL si non diffusé. |
+| `est_diffuse`     | `BOOLEAN`          | NOT NULL    | `true` si la donnée est diffusée (`diff`), `false` sinon (`ndiff`, secret statistique). |
+
+**Clé primaire** : `(code_commune, annee, indicateur)` — elle sert aussi d'index pour la FK.
 
 ## Table `utilisateur`
 
