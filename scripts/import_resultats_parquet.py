@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pyarrow>=15", "psycopg[binary]>=3.1"]
+# dependencies = ["pyarrow>=15", "psycopg[binary]>=3.1", "tqdm>=4.66"]
 # ///
 """Upsert the data.education.gouv.fr exam results into the `resultat` table.
 
@@ -69,6 +69,7 @@ import urllib.request
 from pathlib import Path
 
 import psycopg
+from tqdm import tqdm
 import pyarrow.parquet as pq
 
 EXPORT_URL = "https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/{}/exports/parquet"
@@ -91,7 +92,12 @@ BAC_SERIES = {
     "s2tmd": "Baccalauréat S2TMD",
     "sthr": "Baccalauréat STHR",
 }
-GNLE_MENTIONS = ("nb_mentions_tb_avecf_g", "nb_mentions_tb_sansf_g", "nb_mentions_b_g", "nb_mentions_ab_g")
+GNLE_MENTIONS = (
+    "nb_mentions_tb_avecf_g",
+    "nb_mentions_tb_sansf_g",
+    "nb_mentions_b_g",
+    "nb_mentions_ab_g",
+)
 
 BAC_PRO = "Baccalauréat professionnel"
 BAC_PRO_MENTIONS = ("nb_mentions_tb_sansf_p", "nb_mentions_b_p", "nb_mentions_ab_p")
@@ -126,12 +132,19 @@ def uai_of(v) -> str:
     return (v or "").strip().upper()
 
 
+def read_rows(path: Path, cols: list[str]):
+    rows = pq.read_table(path, columns=cols).to_pylist()
+    return tqdm(
+        rows, desc=f"Reading {path.stem}", unit="row", unit_scale=True, leave=False
+    )
+
+
 def extract_lycees(path: Path) -> list[tuple]:
     cols = ["annee", "uai", *GNLE_MENTIONS]
     for s in BAC_SERIES:
         cols += [f"presents_{s}", f"taux_reu_{s}", f"taux_men_{s}"]
     rows = []
-    for r in pq.read_table(path, columns=cols).to_pylist():
+    for r in read_rows(path, cols):
         uai = uai_of(r["uai"])
         if not uai or r["annee"] is None:
             continue
@@ -143,14 +156,30 @@ def extract_lycees(path: Path) -> list[tuple]:
             mentions = from_rate(presents, r[f"taux_men_{s}"])
             if s == "gnle" and all(r[k] is not None for k in GNLE_MENTIONS):
                 mentions = sum(r[k] for k in GNLE_MENTIONS)
-            rows.append((diplome, annee, presents, from_rate(presents, r[f"taux_reu_{s}"]), mentions, uai))
+            rows.append(
+                (
+                    diplome,
+                    annee,
+                    presents,
+                    from_rate(presents, r[f"taux_reu_{s}"]),
+                    mentions,
+                    uai,
+                )
+            )
     return rows
 
 
 def extract_lycees_pro(path: Path) -> list[tuple]:
-    cols = ["annee", "uai", "presents_total", "taux_reu_total", "taux_men_total", *BAC_PRO_MENTIONS]
+    cols = [
+        "annee",
+        "uai",
+        "presents_total",
+        "taux_reu_total",
+        "taux_men_total",
+        *BAC_PRO_MENTIONS,
+    ]
     rows = []
-    for r in pq.read_table(path, columns=cols).to_pylist():
+    for r in read_rows(path, cols):
         uai = uai_of(r["uai"])
         if not uai or r["annee"] is None or not r["presents_total"]:
             continue
@@ -158,28 +187,55 @@ def extract_lycees_pro(path: Path) -> list[tuple]:
         mentions = from_rate(presents, r["taux_men_total"])
         if all(r[k] is not None for k in BAC_PRO_MENTIONS):
             mentions = sum(r[k] for k in BAC_PRO_MENTIONS)
-        rows.append((BAC_PRO, year(r["annee"]), presents, from_rate(presents, r["taux_reu_total"]), mentions, uai))
+        rows.append(
+            (
+                BAC_PRO,
+                year(r["annee"]),
+                presents,
+                from_rate(presents, r["taux_reu_total"]),
+                mentions,
+                uai,
+            )
+        )
     return rows
 
 
 def extract_dnb(path: Path) -> list[tuple]:
-    cols = ["session", "numero_d_etablissement", "presents", "admis", "admis_sans_mention"]
+    cols = [
+        "session",
+        "numero_d_etablissement",
+        "presents",
+        "admis",
+        "admis_sans_mention",
+    ]
     rows = []
-    for r in pq.read_table(path, columns=cols).to_pylist():
+    for r in read_rows(path, cols):
         uai = uai_of(r["numero_d_etablissement"])
         if not uai or r["session"] is None or not r["presents"]:
             continue
         admis = r["admis"]
-        mentions = None if admis is None or r["admis_sans_mention"] is None else admis - r["admis_sans_mention"]
+        mentions = (
+            None
+            if admis is None or r["admis_sans_mention"] is None
+            else admis - r["admis_sans_mention"]
+        )
         rows.append((BREVET, year(r["session"]), r["presents"], admis, mentions, uai))
     return rows
 
 
 def extract_colleges(path: Path) -> list[tuple]:
-    cols = ["session", "uai", "nb_candidats_g", "taux_de_reussite_g", "nb_mentions_global_g",
-            *BREVET_MENTIONS, "nb_candidats_p", "taux_de_reussite_p"]
+    cols = [
+        "session",
+        "uai",
+        "nb_candidats_g",
+        "taux_de_reussite_g",
+        "nb_mentions_global_g",
+        *BREVET_MENTIONS,
+        "nb_candidats_p",
+        "taux_de_reussite_p",
+    ]
     rows = []
-    for r in pq.read_table(path, columns=cols).to_pylist():
+    for r in read_rows(path, cols):
         uai = uai_of(r["uai"])
         if not uai or r["session"] is None:
             continue
@@ -188,9 +244,27 @@ def extract_colleges(path: Path) -> list[tuple]:
             mentions = r["nb_mentions_global_g"]
             if mentions is None and all(r[k] is not None for k in BREVET_MENTIONS):
                 mentions = sum(r[k] for k in BREVET_MENTIONS)
-            rows.append((BREVET, annee, presents, from_rate(presents, r["taux_de_reussite_g"]), mentions, uai))
+            rows.append(
+                (
+                    BREVET,
+                    annee,
+                    presents,
+                    from_rate(presents, r["taux_de_reussite_g"]),
+                    mentions,
+                    uai,
+                )
+            )
         if presents := r["nb_candidats_p"]:
-            rows.append((BREVET_PRO, annee, presents, from_rate(presents, r["taux_de_reussite_p"]), None, uai))
+            rows.append(
+                (
+                    BREVET_PRO,
+                    annee,
+                    presents,
+                    from_rate(presents, r["taux_de_reussite_p"]),
+                    None,
+                    uai,
+                )
+            )
     return rows
 
 
@@ -208,13 +282,27 @@ def download(dataset: str, dest: Path) -> Path | None:
     print(f"Downloading {dataset}...")
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
         try:
-            urllib.request.urlretrieve(EXPORT_URL.format(dataset), path)
+            with tqdm(
+                unit="B", unit_scale=True, unit_divisor=1024, desc=dataset, leave=False
+            ) as bar:
+
+                def hook(blocks: int, block_size: int, total: int) -> None:
+                    if total > 0:
+                        bar.total = total
+                    bar.update(blocks * block_size - bar.n)
+
+                urllib.request.urlretrieve(
+                    EXPORT_URL.format(dataset), path, reporthook=hook
+                )
             return path
         except (urllib.error.URLError, OSError) as e:
             if attempt == DOWNLOAD_ATTEMPTS:
-                print(f"  WARNING: {dataset} skipped, download failed {attempt} times: {e}", file=sys.stderr)
+                print(
+                    f"  WARNING: {dataset} skipped, download failed {attempt} times: {e}",
+                    file=sys.stderr,
+                )
                 return None
-            delay = 2 ** attempt
+            delay = 2**attempt
             print(f"  attempt {attempt} failed ({e}), retrying in {delay}s...")
             time.sleep(delay)
     return None
@@ -235,19 +323,32 @@ def copy_field(v) -> str:
     """A value in COPY text format."""
     if v is None:
         return r"\N"
-    return str(v).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+    return (
+        str(v)
+        .replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
 
 
 def run_psql(cmd: str, sql: str) -> list[str]:
     """Pipe `sql` into the psql command `cmd`; return the fields of its last output line."""
-    script = "\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n" + sql
+    script = (
+        "\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n"
+        + sql
+    )
     try:
-        proc = subprocess.run(shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE)
+        proc = subprocess.run(
+            shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE
+        )
     except OSError as e:
         sys.exit(f"--psql: cannot run {cmd!r}: {e}")
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     if proc.returncode != 0 or not lines:
-        sys.exit(f"--psql: import failed (exit code {proc.returncode}); nothing was committed")
+        sys.exit(
+            f"--psql: import failed (exit code {proc.returncode}); nothing was committed"
+        )
     return lines[-1].split("|")
 
 
@@ -315,7 +416,7 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int, int, int]:
             sys.exit("tables not found: start the Go server once to run the migrations")
         cur.execute(CREATE_TMP)
         with cur.copy("COPY tmp_resultat FROM STDIN") as copy:
-            for row in rows:
+            for row in tqdm(rows, desc="Sending", unit="row", unit_scale=True):
                 copy.write_row(row)
         cur.execute(SEP_COPY, SEP_PARAMS)
         copied = cur.fetchall()
@@ -323,14 +424,27 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int, int, int]:
         cur.execute(UPSERT)
         flags = [r[0] for r in cur.fetchall()]
         inserted = sum(flags)
-        return inserted, len(flags) - inserted, len(rows) + len(copied) - len(flags), seps
+        return (
+            inserted,
+            len(flags) - inserted,
+            len(rows) + len(copied) - len(flags),
+            seps,
+        )
 
 
 def write_psql(cmd: str, rows: list[tuple]) -> tuple[int, int, int, int]:
     """Same as write_db, through a psql command (e.g. `docker exec -i <container> psql ...`)."""
-    data = "".join("\t".join(map(copy_field, row)) + "\n" for row in rows)
-    sep_copy = SEP_COPY % {"diplome": "'" + BAC_PRO.replace("'", "''") + "'", "max_distance": SEP_MAX_DISTANCE}
-    inserted, updated, upserted, copied, seps = run_psql(cmd, f"""
+    data = "".join(
+        "\t".join(map(copy_field, row)) + "\n"
+        for row in tqdm(rows, desc="Serializing", unit="row", unit_scale=True)
+    )
+    sep_copy = SEP_COPY % {
+        "diplome": "'" + BAC_PRO.replace("'", "''") + "'",
+        "max_distance": SEP_MAX_DISTANCE,
+    }
+    inserted, updated, upserted, copied, seps = run_psql(
+        cmd,
+        f"""
 BEGIN;
 DO $$ BEGIN
     IF to_regclass('resultat') IS NULL OR to_regclass('etablissement') IS NULL THEN
@@ -345,8 +459,11 @@ WITH c AS ({sep_copy}) SELECT count(*) AS copied, count(DISTINCT uai) AS seps FR
 WITH r AS ({UPSERT})
 SELECT count(*) FILTER (WHERE inserted), count(*) FILTER (WHERE NOT inserted), count(*), :copied, :seps FROM r;
 COMMIT;
-""")
-    inserted, updated, upserted, copied, seps = map(int, (inserted, updated, upserted, copied, seps))
+""",
+    )
+    inserted, updated, upserted, copied, seps = map(
+        int, (inserted, updated, upserted, copied, seps)
+    )
     return inserted, updated, len(rows) + copied - upserted, seps
 
 
@@ -366,16 +483,32 @@ EXTRACTORS = {
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     for opt, dataset in SOURCES:
-        parser.add_argument(f"--{opt}", type=Path, help=f"{dataset} Parquet file (default: download)")
-    parser.add_argument("--dir", type=Path,
-                        help="folder holding already downloaded <dataset>.parquet files (missing ones are downloaded)")
-    parser.add_argument("--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)")
-    parser.add_argument("--psql", metavar="CMD",
-                        help="pipe the import into this psql command instead of connecting with --dsn, e.g. "
-                             "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'")
-    parser.add_argument("--dry-run", action="store_true", help="parse and report, do not touch the database")
+        parser.add_argument(
+            f"--{opt}", type=Path, help=f"{dataset} Parquet file (default: download)"
+        )
+    parser.add_argument(
+        "--dir",
+        type=Path,
+        help="folder holding already downloaded <dataset>.parquet files (missing ones are downloaded)",
+    )
+    parser.add_argument(
+        "--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)"
+    )
+    parser.add_argument(
+        "--psql",
+        metavar="CMD",
+        help="pipe the import into this psql command instead of connecting with --dsn, e.g. "
+        "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="parse and report, do not touch the database",
+    )
     args = parser.parse_args()
     if args.dir and not args.dir.is_dir():
         sys.exit(f"--dir: {args.dir} is not a directory")
@@ -385,7 +518,11 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="douceville-") as tmp:
         for opt, dataset in SOURCES:
             path = getattr(args, opt.replace("-", "_"))
-            if path is None and args.dir and (args.dir / f"{dataset}.parquet").is_file():
+            if (
+                path is None
+                and args.dir
+                and (args.dir / f"{dataset}.parquet").is_file()
+            ):
                 path = args.dir / f"{dataset}.parquet"
                 print(f"Using {path}")
             path = path or download(dataset, Path(tmp))
@@ -408,8 +545,10 @@ def main() -> None:
         inserted, updated, unknown, seps = write_psql(args.psql, rows)
     else:
         inserted, updated, unknown, seps = write_db(args.dsn or default_dsn(), rows)
-    print(f"Inserted {inserted}, updated {updated} rows (incl. bac pro copied to {seps} SEP), "
-          f"skipped {unknown} with unknown UAI in {time.monotonic() - t0:.1f}s")
+    print(
+        f"Inserted {inserted}, updated {updated} rows (incl. bac pro copied to {seps} SEP), "
+        f"skipped {unknown} with unknown UAI in {time.monotonic() - t0:.1f}s"
+    )
 
 
 if __name__ == "__main__":

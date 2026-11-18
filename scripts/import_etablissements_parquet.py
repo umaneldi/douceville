@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pyarrow>=15", "psycopg[binary]>=3.1"]
+# dependencies = ["pyarrow>=15", "psycopg[binary]>=3.1", "tqdm>=4.66"]
 # ///
 """Upsert the data.education.gouv.fr "adresse et géolocalisation des
 établissements" Parquet export into the `etablissement` table.
@@ -46,17 +46,39 @@ import time
 from pathlib import Path
 
 import psycopg
+from tqdm import tqdm
 import pyarrow.parquet as pq
 
 # Values expected by the frontend filters (web/index.html).
-MATERNELLE, ELEMENTAIRE, COLLEGE, LYCEE = "Maternelle", "Elementaire", "Collège", "Lycée"
+MATERNELLE, ELEMENTAIRE, COLLEGE, LYCEE = (
+    "Maternelle",
+    "Elementaire",
+    "Collège",
+    "Lycée",
+)
 PUBLIC, PRIVE, HORS_CONTRAT = "public", "privé", "hors contrat"
 
 COLUMNS = [
-    "numero_uai", "appellation_officielle", "denomination_principale", "patronyme_uai",
-    "secteur_public_prive_libe", "secteur_prive_libelle_type_contrat", "adresse_uai", "lieu_dit_uai", "code_postal_uai",
-    "libelle_commune", "code_commune", "latitude", "longitude", "coordonnee_x", "coordonnee_y", "epsg",
-    "nature_uai", "code_departement", "libelle_academie", "date_ouverture",
+    "numero_uai",
+    "appellation_officielle",
+    "denomination_principale",
+    "patronyme_uai",
+    "secteur_public_prive_libe",
+    "secteur_prive_libelle_type_contrat",
+    "adresse_uai",
+    "lieu_dit_uai",
+    "code_postal_uai",
+    "libelle_commune",
+    "code_commune",
+    "latitude",
+    "longitude",
+    "coordonnee_x",
+    "coordonnee_y",
+    "epsg",
+    "nature_uai",
+    "code_departement",
+    "libelle_academie",
+    "date_ouverture",
 ]
 
 
@@ -124,7 +146,7 @@ def extract(path: Path):
     table = pq.read_table(path, columns=COLUMNS)
     stats = {"no_position": 0, "no_nature": 0, "no_uai": 0}
     rows = []
-    for r in table.to_pylist():
+    for r in tqdm(table.to_pylist(), desc="Reading", unit="row", unit_scale=True):
         uai = (r["numero_uai"] or "").strip().upper()
         if not uai:
             stats["no_uai"] += 1
@@ -144,16 +166,37 @@ def extract(path: Path):
             continue
 
         denomination = r["denomination_principale"] or ""
-        nom = (r["appellation_officielle"] or "").strip() \
-            or f"{denomination} {r['patronyme_uai'] or ''}".strip() or uai
+        nom = (
+            (r["appellation_officielle"] or "").strip()
+            or f"{denomination} {r['patronyme_uai'] or ''}".strip()
+            or uai
+        )
 
-        rows.append((
-            uai, nom, r["adresse_uai"], r["lieu_dit_uai"],
-            r["code_postal_uai"] or "", r["libelle_commune"] or "", code_commune(r["code_commune"]),
-            departement(r["code_departement"] or ""), r["libelle_academie"],
-            secteur(r["secteur_public_prive_libe"], r["secteur_prive_libelle_type_contrat"], denomination), r["date_ouverture"], nature,
-            lon, lat, x, y, s,
-        ))
+        rows.append(
+            (
+                uai,
+                nom,
+                r["adresse_uai"],
+                r["lieu_dit_uai"],
+                r["code_postal_uai"] or "",
+                r["libelle_commune"] or "",
+                code_commune(r["code_commune"]),
+                departement(r["code_departement"] or ""),
+                r["libelle_academie"],
+                secteur(
+                    r["secteur_public_prive_libe"],
+                    r["secteur_prive_libelle_type_contrat"],
+                    denomination,
+                ),
+                r["date_ouverture"],
+                nature,
+                lon,
+                lat,
+                x,
+                y,
+                s,
+            )
+        )
     return rows, stats
 
 
@@ -172,19 +215,32 @@ def copy_field(v) -> str:
     """A value in COPY text format."""
     if v is None:
         return r"\N"
-    return str(v).replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+    return (
+        str(v)
+        .replace("\\", "\\\\")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
 
 
 def run_psql(cmd: str, sql: str) -> list[str]:
     """Pipe `sql` into the psql command `cmd`; return the fields of its last output line."""
-    script = "\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n" + sql
+    script = (
+        "\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n"
+        + sql
+    )
     try:
-        proc = subprocess.run(shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE)
+        proc = subprocess.run(
+            shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE
+        )
     except OSError as e:
         sys.exit(f"--psql: cannot run {cmd!r}: {e}")
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     if proc.returncode != 0 or not lines:
-        sys.exit(f"--psql: import failed (exit code {proc.returncode}); nothing was committed")
+        sys.exit(
+            f"--psql: import failed (exit code {proc.returncode}); nothing was committed"
+        )
     return lines[-1].split("|")
 
 
@@ -239,10 +295,12 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int]:
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('etablissement')")
         if cur.fetchone()[0] is None:
-            sys.exit("table 'etablissement' not found: start the Go server once to run the migrations")
+            sys.exit(
+                "table 'etablissement' not found: start the Go server once to run the migrations"
+            )
         cur.execute(CREATE_TMP)
         with cur.copy("COPY tmp_etab FROM STDIN") as copy:
-            for row in rows:
+            for row in tqdm(rows, desc="Sending", unit="row", unit_scale=True):
                 copy.write_row(row)
         cur.execute(UPSERT)
         flags = [r[0] for r in cur.fetchall()]
@@ -252,8 +310,13 @@ def write_db(dsn: str, rows: list[tuple]) -> tuple[int, int]:
 
 def write_psql(cmd: str, rows: list[tuple]) -> tuple[int, int]:
     """Same as write_db, through a psql command (e.g. `docker exec -i <container> psql ...`)."""
-    data = "".join("\t".join(map(copy_field, row)) + "\n" for row in rows)
-    inserted, updated = run_psql(cmd, f"""
+    data = "".join(
+        "\t".join(map(copy_field, row)) + "\n"
+        for row in tqdm(rows, desc="Serializing", unit="row", unit_scale=True)
+    )
+    inserted, updated = run_psql(
+        cmd,
+        f"""
 BEGIN;
 DO $$ BEGIN
     IF to_regclass('etablissement') IS NULL THEN
@@ -265,24 +328,40 @@ COPY tmp_etab FROM STDIN;
 {data}\\.
 WITH r AS ({UPSERT}) SELECT count(*) FILTER (WHERE inserted), count(*) FILTER (WHERE NOT inserted) FROM r;
 COMMIT;
-""")
+""",
+    )
     return int(inserted), int(updated)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("parquet", type=Path, help="Parquet file from data.education.gouv.fr")
-    parser.add_argument("--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)")
-    parser.add_argument("--psql", metavar="CMD",
-                        help="pipe the import into this psql command instead of connecting with --dsn, e.g. "
-                             "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'")
-    parser.add_argument("--dry-run", action="store_true", help="parse and report, do not touch the database")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "parquet", type=Path, help="Parquet file from data.education.gouv.fr"
+    )
+    parser.add_argument(
+        "--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)"
+    )
+    parser.add_argument(
+        "--psql",
+        metavar="CMD",
+        help="pipe the import into this psql command instead of connecting with --dsn, e.g. "
+        "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="parse and report, do not touch the database",
+    )
     args = parser.parse_args()
 
     t0 = time.monotonic()
     rows, stats = extract(args.parquet)
-    print(f"{len(rows)} établissements to upsert; skipped: {stats['no_position']} without position, "
-          f"{stats['no_nature']} with unmapped nature, {stats['no_uai']} without UAI")
+    print(
+        f"{len(rows)} établissements to upsert; skipped: {stats['no_position']} without position, "
+        f"{stats['no_nature']} with unmapped nature, {stats['no_uai']} without UAI"
+    )
 
     if args.dry_run:
         for row in rows[:5]:
@@ -293,7 +372,9 @@ def main() -> None:
         inserted, updated = write_psql(args.psql, rows)
     else:
         inserted, updated = write_db(args.dsn or default_dsn(), rows)
-    print(f"Inserted {inserted}, updated {updated} rows in {time.monotonic() - t0:.1f}s")
+    print(
+        f"Inserted {inserted}, updated {updated} rows in {time.monotonic() - t0:.1f}s"
+    )
 
 
 if __name__ == "__main__":

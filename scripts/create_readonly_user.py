@@ -98,7 +98,11 @@ $do$""",
 
 def run_psql(cmd: str, sql: list[str]) -> None:
     """Run the statements in one transaction through the psql command `cmd`."""
-    script = "\\set ON_ERROR_STOP on\n\\set QUIET on\nBEGIN;\n" + "".join(s + ";\n" for s in sql) + "COMMIT;\n"
+    script = (
+        "\\set ON_ERROR_STOP on\n\\set QUIET on\nBEGIN;\n"
+        + "".join(s + ";\n" for s in sql)
+        + "COMMIT;\n"
+    )
     try:
         proc = subprocess.run(shlex.split(cmd), input=script, text=True)
     except OSError as e:
@@ -116,15 +120,29 @@ def run_db(dsn: str, sql: list[str]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("role", help="name of the read-only role")
-    parser.add_argument("--password", help="password of the role (default: random, printed)")
-    parser.add_argument("--schema", action="append", dest="schemas", metavar="SCHEMA",
-                        help="schema to grant read access to (repeatable, default: public)")
-    parser.add_argument("--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)")
-    parser.add_argument("--psql", metavar="CMD",
-                        help="run through this psql command instead of connecting with --dsn, e.g. "
-                             "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'")
+    parser.add_argument(
+        "--password", help="password of the role (default: random, printed)"
+    )
+    parser.add_argument(
+        "--schema",
+        action="append",
+        dest="schemas",
+        metavar="SCHEMA",
+        help="schema to grant read access to (repeatable, default: public)",
+    )
+    parser.add_argument(
+        "--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)"
+    )
+    parser.add_argument(
+        "--psql",
+        metavar="CMD",
+        help="run through this psql command instead of connecting with --dsn, e.g. "
+        "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'",
+    )
     args = parser.parse_args()
 
     password = args.password or secrets.token_urlsafe(24)

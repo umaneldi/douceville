@@ -72,15 +72,23 @@ def literal(s: str) -> str:
 
 def query_psql(cmd: str, sql: str) -> list[tuple]:
     """Run one statement through the psql command `cmd`; return its rows."""
-    script = ("\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n"
-              "\\pset fieldsep '\\t'\n\\pset null ''\n" + sql + ";\n")
+    script = (
+        "\\set ON_ERROR_STOP on\n\\set QUIET on\n\\pset tuples_only on\n\\pset format unaligned\n"
+        "\\pset fieldsep '\\t'\n\\pset null ''\n" + sql + ";\n"
+    )
     try:
-        proc = subprocess.run(shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE)
+        proc = subprocess.run(
+            shlex.split(cmd), input=script, text=True, stdout=subprocess.PIPE
+        )
     except OSError as e:
         sys.exit(f"--psql: cannot run {cmd!r}: {e}")
     if proc.returncode != 0:
         sys.exit(f"--psql: query failed (exit code {proc.returncode})")
-    return [tuple(f or None for f in line.split("\t")) for line in proc.stdout.splitlines() if line.strip()]
+    return [
+        tuple(f or None for f in line.split("\t"))
+        for line in proc.stdout.splitlines()
+        if line.strip()
+    ]
 
 
 def query_db(dsn: str, sql: str) -> list[tuple]:
@@ -99,20 +107,38 @@ def print_users(rows: list[tuple]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("email", nargs="?", help="e-mail of the user")
-    parser.add_argument("level", nargs="?", choices=LEVELS, help="new access level (default: show the current one)")
-    parser.add_argument("--list", action="store_true", help="list all users and their level")
-    parser.add_argument("--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)")
-    parser.add_argument("--psql", metavar="CMD",
-                        help="run through this psql command instead of connecting with --dsn, e.g. "
-                             "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'")
+    parser.add_argument(
+        "level",
+        nargs="?",
+        choices=LEVELS,
+        help="new access level (default: show the current one)",
+    )
+    parser.add_argument(
+        "--list", action="store_true", help="list all users and their level"
+    )
+    parser.add_argument(
+        "--dsn", help="PostgreSQL URL (default: built from POSTGRES_* / .env)"
+    )
+    parser.add_argument(
+        "--psql",
+        metavar="CMD",
+        help="run through this psql command instead of connecting with --dsn, e.g. "
+        "'docker exec -i douceville-geodb-1 psql -U douceville -d douceville'",
+    )
     args = parser.parse_args()
     if args.list == bool(args.email):
         parser.error("give either --list or an EMAIL")
 
     def query(sql: str) -> list[tuple]:
-        return query_psql(args.psql, sql) if args.psql else query_db(args.dsn or default_dsn(), sql)
+        return (
+            query_psql(args.psql, sql)
+            if args.psql
+            else query_db(args.dsn or default_dsn(), sql)
+        )
 
     if args.list:
         print_users(query(LIST))
