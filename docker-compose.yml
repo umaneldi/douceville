@@ -21,6 +21,7 @@ services:
     build: .
     ports:
       - 3566:3566
+    profiles: [app]
     restart: unless-stopped
     depends_on:
       geotestdb:
