@@ -28,6 +28,10 @@ the app's values (Maternelle, Elementaire, Collège, Lycée), are skipped.
 `secteur` is 'public', 'privé' (sous contrat) or 'hors contrat', the latter
 taken from `secteur_prive_libelle_type_contrat`.
 Positions are stored with SRID 0 (see schema.md).
+`code_commune` links to the `commune` table (load it first with
+scripts/import_communes_csv.py): arrondissement codes of Paris, Marseille and
+Lyon are mapped to their parent commune, and codes missing from `commune`
+(e.g. collectivités d'outre-mer) are stored as NULL.
 """
 
 from __future__ import annotations
@@ -51,7 +55,7 @@ PUBLIC, PRIVE, HORS_CONTRAT = "public", "privé", "hors contrat"
 COLUMNS = [
     "numero_uai", "appellation_officielle", "denomination_principale", "patronyme_uai",
     "secteur_public_prive_libe", "secteur_prive_libelle_type_contrat", "adresse_uai", "lieu_dit_uai", "code_postal_uai",
-    "libelle_commune", "latitude", "longitude", "coordonnee_x", "coordonnee_y", "epsg",
+    "libelle_commune", "code_commune", "latitude", "longitude", "coordonnee_x", "coordonnee_y", "epsg",
     "nature_uai", "code_departement", "libelle_academie", "date_ouverture",
 ]
 
@@ -87,6 +91,20 @@ def secteur(libe: str | None, contrat: str | None, denomination: str) -> str:
 def departement(code: str) -> str:
     """'051' -> '51', '02A' -> '2A', '971' -> '971' (same format as before)."""
     return code[1:] if len(code) == 3 and code.startswith("0") else code
+
+
+def code_commune(code: str | None) -> str | None:
+    """INSEE code; municipal arrondissements are mapped to their parent commune."""
+    code = (code or "").strip().upper() or None
+    if code is None:
+        return None
+    if "75101" <= code <= "75120":
+        return "75056"  # Paris
+    if "13201" <= code <= "13216":
+        return "13055"  # Marseille
+    if "69381" <= code <= "69389":
+        return "69123"  # Lyon
+    return code
 
 
 def finite(v) -> float | None:
@@ -131,7 +149,7 @@ def extract(path: Path):
 
         rows.append((
             uai, nom, r["adresse_uai"], r["lieu_dit_uai"],
-            r["code_postal_uai"] or "", r["libelle_commune"] or "",
+            r["code_postal_uai"] or "", r["libelle_commune"] or "", code_commune(r["code_commune"]),
             departement(r["code_departement"] or ""), r["libelle_academie"],
             secteur(r["secteur_public_prive_libe"], r["secteur_prive_libelle_type_contrat"], denomination), r["date_ouverture"], nature,
             lon, lat, x, y, s,
@@ -182,7 +200,7 @@ def default_dsn() -> str:
 
 CREATE_TMP = """
 CREATE TEMP TABLE tmp_etab (
-    uai TEXT, nom TEXT, adresse TEXT, lieu_dit TEXT, code_postal TEXT, commune TEXT,
+    uai TEXT, nom TEXT, adresse TEXT, lieu_dit TEXT, code_postal TEXT, commune TEXT, code_commune TEXT,
     departement TEXT, academie TEXT, secteur TEXT, ouverture DATE, nature TEXT,
     lon DOUBLE PRECISION, lat DOUBLE PRECISION,
     x DOUBLE PRECISION, y DOUBLE PRECISION, srid INTEGER
@@ -190,21 +208,23 @@ CREATE TEMP TABLE tmp_etab (
 """
 
 UPSERT = """
-INSERT INTO etablissement ("UAI", nom, adresse, lieu_dit, code_postal, commune, position,
+INSERT INTO etablissement ("UAI", nom, adresse, lieu_dit, code_postal, commune, code_commune, position,
                            departement, academie, secteur, ouverture, nature)
 SELECT uai, nom, adresse, lieu_dit, code_postal, commune,
+       (SELECT c.code_commune FROM commune c WHERE c.code_commune = t.code_commune),
        ST_SetSRID(
          CASE WHEN lon IS NOT NULL THEN ST_MakePoint(lon, lat)
               ELSE ST_Transform(ST_SetSRID(ST_MakePoint(x, y), srid), 4326) END,
          0),
        departement, academie, secteur, ouverture, nature
-FROM tmp_etab
+FROM tmp_etab t
 ON CONFLICT ("UAI") DO UPDATE SET
-    nom         = EXCLUDED.nom,
-    adresse     = EXCLUDED.adresse,
-    lieu_dit    = EXCLUDED.lieu_dit,
-    code_postal = EXCLUDED.code_postal,
-    commune     = EXCLUDED.commune,
+    nom          = EXCLUDED.nom,
+    adresse      = EXCLUDED.adresse,
+    lieu_dit     = EXCLUDED.lieu_dit,
+    code_postal  = EXCLUDED.code_postal,
+    commune      = EXCLUDED.commune,
+    code_commune = EXCLUDED.code_commune,
     position    = EXCLUDED.position,
     departement = EXCLUDED.departement,
     academie    = EXCLUDED.academie,

@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **cinq tables physiques** : `etablissement`, `resultat`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **six tables physiques** : `etablissement`, `resultat`, `commune`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go. La table `commune` est créée vide et chargée par `scripts/import_communes_csv.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -23,17 +23,24 @@ La base contient **cinq tables physiques** : `etablissement`, `resultat`, `utili
 │ lieu_dit                │    └────<│ etablissement_uai  FK    │
 │ code_postal             │          │ admis                    │
 │ commune                 │          │ mentions                 │
-│ position   (POINT)      │          └──────────────────────────┘
-│ departement             │          UNIQUE (diplome, annee,
-│ academie                │                  etablissement_uai)
-│ secteur                 │
-│ ouverture               │
-│ nature                  │
-└─────────────────────────┘
+│ code_commune  FK  ──────┼──┐       └──────────────────────────┘
+│ position   (POINT)      │  │
+│ departement             │  │       UNIQUE (diplome, annee,
+│ academie                │  │               etablissement_uai)
+│ secteur                 │  │
+│ ouverture               │  │       ┌──────────────────────────┐
+│ nature                  │  │       │         commune          │
+└─────────────────────────┘  │       ├──────────────────────────┤
+                             └──────>│ code_commune      PK     │
+                                     │ nom                      │
+                                     │ date_creation            │
+                                     └──────────────────────────┘
 
 Relation : etablissement (1) ──< (N) resultat
   - clé étrangère : resultat.etablissement_uai → etablissement.UAI
   - ON DELETE CASCADE (la suppression d'un établissement supprime ses résultats)
+Relation : commune (1) ──< (N) etablissement
+  - clé étrangère : etablissement.code_commune → commune.code_commune (NULL autorisé)
 ```
 
 ## Table `etablissement`
@@ -49,6 +56,7 @@ Relation : etablissement (1) ──< (N) resultat
 | `lieu_dit`    | `VARCHAR`             | NULL                            | Lieu-dit. |
 | `code_postal` | `VARCHAR`             | NOT NULL                        | Code postal. |
 | `commune`     | `VARCHAR`             | NOT NULL                        | Commune. |
+| `code_commune` | `TEXT`               | NULL, **FK** → `commune.code_commune` | Code INSEE de la commune (`migrations/006_etablissement_code_commune.sql`, indexé). Les arrondissements de Paris/Marseille/Lyon sont ramenés à la commune parente ; NULL si la commune est absente de `commune` (collectivités d'outre-mer). |
 | `position`    | `geometry(Point)` (SRID 0) | NOT NULL                   | Position géographique (PostGIS), SRID 0 pour rester cohérent avec les isochrones (`ST_GeomFromEWKT` sans SRID). Index GiST. Exposée en GeoJSON côté API via `ST_AsGeoJSON`. |
 | `departement` | `VARCHAR`             | NOT NULL                        | Code / nom du département. |
 | `academie`    | `VARCHAR`             | NULL                            | Académie de rattachement. |
@@ -56,7 +64,7 @@ Relation : etablissement (1) ──< (N) resultat
 | `ouverture`   | `TIMESTAMP`           | NULL                            | Date d'ouverture. |
 | `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement (ex. `lycée`, `collège`). |
 
-**Relations** : un établissement a plusieurs `resultat` (FK `resultat.etablissement_uai` → `etablissement.UAI`, suppression en cascade).
+**Relations** : un établissement a plusieurs `resultat` (FK `resultat.etablissement_uai` → `etablissement.UAI`, suppression en cascade) et appartient à une `commune` (FK `etablissement.code_commune` → `commune.code_commune`).
 
 ### Détails sur `position`
 La colonne est de type `geometry(Point)` (SRID 0). En lecture, l'API la renvoie en GeoJSON via `ST_AsGeoJSON(position)` (voir `etabColumns` dans `internal/store/queries.go`). Les données doivent être insérées en SRID 0 (ex. `ST_GeomFromText('POINT(1.4401531 43.6085909)')`) pour que `ST_Within` fonctionne avec les isochrones.
@@ -76,6 +84,16 @@ Résultat d'un examen pour un établissement et une année donnés. Créée par 
 | `etablissement_uai` | `VARCHAR`  | **FK** → `etablissement.UAI`, ON DELETE CASCADE | Établissement rattaché (par son code UAI). |
 
 **Contrainte d'unicité** : `UNIQUE (diplome, annee, etablissement_uai)` — un seul résultat par couple (diplôme, année) et par établissement.
+
+## Table `commune`
+
+Référentiel des communes actuelles (Code officiel géographique INSEE, fichier `v_commune_depuis_1943.csv`). Créée par `internal/store/migrations/005_commune.sql`, chargée par `scripts/import_communes_csv.py` : seules les lignes sans `DATE_FIN` et de type `COM` sont conservées (les arrondissements municipaux `ARM` sont exclus).
+
+| Colonne         | Type SQL | Contraintes | Description |
+|-----------------|----------|-------------|-------------|
+| `code_commune`  | `TEXT`   | **PK** (unique, NOT NULL) | Code INSEE de la commune (colonne `COM`, ex. `01001`, `2A004`) ; cible de la FK `etablissement.code_commune`. |
+| `nom`           | `TEXT`   | NOT NULL    | Nom en typographie riche (colonne `NCCENR`). |
+| `date_creation` | `DATE`   | NOT NULL    | Début de validité de la commune (colonne `DATE_DEBUT`). |
 
 ## Table `utilisateur`
 

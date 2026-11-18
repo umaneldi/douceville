@@ -15,6 +15,8 @@ https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-
 https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-pro_v2/
 https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-denseignement-professionnels/
 https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-valeur-ajoutee-colleges/
+https://www.data.gouv.fr/datasets/bases-statistiques-communale-departementale-et-regionale-de-la-delinquance-enregistree-par-la-police-et-la-gendarmerie-nationales?resource_id=604d71b8-337d-4869-9226-49e01bae87df
+https://www.data.gouv.fr/datasets/code-officiel-geographique-1?resource_id=eb836ef4-8be2-4a55-bfdb-eb1ad041933e
 
 ## Architecture
 
@@ -174,6 +176,12 @@ JWT_SECRET=dev-secret POSTGRES_HOST=localhost go run ./cmd/server
 > chargées dans les tables `etablissement`/`resultat` (il n'y a pas d'ETL dans ce
 > dépôt — voir plus haut). L'inscription, la connexion et l'interface fonctionnent
 > sans ces éléments.
+>
+> Le référentiel des communes (table `commune`) se charge depuis le fichier INSEE
+> `v_commune_depuis_1943.csv` :
+> `uv run scripts/import_communes_csv.py v_commune_depuis_1943.csv [--dsn URL | --psql CMD]`.
+> Chargez-le **avant** les établissements : `etablissement.code_commune` y fait
+> référence (les codes absents sont enregistrés à NULL).
 
 ## Développement
 

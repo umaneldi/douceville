@@ -10,6 +10,7 @@
 *.out
 coverage.*
 *.ttl
+*.csv
 
 # Data & generated artefacts (loaded/served at runtime, not versioned)
 data/
