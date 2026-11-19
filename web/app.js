@@ -10,7 +10,7 @@ const PENDING_MSG =
   "Votre compte est en attente de validation par un administrateur. " +
   "Vous pourrez vous connecter dès qu'il aura été approuvé.";
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
-let map, isoLayer, markerLayer;
+let map, isoLayer, markerLayer, communeLayer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
 
 const $ = (sel) => document.querySelector(sel);
@@ -181,8 +181,157 @@ function initMap() {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap",
   }).addTo(map);
+  // Choroplèthe dans un volet sous l'isochrone et les marqueurs.
+  map.createPane("communes").style.zIndex = 350;
+  communeLayer = L.geoJSON(null, {
+    pane: "communes",
+    style: communeStyle,
+    onEachFeature: (f, layer) => layer.bindTooltip(communeTooltip(f.properties), { sticky: true }),
+  }).addTo(map);
   isoLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
+  const layers = L.control.layers(null, { [securityLayerLabel()]: communeLayer }, { collapsed: false });
+  layers.addTo(map);
+  // L'icône d'info est dans le <label> de la case : son clic ne doit pas
+  // basculer la couche (le survol / focus affiche l'infobulle).
+  layers.getContainer().querySelector(".info-tip").addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  securityLegend().addTo(map);
+  map.on("overlayadd overlayremove", (e) => {
+    if (e.layer === communeLayer) $(".security-legend").hidden = e.type === "overlayremove";
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Choroplèthe « sécurité des communes » (score 0–100, 100 = plus sûre)
+// ---------------------------------------------------------------------------
+// Rampe séquentielle bleue, du clair (moins sûre) au foncé (plus sûre).
+const SECURITY_CLASSES = [
+  { min: 80, color: "#0d366b", label: "80–100 (plus sûre)" },
+  { min: 60, color: "#1c5cab", label: "60–79" },
+  { min: 40, color: "#3987e5", label: "40–59" },
+  { min: 20, color: "#86b6ef", label: "20–39" },
+  { min: 0, color: "#cde2fb", label: "0–19 (moins sûre)" },
+];
+const NO_DATA_COLOR = "#9a9a96";
+
+// Indicateurs SSMSI entrant dans le score, par poids. Doit rester aligné sur la
+// CTE `poids` de internal/store/migrations/009_securite_score.sql.
+const SECURITY_INDICATORS = [
+  {
+    poids: 3,
+    noms: [
+      "Violences physiques hors cadre familial",
+      "Violences physiques intrafamiliales",
+      "Violences sexuelles",
+      "Vols avec armes",
+      "Vols violents sans arme",
+      "Cambriolages de logement",
+    ],
+  },
+  {
+    poids: 2,
+    noms: [
+      "Destructions et dégradations volontaires",
+      "Vols de véhicule",
+      "Vols dans les véhicules",
+      "Vols d'accessoires sur véhicules",
+      "Vols sans violence contre des personnes",
+    ],
+  },
+  {
+    poids: 1,
+    noms: [
+      "Escroqueries et fraudes aux moyens de paiement",
+      "Trafic de stupéfiants",
+      "Usage de stupéfiants",
+      "Usage de stupéfiants (AFD)",
+    ],
+  },
+];
+
+// Libellé de la couche dans le contrôle : nom + icône d'info avec infobulle
+// listant les indicateurs pris en compte et leur poids.
+function securityLayerLabel() {
+  const groups = SECURITY_INDICATORS.map(
+    (g) =>
+      `<div class="tip-group"><div class="tip-weight">Poids ${g.poids}</div><ul>` +
+      g.noms.map((n) => `<li>${esc(n)}</li>`).join("") +
+      `</ul></div>`,
+  ).join("");
+  return (
+    `Sécurité des communes ` +
+    `<span class="info-tip" tabindex="0" role="button" aria-label="Indicateurs du score">i` +
+    `<span class="tip-body" role="tooltip">` +
+    `<strong>Indicateurs du score</strong>` +
+    `<p>Taux pour 1 000 habitants (SSMSI, dernière année), classés par rapport à ` +
+    `toutes les communes puis moyennés selon leur poids. Seuls les indicateurs ` +
+    `diffusés par la commune comptent.</p>${groups}</span></span>`
+  );
+}
+
+function securityColor(score) {
+  if (score == null) return NO_DATA_COLOR;
+  return SECURITY_CLASSES.find((c) => score >= c.min).color;
+}
+
+function communeStyle(feature) {
+  const score = feature.properties.score;
+  return {
+    color: "#ffffff",
+    weight: 1,
+    opacity: 0.9,
+    fillColor: securityColor(score),
+    fillOpacity: score == null ? 0.35 : 0.6,
+    dashArray: score == null ? "3 3" : null,
+  };
+}
+
+function communeTooltip(p) {
+  const nom = `<strong>${esc(p.nom)}</strong>`;
+  if (p.score == null) return `${nom}<br>Sécurité : pas de données diffusées`;
+  return (
+    `${nom}<br>Sécurité : <strong>${p.score}/100</strong>` +
+    `<br><span class="muted">plus sûre que ${p.score} % des communes` +
+    `<br>${p.annee}, ${p.nb_indicateurs}/15 indicateurs diffusés</span>`
+  );
+}
+
+function securityLegend() {
+  const legend = L.control({ position: "bottomright" });
+  legend.onAdd = () => {
+    const div = L.DomUtil.create("div", "security-legend");
+    const rows = SECURITY_CLASSES.map(
+      (c) => `<li><span class="swatch" style="background:${c.color}"></span>${c.label}</li>`,
+    ).join("");
+    div.innerHTML =
+      `<div class="legend-title">Score de sécurité</div><ul>${rows}` +
+      `<li><span class="swatch nodata"></span>Pas de données</li></ul>`;
+    div.hidden = true; // affichée dès qu'une recherche renvoie des communes
+    return div;
+  };
+  return legend;
+}
+
+function renderCommunes(communes) {
+  communeLayer.clearLayers();
+  const features = (communes || [])
+    .filter((c) => c.contour)
+    .map((c) => ({
+      type: "Feature",
+      geometry: c.contour,
+      properties: {
+        code_commune: c.code_commune,
+        nom: c.nom,
+        score: c.score,
+        annee: c.annee,
+        nb_indicateurs: c.nb_indicateurs,
+      },
+    }));
+  communeLayer.addData(features);
+  $(".security-legend").hidden = !features.length || !map.hasLayer(communeLayer);
 }
 
 $("#time").addEventListener("input", (e) => {
@@ -199,6 +348,7 @@ $("#logout").addEventListener("click", async () => {
   setToken(null);
   if (isoLayer) isoLayer.clearLayers();
   if (markerLayer) markerLayer.clearLayers();
+  if (communeLayer) renderCommunes([]);
   lastData = null;
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
@@ -243,19 +393,210 @@ $("#search-form").addEventListener("submit", async (e) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Autocomplétion de l'adresse de départ
+// ---------------------------------------------------------------------------
+(function setupAddressAutocomplete() {
+  const input = $("#address");
+  const list = $("#address-list");
+  const MIN_CHARS = 3;
+  const cache = new Map(); // requête (minuscules) → suggestions
+  let items = []; // suggestions affichées
+  let active = -1; // index de l'élément surligné
+  let typed = ""; // texte réellement saisi (sans la complétion en ligne)
+  let timer = null;
+  let reqSeq = 0; // pour ignorer les réponses obsolètes
+
+  function escapeHTML(str) {
+    return str.replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+
+  function close() {
+    list.hidden = true;
+    list.innerHTML = "";
+    items = [];
+    active = -1;
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+  }
+
+  function highlight(i) {
+    active = i;
+    list.querySelectorAll("li").forEach((li, idx) => {
+      li.classList.toggle("active", idx === i);
+      li.setAttribute("aria-selected", idx === i ? "true" : "false");
+    });
+    if (i >= 0) {
+      const li = list.children[i];
+      input.setAttribute("aria-activedescendant", li.id);
+      li.scrollIntoView({ block: "nearest" });
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  }
+
+  function pick(i) {
+    const s = items[i];
+    if (!s) return;
+    input.value = s.label;
+    typed = s.label;
+    close();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }
+
+  function show(suggestions) {
+    items = suggestions;
+    active = -1;
+    if (!items.length) {
+      close();
+      return;
+    }
+    const q = typed.trim().toLowerCase();
+    list.innerHTML = items
+      .map((s, i) => {
+        const label = s.label;
+        // Met en évidence le préfixe saisi lorsqu'il correspond.
+        const html = label.toLowerCase().startsWith(q)
+          ? "<mark>" + escapeHTML(label.slice(0, q.length)) + "</mark>" + escapeHTML(label.slice(q.length))
+          : escapeHTML(label);
+        return `<li id="address-opt-${i}" role="option" aria-selected="false">${html}</li>`;
+      })
+      .join("");
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+  }
+
+  // Complète en ligne avec la première suggestion si elle prolonge la saisie ;
+  // la partie ajoutée est sélectionnée pour être écrasée par la frappe suivante.
+  function inlineComplete() {
+    const first = items[0];
+    if (!first || !typed) return;
+    if (input.value !== typed || input.selectionEnd !== typed.length) return;
+    if (!first.label.toLowerCase().startsWith(typed.toLowerCase())) return;
+    if (first.label.length === typed.length) return;
+    input.value = typed + first.label.slice(typed.length);
+    input.setSelectionRange(typed.length, input.value.length);
+  }
+
+  async function fetchSuggestions(allowInline) {
+    const q = typed.trim();
+    if (q.length < MIN_CHARS) {
+      close();
+      return;
+    }
+    const key = q.toLowerCase();
+    const seq = ++reqSeq;
+    let suggestions = cache.get(key);
+    if (!suggestions) {
+      try {
+        suggestions = await api("/address/suggest?q=" + encodeURIComponent(q));
+        if (!Array.isArray(suggestions)) suggestions = [];
+        cache.set(key, suggestions);
+      } catch {
+        return; // l'autocomplétion est un confort : on ignore les erreurs
+      }
+    }
+    if (seq !== reqSeq || document.activeElement !== input) return;
+    show(suggestions);
+    if (allowInline) inlineComplete();
+  }
+
+  input.addEventListener("input", (e) => {
+    typed = input.value;
+    const isDelete = (e.inputType || "").startsWith("delete");
+    clearTimeout(timer);
+    timer = setTimeout(() => fetchSuggestions(!isDelete), 250);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    const open = !list.hidden && items.length > 0;
+    const hasInline =
+      input.selectionStart < input.value.length &&
+      input.selectionEnd === input.value.length &&
+      input.value !== typed;
+
+    switch (e.key) {
+      case "ArrowDown":
+        if (!open) return;
+        e.preventDefault();
+        highlight((active + 1) % items.length);
+        break;
+      case "ArrowUp":
+        if (!open) return;
+        e.preventDefault();
+        highlight(active <= 0 ? items.length - 1 : active - 1);
+        break;
+      case "Enter":
+        if (open && active >= 0) {
+          e.preventDefault();
+          pick(active);
+        } else {
+          close();
+        }
+        break;
+      case "Tab":
+        if (open && active >= 0) {
+          e.preventDefault();
+          pick(active);
+        } else if (hasInline) {
+          e.preventDefault();
+          typed = input.value;
+          const end = input.value.length;
+          input.setSelectionRange(end, end);
+          fetchSuggestions(false);
+        }
+        break;
+      case "ArrowRight":
+        if (hasInline) typed = input.value; // accepte la complétion en ligne
+        break;
+      case "Escape":
+        if (hasInline) {
+          e.preventDefault();
+          input.value = typed;
+        }
+        if (open) {
+          e.preventDefault();
+          close();
+        }
+        break;
+    }
+  });
+
+  // mousedown (et non click) pour passer avant le blur de l'input.
+  list.addEventListener("mousedown", (e) => {
+    const li = e.target.closest("li");
+    if (!li) return;
+    e.preventDefault();
+    pick(Array.prototype.indexOf.call(list.children, li));
+  });
+
+  input.addEventListener("blur", () => {
+    clearTimeout(timer);
+    reqSeq++;
+    close();
+  });
+
+  $("#search-form").addEventListener("submit", close);
+})();
+
 function render(data) {
   isoLayer.clearLayers();
   markerLayer.clearLayers();
+  renderCommunes(data.communes);
 
   // Isochrone : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
   const iso = data.isochrone;
   if (iso && Array.isArray(iso.geometry) && iso.geometry.length) {
     const ring = iso.geometry.map(([lon, lat]) => [lat, lon]);
+    // Contour sombre sans remplissage : lisible par-dessus la choroplèthe bleue.
     const poly = L.polygon(ring, {
-      color: "#38bdf8",
-      weight: 2,
-      fillColor: "#38bdf8",
-      fillOpacity: 0.12,
+      color: "#0f172a",
+      weight: 2.5,
+      fill: false,
+      interactive: false,
     });
     isoLayer.addLayer(poly);
     if (iso.lonlat) {

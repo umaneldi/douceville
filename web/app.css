@@ -135,6 +135,35 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
   overflow-y: auto;
 }
 
+/* ---------- Autocomplétion d'adresse ---------- */
+.ac-wrap { position: relative; }
+.ac-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.ac-list li {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ac-list li mark { background: none; color: var(--accent); font-weight: 600; }
+.ac-list li:hover, .ac-list li.active { background: rgba(56, 189, 248, 0.15); }
+
 .lbl { display: block; margin: 0.9rem 0 0.35rem; font-size: 0.85rem; color: var(--muted); }
 .lbl:first-child { margin-top: 0; }
 
@@ -207,6 +236,32 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
 /* Leaflet popups */
 .leaflet-popup-content { font-size: 0.85rem; }
+
+/* ---------- Choroplèthe sécurité ---------- */
+.leaflet-tooltip .muted { color: #57534e; font-size: 0.8em; }
+
+.security-legend {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.7rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+.security-legend .legend-title { font-weight: 600; margin-bottom: 0.25rem; }
+.security-legend ul { list-style: none; margin: 0; padding: 0; }
+.security-legend li { display: flex; align-items: center; gap: 0.45rem; }
+.security-legend .swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex: none;
+}
+.security-legend .swatch.nodata {
+  background: rgba(154, 154, 150, 0.5);
+  border: 1px dashed #e7e5e4;
+}
 .popup-title { font-weight: 700; margin-bottom: 0.2rem; }
 .popup-meta { color: #475569; margin-bottom: 0.4rem; }
 .popup-table { border-collapse: collapse; width: 100%; }
@@ -222,3 +277,44 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .layout { flex-direction: column; }
   .panel { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); max-height: 45%; }
 }
+
+/* Infobulle « indicateurs du score » dans le contrôle des couches */
+.info-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 0.25rem;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  font: italic 700 11px/1 Georgia, serif;
+  vertical-align: -2px;
+  cursor: help;
+}
+.info-tip .tip-body {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: -8px;
+  z-index: 1000;
+  width: 290px;
+  padding: 0.6rem 0.75rem;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  font: 400 0.75rem/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-style: normal;
+  white-space: normal;
+  cursor: default;
+}
+.info-tip:hover .tip-body,
+.info-tip:focus .tip-body,
+.info-tip:focus-within .tip-body { display: block; }
+.info-tip .tip-body p { margin: 0.3rem 0 0.4rem; color: var(--muted); }
+.info-tip .tip-weight { font-weight: 600; margin-top: 0.35rem; }
+.info-tip .tip-body ul { margin: 0.1rem 0 0; padding-left: 1rem; }

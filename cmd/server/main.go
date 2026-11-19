@@ -70,10 +70,12 @@ func main() {
 		slog.Warn("SMTP_HOST not set: verification e-mails will only be logged")
 	}
 
+	ban := geo.NewBANClient(cfg.ADDOKHost, nil)
 	handlers := &api.Handlers{
 		Store:     st,
 		Isochron:  geo.NewORSClient(cfg.OpenRouteServiceKey, nil),
-		Geocoder:  geo.NewBANClient(cfg.ADDOKHost, nil),
+		Geocoder:  ban,
+		Suggester: ban,
 		JWTSecret: cfg.JWTSecret,
 		Mailer:    mailer,
 		PublicURL: cfg.PublicURL,

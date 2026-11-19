@@ -29,7 +29,8 @@ new ones inserted. Rows are never deleted. Rows whose code is not in `commune`
 is already in the file) are skipped. With --start-year YEAR, only rows whose
 annee is >= YEAR are imported.
 The file has millions of rows: it is read, sent and upserted in batches, all
-in a single transaction (nothing is committed if the import fails).
+in a single transaction (nothing is committed if the import fails). The
+`securite_score` materialized view is refreshed at the end of the transaction.
 """
 
 from __future__ import annotations
@@ -170,6 +171,9 @@ SELECT (SELECT count(*) FROM tmp_securite),
 FROM r
 """
 
+# The commune security score (migration 009) is derived from securite.
+REFRESH = "REFRESH MATERIALIZED VIEW securite_score"
+
 CHECK = """
 DO $$ BEGIN
     IF to_regclass('securite') IS NULL THEN
@@ -200,6 +204,7 @@ def write_db(
             totals = [t + n for t, n in zip(totals, cur.fetchone())]
             cur.execute("TRUNCATE tmp_securite")
             bar.update(len(batch))
+        cur.execute(REFRESH)
     return tuple(totals)
 
 
@@ -249,7 +254,7 @@ def write_psql(
                 fail()
             totals = [t + int(n) for t, n in zip(totals, line.strip().split("|"))]
             bar.update(len(batch))
-        proc.stdin.write("COMMIT;\n")
+        proc.stdin.write(f"{REFRESH};\nCOMMIT;\n")
         proc.stdin.close()
     except BrokenPipeError:
         fail()

@@ -37,3 +37,7 @@ addok-data/
 .DS_Store
 __pycache__/
 .test_db/
+
+node_modules/
+package-lock.json
+package.json

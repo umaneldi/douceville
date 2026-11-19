@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 type mockStore struct {
 	etab      *models.Etablissement
 	zone      []models.Etablissement
+	communes  []models.CommuneSecurite
 	user      *models.DvUser
 	rec       *models.UserRecord
 	err       error
@@ -62,6 +64,10 @@ func (m mockStore) GetEtablissementByUAI(ctx context.Context, uai string) (*mode
 }
 func (m mockStore) FindEtablissementsInZone(ctx context.Context, wkt string, nature, secteur []string) ([]models.Etablissement, error) {
 	return m.zone, m.err
+}
+
+func (m mockStore) FindCommunesInZone(ctx context.Context, wkt string) ([]models.CommuneSecurite, error) {
+	return m.communes, m.err
 }
 
 type mockIso struct{ iso models.Isochrone }
@@ -118,8 +124,15 @@ func TestReadEtablissement_NotFound(t *testing.T) {
 }
 
 func TestEtablissementsInZone(t *testing.T) {
+	score := 42
 	h := &Handlers{
-		Store:    mockStore{zone: []models.Etablissement{{UAI: "A"}, {UAI: "B"}}},
+		Store: mockStore{
+			zone: []models.Etablissement{{UAI: "A"}, {UAI: "B"}},
+			communes: []models.CommuneSecurite{
+				{CodeCommune: "31555", Nom: "Toulouse", Score: &score, Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
+				{CodeCommune: "31069", Nom: "Blagnac"},
+			},
+		},
 		Isochron: mockIso{iso: models.Isochrone{Transp: "driving-car", Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
 		Geocoder: mockGeo{res: geo.BANResult{Longitude: 1.44, Latitude: 43.6}},
 	}
@@ -141,6 +154,34 @@ func TestEtablissementsInZone(t *testing.T) {
 	}
 	if got.Isochrone.Transp != "driving-car" {
 		t.Errorf("isochrone.transp = %q, want driving-car", got.Isochrone.Transp)
+	}
+	if len(got.Communes) != 2 {
+		t.Fatalf("got %d communes, want 2", len(got.Communes))
+	}
+	if c := got.Communes[0]; c.Score == nil || *c.Score != 42 || c.Nom != "Toulouse" {
+		t.Errorf("communes[0] = %+v, want Toulouse with score 42", c)
+	}
+	if got.Communes[1].Score != nil {
+		t.Errorf("communes[1].score = %v, want null", *got.Communes[1].Score)
+	}
+}
+
+// Sans commune dans la zone, le champ communes est un tableau vide (pas null).
+func TestEtablissementsInZone_NoCommunes(t *testing.T) {
+	h := &Handlers{
+		Store:    mockStore{},
+		Isochron: mockIso{iso: models.Isochrone{Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
+		Geocoder: mockGeo{},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(`{"adresse":"x","dist":600}`))
+	rr := httptest.NewRecorder()
+	h.etablissementsInZone(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"communes":[]`) {
+		t.Errorf("body = %s, want \"communes\":[]", rr.Body.String())
 	}
 }
 
@@ -177,5 +218,57 @@ func TestIsochrone_BadParams(t *testing.T) {
 
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422", rr.Code)
+	}
+}
+
+type mockSuggest struct {
+	res []geo.BANSuggestion
+	err error
+}
+
+func (m mockSuggest) Suggest(ctx context.Context, query string, limit int) ([]geo.BANSuggestion, error) {
+	return m.res, m.err
+}
+
+func TestAddressSuggest(t *testing.T) {
+	h := &Handlers{Suggester: mockSuggest{res: []geo.BANSuggestion{{Label: "12 Rue de la Paix 75002 Paris", Longitude: 2.33, Latitude: 48.87}}}}
+
+	req := httptest.NewRequest(http.MethodGet, "/address/suggest?q=12+rue+de+la+pa", nil)
+	rr := httptest.NewRecorder()
+	h.addressSuggest(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var got []geo.BANSuggestion
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 1 || got[0].Label != "12 Rue de la Paix 75002 Paris" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestAddressSuggest_ShortQuery(t *testing.T) {
+	h := &Handlers{Suggester: mockSuggest{err: errors.New("should not be called")}}
+
+	req := httptest.NewRequest(http.MethodGet, "/address/suggest?q=ab", nil)
+	rr := httptest.NewRecorder()
+	h.addressSuggest(rr, req)
+
+	if rr.Code != http.StatusOK || strings.TrimSpace(rr.Body.String()) != "[]" {
+		t.Fatalf("got %d %q, want 200 []", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAddressSuggest_UpstreamError(t *testing.T) {
+	h := &Handlers{Suggester: mockSuggest{err: errors.New("boom")}}
+
+	req := httptest.NewRequest(http.MethodGet, "/address/suggest?q=toulouse", nil)
+	rr := httptest.NewRecorder()
+	h.addressSuggest(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rr.Code)
 	}
 }

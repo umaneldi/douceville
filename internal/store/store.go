@@ -36,6 +36,10 @@ type Store interface {
 	// FindEtablissementsInZone renvoie les établissements contenus dans le polygone WKT,
 	// filtrés optionnellement par nature et secteur.
 	FindEtablissementsInZone(ctx context.Context, polygonWKT string, nature, secteur []string) ([]models.Etablissement, error)
+	// FindCommunesInZone renvoie les communes dont le contour intersecte le
+	// polygone WKT (coordonnées WGS84), avec leur score de sécurité de la
+	// dernière année disponible.
+	FindCommunesInZone(ctx context.Context, polygonWKT string) ([]models.CommuneSecurite, error)
 }
 
 // ErrEmailTaken est renvoyée par CreateUser quand l'email existe déjà.

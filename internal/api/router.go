@@ -35,6 +35,7 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 			protected.Get("/etablissement/{uai}", h.readEtablissement)
 			protected.Post("/etablissements", h.etablissementsInZone)
 			protected.Get("/isochrone", h.isochrone)
+			protected.Get("/address/suggest", h.addressSuggest)
 			protected.Get("/user", h.getUser)
 			protected.Post("/auth/logout", h.logout)
 		})

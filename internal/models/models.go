@@ -132,8 +132,21 @@ type QueryParameters struct {
 	Transp  string   `json:"transp"`
 }
 
+// CommuneSecurite est une commune touchée par l'isochrone, avec son score de
+// sécurité (vue securite_score) et son contour GeoJSON (MultiPolygon, WGS84).
+// Annee, Score et NbIndicateurs sont nuls si aucun indicateur n'est diffusé.
+type CommuneSecurite struct {
+	CodeCommune   string          `json:"code_commune"`
+	Nom           string          `json:"nom"`
+	Annee         *int            `json:"annee"`
+	Score         *int            `json:"score"`
+	NbIndicateurs *int            `json:"nb_indicateurs"`
+	Contour       json.RawMessage `json:"contour"`
+}
+
 // ListeEtablissementsAvecIsochrone est la réponse de POST /etablissements.
 type ListeEtablissementsAvecIsochrone struct {
-	Etablissements []Etablissement `json:"etablissements"`
-	Isochrone      Isochrone       `json:"isochrone"`
+	Etablissements []Etablissement   `json:"etablissements"`
+	Isochrone      Isochrone         `json:"isochrone"`
+	Communes       []CommuneSecurite `json:"communes"`
 }

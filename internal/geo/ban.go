@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -40,6 +41,9 @@ func NewBANClient(host string, httpClient *http.Client) *BANClient {
 
 type banResponse struct {
 	Features []struct {
+		Properties struct {
+			Label string `json:"label"`
+		} `json:"properties"`
 		Geometry struct {
 			Coordinates [2]float64 `json:"coordinates"`
 		} `json:"geometry"`
@@ -48,25 +52,8 @@ type banResponse struct {
 
 // Geocode résout une adresse libre en coordonnées [lon, lat].
 func (c *BANClient) Geocode(ctx context.Context, query string) (BANResult, error) {
-	endpoint := fmt.Sprintf("%s/search?q=%s&limit=1", c.baseURL, url.QueryEscape(query))
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	parsed, err := c.search(ctx, query, 1, false)
 	if err != nil {
-		return BANResult{}, err
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return BANResult{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return BANResult{}, fmt.Errorf("addok returned status %d", resp.StatusCode)
-	}
-
-	var parsed banResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return BANResult{}, err
 	}
 	if len(parsed.Features) == 0 {
@@ -75,4 +62,60 @@ func (c *BANClient) Geocode(ctx context.Context, query string) (BANResult, error
 
 	coords := parsed.Features[0].Geometry.Coordinates
 	return BANResult{Longitude: coords[0], Latitude: coords[1]}, nil
+}
+
+// BANSuggestion est une proposition d'adresse pour l'autocomplétion.
+type BANSuggestion struct {
+	Label     string  `json:"label"`
+	Longitude float64 `json:"lon"`
+	Latitude  float64 `json:"lat"`
+}
+
+// Suggest renvoie jusqu'à limit adresses correspondant au début de saisie query
+// (mode autocomplete d'addok).
+func (c *BANClient) Suggest(ctx context.Context, query string, limit int) ([]BANSuggestion, error) {
+	parsed, err := c.search(ctx, query, limit, true)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BANSuggestion, 0, len(parsed.Features))
+	for _, f := range parsed.Features {
+		out = append(out, BANSuggestion{
+			Label:     f.Properties.Label,
+			Longitude: f.Geometry.Coordinates[0],
+			Latitude:  f.Geometry.Coordinates[1],
+		})
+	}
+	return out, nil
+}
+
+func (c *BANClient) search(ctx context.Context, query string, limit int, autocomplete bool) (banResponse, error) {
+	params := url.Values{}
+	params.Set("q", query)
+	params.Set("limit", strconv.Itoa(limit))
+	if autocomplete {
+		params.Set("autocomplete", "1")
+	}
+	endpoint := c.baseURL + "/search?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return banResponse{}, err
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return banResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return banResponse{}, fmt.Errorf("addok returned status %d", resp.StatusCode)
+	}
+
+	var parsed banResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return banResponse{}, err
+	}
+	return parsed, nil
 }

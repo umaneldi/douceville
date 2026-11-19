@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/umaneldi/douceville/internal/auth"
@@ -24,11 +25,18 @@ type Geocoder interface {
 	Geocode(ctx context.Context, query string) (geo.BANResult, error)
 }
 
+// AddressSuggester propose des adresses à partir d'une saisie partielle
+// (implémenté par geo.BANClient).
+type AddressSuggester interface {
+	Suggest(ctx context.Context, query string, limit int) ([]geo.BANSuggestion, error)
+}
+
 // Handlers porte les dépendances des endpoints.
 type Handlers struct {
 	Store     store.Store
 	Isochron  Isochroner
 	Geocoder  Geocoder
+	Suggester AddressSuggester
 	JWTSecret string
 	// Mailer envoie les e-mails de vérification.
 	Mailer mail.Sender
@@ -96,6 +104,16 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	communes, err := h.Store.FindCommunesInZone(r.Context(), geo.PolygonWKT(iso))
+	if err != nil {
+		log.Error("communes zone search failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if communes == nil {
+		communes = []models.CommuneSecurite{}
+	}
+
 	log.Info("etablissements searched in zone",
 		"adresse", body.Adresse,
 		"dist", body.Dist,
@@ -103,11 +121,13 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		"nature", body.Nature,
 		"secteur", body.Secteur,
 		"count", len(etabs),
+		"count_communes", len(communes),
 	)
 
 	writeJSON(w, http.StatusOK, models.ListeEtablissementsAvecIsochrone{
 		Etablissements: etabs,
 		Isochrone:      iso,
+		Communes:       communes,
 	})
 }
 
@@ -146,4 +166,24 @@ func (h *Handlers) getUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
+}
+
+// addressSuggest gère GET /address/suggest?q=… (autocomplétion d'adresse).
+func (h *Handlers) addressSuggest(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(q)) < 3 || h.Suggester == nil {
+		writeJSON(w, http.StatusOK, []geo.BANSuggestion{})
+		return
+	}
+
+	suggestions, err := h.Suggester.Suggest(r.Context(), q, 5)
+	if err != nil {
+		logger(r.Context()).Error("address suggest failed", "q", q, "error", err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if suggestions == nil {
+		suggestions = []geo.BANSuggestion{}
+	}
+	writeJSON(w, http.StatusOK, suggestions)
 }

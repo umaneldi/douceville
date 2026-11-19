@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **sept tables physiques** : `etablissement`, `resultat`, `commune`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **sept tables physiques** : `etablissement`, `resultat`, `commune`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -96,6 +96,7 @@ Référentiel des communes actuelles (Code officiel géographique INSEE, fichier
 | `code_commune`  | `TEXT`   | **PK** (unique, NOT NULL) | Code INSEE de la commune (colonne `COM`, ex. `01001`, `2A004`) ; cible des FK `etablissement.code_commune` et `securite.code_commune`. |
 | `nom`           | `TEXT`   | NOT NULL    | Nom en typographie riche (colonne `NCCENR`). |
 | `date_creation` | `DATE`   | NOT NULL    | Début de validité de la commune (colonne `DATE_DEBUT`). |
+| `contour`       | `geometry(MultiPolygon, 4326)` | NULL | Contour de la commune (WGS84), ajouté par `migrations/008_commune_contour.sql` et chargé par `scripts/import_contours_communes.py` depuis les « contours administratifs » Etalab (`communes-50m.geojson.gz`, même millésime COG). Index GIST `commune_contour_gist`. Sert à trouver les communes touchées par une isochrone (`ST_Intersects`). |
 
 ## Table `securite`
 
@@ -112,6 +113,26 @@ Délinquance enregistrée par la police et la gendarmerie, par commune, année e
 | `est_diffuse`     | `BOOLEAN`          | NOT NULL    | `true` si la donnée est diffusée (`diff`), `false` sinon (`ndiff`, secret statistique). |
 
 **Clé primaire** : `(code_commune, annee, indicateur)` — elle sert aussi d'index pour la FK.
+
+## Vue matérialisée `securite_score`
+
+Score de sécurité par commune et par année, de 0 (moins sûre) à 100 (plus sûre). Créée par `internal/store/migrations/009_securite_score.sql` ; **rafraîchie** (`REFRESH MATERIALIZED VIEW securite_score`) à la fin de `scripts/import_securite_parquet.py`.
+
+Calcul :
+1. pour chaque (année, indicateur), rang centile du `taux_pour_mille` de la commune parmi les communes ayant **diffusé** cet indicateur ; les ex aequo (très nombreux à 0) reçoivent le rang moyen `(percent_rank + cume_dist) / 2` ;
+2. indice composite = moyenne pondérée des rangs sur les seuls indicateurs diffusés (poids 3 : violences physiques et sexuelles, vols avec armes, vols violents sans arme, cambriolages ; poids 2 : destructions et dégradations, vols liés aux véhicules, vols sans violence ; poids 1 : escroqueries, stupéfiants) ;
+3. score = rang centile inversé de l'indice parmi toutes les communes de l'année × 100 : un score de 70 signifie « plus sûre que 70 % des communes ».
+
+Une commune sans aucun indicateur diffusé est absente de la vue (score inconnu, affiché en gris).
+
+| Colonne          | Type SQL  | Description |
+|------------------|-----------|-------------|
+| `code_commune`   | `TEXT`    | Code INSEE de la commune. |
+| `annee`          | `INTEGER` | Année des faits. |
+| `score`          | `INTEGER` | Score 0–100 (100 = plus sûre). |
+| `nb_indicateurs` | `INTEGER` | Nombre d'indicateurs diffusés pris en compte (sur 15). |
+
+**Index unique** : `(code_commune, annee)`.
 
 ## Table `utilisateur`
 
@@ -164,6 +185,7 @@ Structures Go d'échange API (`internal/models/models.go`), sans table associée
 - `Credentials`, `AuthResponse` — corps des requêtes `/api/auth/*` et réponse `{token, user}`.
 - `Etablissement`, `Resultat` — projections lues depuis la base.
 - `Isochrone` — zone d'accessibilité (géométrie `POLYGON`) calculée à la volée, non stockée.
+- `CommuneSecurite` — commune touchée par l'isochrone : code, nom, `score` / `annee` / `nb_indicateurs` (dernière année de `securite_score`, `null` sans données) et `contour` GeoJSON ; renvoyée dans le champ `communes` de `POST /api/etablissements`.
 - `ListeEtablissementsAvecIsochrone`, `QueryParameters` — réponse/requête de `POST /api/etablissements`.
 
 ## Références dans le code

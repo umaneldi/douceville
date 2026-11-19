@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -231,6 +232,38 @@ func (s *PgStore) FindEtablissementsInZone(ctx context.Context, polygonWKT strin
 	}
 
 	return etabs, nil
+}
+
+// FindCommunesInZone implémente Store.FindCommunesInZone. Le WKT de
+// l'isochrone n'a pas de SRID : il est fixé à 4326 pour correspondre à
+// commune.contour.
+func (s *PgStore) FindCommunesInZone(ctx context.Context, polygonWKT string) ([]models.CommuneSecurite, error) {
+	const q = `SELECT c.code_commune, c.nom, s.annee, s.score, s.nb_indicateurs,
+			ST_AsGeoJSON(c.contour, 5)
+		FROM commune c
+		LEFT JOIN securite_score s ON s.code_commune = c.code_commune
+			AND s.annee = (SELECT max(annee) FROM securite_score)
+		WHERE c.contour IS NOT NULL
+			AND ST_Intersects(c.contour, ST_SetSRID(ST_GeomFromText($1), 4326))
+		ORDER BY c.code_commune`
+
+	rows, err := s.pool.Query(ctx, q, polygonWKT)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	communes := []models.CommuneSecurite{}
+	for rows.Next() {
+		var c models.CommuneSecurite
+		var contour string
+		if err := rows.Scan(&c.CodeCommune, &c.Nom, &c.Annee, &c.Score, &c.NbIndicateurs, &contour); err != nil {
+			return nil, err
+		}
+		c.Contour = json.RawMessage(contour)
+		communes = append(communes, c)
+	}
+	return communes, rows.Err()
 }
 
 func (s *PgStore) resultatsForUAI(ctx context.Context, uai string) ([]models.Resultat, error) {

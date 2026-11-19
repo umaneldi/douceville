@@ -17,6 +17,7 @@ https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-
 https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-valeur-ajoutee-colleges/
 https://www.data.gouv.fr/datasets/bases-statistiques-communale-departementale-et-regionale-de-la-delinquance-enregistree-par-la-police-et-la-gendarmerie-nationales?resource_id=604d71b8-337d-4869-9226-49e01bae87df
 https://www.data.gouv.fr/datasets/code-officiel-geographique-1?resource_id=eb836ef4-8be2-4a55-bfdb-eb1ad041933e
+https://etalab-datasets.geo.data.gouv.fr/contours-administratifs/2026/geojson/communes-50m.geojson.gz
 
 ## Architecture
 
@@ -186,6 +187,12 @@ JWT_SECRET=dev-secret POSTGRES_HOST=localhost go run ./cmd/server
 > Les données de délinquance par commune (table `securite`) se chargent ensuite
 > depuis le Parquet communal du SSMSI (data.gouv.fr) :
 > `uv run scripts/import_securite_parquet.py donnee-comm-data.gouv-parquet-….parquet [--dsn URL | --psql CMD]`.
+>
+> Les contours des communes (colonne `commune.contour`, pour la carte de sécurité)
+> se chargent depuis les contours administratifs Etalab (même millésime COG) :
+> `uv run scripts/import_contours_communes.py communes-50m.geojson.gz [--dsn URL | --psql CMD]`.
+> Le score de sécurité (vue matérialisée `securite_score`) est recalculé à la fin
+> de l'import `securite`.
 > `import.sh` enchaîne tous les imports dans le bon ordre.
 
 ## Développement

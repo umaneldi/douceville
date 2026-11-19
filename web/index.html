@@ -60,7 +60,12 @@
       <aside class="panel">
         <form id="search-form">
           <label class="lbl" for="address">Adresse de départ</label>
-          <input id="address" type="text" placeholder="12 rue de la Paix, Paris" required />
+          <div class="ac-wrap">
+            <input id="address" type="text" placeholder="12 rue de la Paix, Paris" required
+              autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="both"
+              aria-controls="address-list" aria-expanded="false" />
+            <ul id="address-list" class="ac-list" role="listbox" hidden></ul>
+          </div>
 
           <label class="lbl" for="time">Temps de trajet : <strong id="time-val">15</strong> min</label>
           <input id="time" type="range" min="5" max="60" step="5" value="15" />
