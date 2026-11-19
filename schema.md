@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **huit tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **neuf tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `immobilier`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py` ; la table `immobilier` (ventes DVF géolocalisées, rattachées à un IRIS) est chargée par `scripts/import_immobilier_dvf.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -46,6 +46,18 @@ La base contient **huit tables physiques** : `etablissement`, `resultat`, `commu
                                      │ type_iris                │
                                      │ contour (MULTIPOLYGON)   │
                                      └──────────────────────────┘
+                                                  ^
+                                     ┌────────────┼─────────────┐
+                                     │        immobilier        │
+                                     ├──────────────────────────┤
+                                     │ iris              FK     │
+                                     │ date_mutation            │
+                                     │ nature_mutation          │
+                                     │ valeur_fonciere          │
+                                     │ id_parcelle              │
+                                     │ surface_terrain          │
+                                     │ surface_reelle_bati      │
+                                     └──────────────────────────┘
 
 Relation : etablissement (1) ──< (N) resultat
   - clé étrangère : resultat.etablissement_uai → etablissement.UAI
@@ -56,6 +68,8 @@ Relation : commune (1) ──< (N) securite
   - clé étrangère : securite.code_commune → commune.code_commune
 Relation : commune (1) ──< (N) quartier
   - clé étrangère : quartier.code_commune → commune.code_commune
+Relation : quartier (1) ──< (N) immobilier
+  - clé étrangère : immobilier.iris → quartier.iris
 ```
 
 ## Table `etablissement`
@@ -122,6 +136,26 @@ Quartiers IRIS (« Ilots Regroupés pour l'Information Statistique », IGN « co
 | `nom_iris`     | `TEXT`                         | NOT NULL    | Nom de l'IRIS. |
 | `type_iris`    | `TEXT`                         | NOT NULL    | Type d'IRIS : `H` habitat, `A` activité, `D` divers, `Z` commune non découpée. |
 | `contour`      | `geometry(MultiPolygon, 4326)` | NOT NULL    | Contour de l'IRIS (WGS84). Index GIST `quartier_contour_gist`. |
+
+## Table `immobilier`
+
+Ventes immobilières DVF (fichier CSV gzippé « demandes de valeurs foncières géolocalisées » de data.gouv.fr), une ligne par vente d'un seul bien bâti. Créée par `internal/store/migrations/011_immobilier.sql` (qui supprime l'ancienne version de la table, prix au m² agrégés par IRIS, si elle existe encore), chargée par `scripts/import_immobilier_dvf.py`.
+
+Filtres à l'import : `nature_mutation = 'Vente'`, `surface_reelle_bati > 0`, `valeur_fonciere`, `longitude` et `latitude` renseignées. Une vente (`id_mutation`) comportant plusieurs lignes bâties est ignorée en entier, car chaque ligne y répète le prix total de la vente (les dépendances, de surface bâtie nulle, sont déjà écartées). Le quartier est celui dont `quartier.contour` contient le point (`longitude`, `latitude`) ; les ventes hors de tout quartier sont ignorées. L'import remplace toute la table (option `--start-year YEAR` : seules les ventes datées de `YEAR` ou après sont lues et remplacées), en une seule transaction.
+
+| Colonne               | Type SQL         | Contraintes | Description |
+|-----------------------|------------------|-------------|-------------|
+| `iris`                | `TEXT`           | NOT NULL, **FK** → `quartier.iris` | Quartier IRIS contenant le point géolocalisé de la vente. |
+| `date_mutation`       | `DATE`           | NOT NULL    | Date de la vente. |
+| `nature_mutation`     | `TEXT`           | NOT NULL    | Toujours `Vente` (filtré à l'import). |
+| `valeur_fonciere`     | `NUMERIC(15,2)`  | NOT NULL    | Prix de vente (€). |
+| `id_parcelle`         | `TEXT`           | NOT NULL    | Identifiant cadastral de la parcelle (14 caractères). |
+| `surface_terrain`     | `INTEGER`        | NULL        | Surface du terrain (m²), NULL si absente. |
+| `surface_reelle_bati` | `INTEGER`        | NOT NULL    | Surface réelle bâtie (m²), > 0. |
+
+**Index** : `immobilier_iris_date_idx (iris, date_mutation)` — sert aussi d'index pour la FK. Pas de clé primaire (la source n'en fournit pas une fois `id_mutation` écarté).
+
+L'API (`FindImmobilierInZone`) calcule le prix au m² médian (`valeur_fonciere / surface_reelle_bati`) par IRIS et par commune sur toutes les ventes de la table.
 
 ## Table `securite`
 

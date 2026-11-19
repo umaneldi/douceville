@@ -10,7 +10,7 @@ const PENDING_MSG =
   "Votre compte est en attente de validation par un administrateur. " +
   "Vous pourrez vous connecter dès qu'il aura été approuvé.";
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
-let map, isoLayer, markerLayer, communeLayer;
+let map, isoLayer, markerLayer, communeLayer, immoLayer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
 
 const $ = (sel) => document.querySelector(sel);
@@ -188,19 +188,50 @@ function initMap() {
     style: communeStyle,
     onEachFeature: (f, layer) => layer.bindTooltip(communeTooltip(f.properties), { sticky: true }),
   }).addTo(map);
+  // Prix au m² : même niveau que la sécurité (les deux sont exclusives).
+  map.createPane("immobilier").style.zIndex = 345;
+  immoLayer = L.geoJSON(null, {
+    pane: "immobilier",
+    style: immoStyle,
+    onEachFeature: (f, layer) => layer.bindTooltip(immoTooltip(f.properties), { sticky: true }),
+  }); // désactivée par défaut
   isoLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
-  const layers = L.control.layers(null, { [securityLayerLabel()]: communeLayer }, { collapsed: false });
+  const layers = L.control.layers(
+    null,
+    { [securityLayerLabel()]: communeLayer, [immoLayerLabel()]: immoLayer },
+    { collapsed: false },
+  );
   layers.addTo(map);
   // L'icône d'info est dans le <label> de la case : son clic ne doit pas
   // basculer la couche (le survol / focus affiche l'infobulle).
-  layers.getContainer().querySelector(".info-tip").addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  });
+  layers.getContainer().querySelectorAll(".info-tip").forEach((tip) =>
+    tip.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }),
+  );
   securityLegend().addTo(map);
+  immoLegend().addTo(map);
   map.on("overlayadd overlayremove", (e) => {
-    if (e.layer === communeLayer) $(".security-legend").hidden = e.type === "overlayremove";
+    const added = e.type === "overlayadd";
+    if (e.layer === communeLayer) $(".security-legend").hidden = !added;
+    if (e.layer === immoLayer) {
+      if (added) restyleImmobilier();
+      else $(".immo-legend").hidden = true;
+    }
+    // Les deux choroplèthes se superposent mal : en activer une masque l'autre.
+    // Différé : pendant le clic, le contrôle des couches ne se met pas à jour.
+    const other = e.layer === communeLayer ? immoLayer : e.layer === immoLayer ? communeLayer : null;
+    if (added && other) setTimeout(() => map.removeLayer(other), 0);
+  });
+  // Niveau de détail : communes de loin, quartiers IRIS de près.
+  map.on("zoomend", () => {
+    if (immoData && immoLevelForZoom() !== immoLevel) buildImmobilier();
+  });
+  // Échelle dynamique : recalculée sur la zone visible.
+  map.on("moveend", () => {
+    if (immoData && map.hasLayer(immoLayer)) restyleImmobilier();
   });
 }
 
@@ -302,7 +333,7 @@ function communeTooltip(p) {
 function securityLegend() {
   const legend = L.control({ position: "bottomright" });
   legend.onAdd = () => {
-    const div = L.DomUtil.create("div", "security-legend");
+    const div = L.DomUtil.create("div", "map-legend security-legend");
     const rows = SECURITY_CLASSES.map(
       (c) => `<li><span class="swatch" style="background:${c.color}"></span>${c.label}</li>`,
     ).join("");
@@ -334,6 +365,207 @@ function renderCommunes(communes) {
   $(".security-legend").hidden = !features.length || !map.hasLayer(communeLayer);
 }
 
+// ---------------------------------------------------------------------------
+// Choroplèthe « prix au m² » (DVF, dernier millésime)
+// ---------------------------------------------------------------------------
+// En dessous de ce zoom, les prix sont agrégés par commune ; au-delà, détail
+// par quartier IRIS.
+const IRIS_MIN_ZOOM = 12;
+// Rampe séquentielle orange/brun, du moins cher (clair) au plus cher (foncé).
+const IMMO_COLORS = ["#fdeed4", "#f9c98b", "#ee9a4a", "#c8651b", "#7f3b08"];
+let immoData = null; // data.immobilier de la dernière recherche
+let immoCommunes = []; // data.communes (noms et contours des communes)
+let immoLevel = null; // "commune" | "iris" (niveau actuellement affiché)
+let immoScale = null; // { breaks, colors, min, max } de l'échelle courante
+
+const fmtPrix = (n) => `${n.toLocaleString("fr-FR")} €/m²`;
+
+function immoLayerLabel() {
+  return (
+    `Prix au m² ` +
+    `<span class="info-tip" tabindex="0" role="button" aria-label="Source des prix">i` +
+    `<span class="tip-body" role="tooltip">` +
+    `<strong>Prix au m² des biens bâtis</strong>` +
+    `<p>Ventes DVF géolocalisées (data.gouv.fr) d'un seul bien bâti : prix médian ` +
+    `de la valeur foncière rapportée à la surface bâtie, tous types de biens ` +
+    `confondus.</p>` +
+    `<p>De loin, chaque commune affiche la médiane de toutes ses ventes ; zoomez ` +
+    `pour le détail par quartier IRIS.</p>` +
+    `<p>Les couleurs sont réparties en quantiles des prix de la zone visible.</p>` +
+    `</span></span>`
+  );
+}
+
+function immoLevelForZoom() {
+  return map.getZoom() >= IRIS_MIN_ZOOM ? "iris" : "commune";
+}
+
+// Prix au m² médian d'une entité, ou null sans vente.
+function prixFor(p) {
+  return p.prix ? p.prix.prix_m2 : null;
+}
+
+// Quantiles (au plus 5 classes, bornes arrondies à 100 €) des prix des entités
+// visibles, ou de toutes si aucune n'est visible.
+function computeImmoScale() {
+  const view = map.getBounds();
+  const all = [];
+  let visible = [];
+  immoLayer.eachLayer((l) => {
+    const v = prixFor(l.feature.properties);
+    if (v == null) return;
+    all.push(v);
+    if (view.intersects(l.getBounds())) visible.push(v);
+  });
+  const vals = (visible.length ? visible : all).sort((a, b) => a - b);
+  if (!vals.length) return null;
+  const n = IMMO_COLORS.length;
+  const breaks = [];
+  for (let i = 1; i < n; i++) {
+    const b = Math.round(vals[Math.floor((i * vals.length) / n)] / 100) * 100;
+    if (b > vals[0] && b <= vals[vals.length - 1] && b > (breaks[breaks.length - 1] ?? -Infinity)) {
+      breaks.push(b);
+    }
+  }
+  // Couleurs réparties sur toute la rampe quel que soit le nombre de classes.
+  const k = breaks.length + 1;
+  const colors = Array.from({ length: k }, (_, i) =>
+    IMMO_COLORS[k === 1 ? Math.floor(n / 2) : Math.round((i * (n - 1)) / (k - 1))],
+  );
+  return { breaks, colors, min: vals[0], max: vals[vals.length - 1] };
+}
+
+function immoColor(v) {
+  if (v == null || !immoScale) return NO_DATA_COLOR;
+  return immoScale.colors[immoScale.breaks.filter((b) => v >= b).length];
+}
+
+function immoStyle(feature) {
+  const v = prixFor(feature.properties);
+  return {
+    color: "#ffffff",
+    weight: feature.properties.niveau === "iris" ? 0.6 : 1,
+    opacity: 0.9,
+    fillColor: immoColor(v),
+    fillOpacity: v == null ? 0.35 : 0.65,
+    dashArray: v == null ? "3 3" : null,
+  };
+}
+
+function prixLine(p) {
+  if (!p) return `Prix médian : <span class="muted">pas de vente</span>`;
+  const ventes = `${p.ventes.toLocaleString("fr-FR")} vente${p.ventes > 1 ? "s" : ""}`;
+  return `Prix médian : <strong>${fmtPrix(p.prix_m2)}</strong> <span class="muted">(${ventes})</span>`;
+}
+
+function immoTooltip(p) {
+  const commune = p.niveau === "commune";
+  const sub = commune ? "" : `<br><span class="muted">Quartier IRIS — ${esc(p.commune || "")}</span>`;
+  return (
+    `<strong>${esc(p.nom)}</strong>${sub}` +
+    `<br>${prixLine(p.prix)}`
+  );
+}
+
+function immoLegend() {
+  const legend = L.control({ position: "bottomright" });
+  legend.onAdd = () => {
+    const div = L.DomUtil.create("div", "map-legend immo-legend");
+    div.innerHTML = `<div class="legend-title"></div><ul></ul><div class="legend-hint"></div>`;
+    L.DomEvent.disableClickPropagation(div);
+    L.DomEvent.disableScrollPropagation(div);
+    div.hidden = true;
+    return div;
+  };
+  return legend;
+}
+
+function updateImmoLegend() {
+  const div = $(".immo-legend");
+  const hasData = immoLayer.getLayers().length > 0;
+  div.hidden = !hasData || !map.hasLayer(immoLayer);
+  if (div.hidden) return;
+  const y0 = immoData.date_min ? immoData.date_min.slice(0, 4) : "";
+  const y1 = immoData.date_max ? immoData.date_max.slice(0, 4) : "";
+  const periode = y0 ? ` (${y0 === y1 ? y0 : `${y0}–${y1}`})` : "";
+  div.querySelector(".legend-title").textContent = `Prix au m²${periode}`;
+  const rows = [];
+  if (immoScale) {
+    const { breaks, colors, min, max } = immoScale;
+    if (!breaks.length) {
+      rows.push([colors[0], min === max ? fmtPrix(min) : `${min.toLocaleString("fr-FR")} – ${fmtPrix(max)}`]);
+    } else {
+      breaks.forEach((b, i) => {
+        const label = i === 0 ? `< ${fmtPrix(b)}` : `${breaks[i - 1].toLocaleString("fr-FR")} – ${fmtPrix(b)}`;
+        rows.push([colors[i], label]);
+      });
+      rows.push([colors[breaks.length], `≥ ${fmtPrix(breaks[breaks.length - 1])}`]);
+    }
+  }
+  // Du plus cher (en haut) au moins cher, comme la légende sécurité.
+  div.querySelector("ul").innerHTML =
+    rows
+      .reverse()
+      .map(([c, l]) => `<li><span class="swatch" style="background:${c}"></span>${l}</li>`)
+      .join("") + `<li><span class="swatch nodata"></span>Pas de données</li>`;
+  div.querySelector(".legend-hint").textContent =
+    immoLevel === "iris"
+      ? "Niveau : quartiers IRIS — dézoomez pour la médiane par commune"
+      : "Niveau : communes — zoomez pour le détail par quartier";
+}
+
+// Recalcule l'échelle (zone visible) puis recolore.
+function restyleImmobilier() {
+  if (!immoLayer) return;
+  immoScale = computeImmoScale();
+  immoLayer.setStyle(immoStyle);
+  updateImmoLegend();
+}
+
+// Reconstruit les entités du niveau adapté au zoom courant.
+function buildImmobilier() {
+  immoLayer.clearLayers();
+  immoLevel = immoLevelForZoom();
+  if (immoData) {
+    const noms = new Map(immoCommunes.map((c) => [c.code_commune, c.nom]));
+    let features;
+    if (immoLevel === "iris") {
+      features = (immoData.quartiers || [])
+        .filter((q) => q.contour)
+        .map((q) => ({
+          type: "Feature",
+          geometry: q.contour,
+          properties: {
+            niveau: "iris",
+            nom: q.nom,
+            commune: noms.get(q.code_commune),
+            prix: q.prix,
+          },
+        }));
+    } else {
+      const prix = new Map((immoData.communes || []).map((c) => [c.code_commune, c]));
+      features = immoCommunes
+        .filter((c) => c.contour)
+        .map((c) => {
+          const p = prix.get(c.code_commune) || {};
+          return {
+            type: "Feature",
+            geometry: c.contour,
+            properties: { niveau: "commune", nom: c.nom, prix: p.prix },
+          };
+        });
+    }
+    immoLayer.addData(features);
+  }
+  restyleImmobilier();
+}
+
+function renderImmobilier(immo, communes) {
+  immoData = immo || null;
+  immoCommunes = communes || [];
+  buildImmobilier();
+}
+
 $("#time").addEventListener("input", (e) => {
   $("#time-val").textContent = e.target.value;
 });
@@ -349,6 +581,7 @@ $("#logout").addEventListener("click", async () => {
   if (isoLayer) isoLayer.clearLayers();
   if (markerLayer) markerLayer.clearLayers();
   if (communeLayer) renderCommunes([]);
+  if (immoLayer) renderImmobilier(null, []);
   lastData = null;
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
@@ -586,6 +819,7 @@ function render(data) {
   isoLayer.clearLayers();
   markerLayer.clearLayers();
   renderCommunes(data.communes);
+  renderImmobilier(data.immobilier, data.communes);
 
   // Isochrone : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
   const iso = data.isochrone;

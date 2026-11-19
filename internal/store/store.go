@@ -40,6 +40,10 @@ type Store interface {
 	// polygone WKT (coordonnées WGS84), avec leur score de sécurité de la
 	// dernière année disponible.
 	FindCommunesInZone(ctx context.Context, polygonWKT string) ([]models.CommuneSecurite, error)
+	// FindImmobilierInZone renvoie les prix au m² médians (ventes DVF) des
+	// quartiers IRIS intersectant le polygone WKT et, sur tous leurs IRIS,
+	// des communes codesCommunes.
+	FindImmobilierInZone(ctx context.Context, polygonWKT string, codesCommunes []string) (models.ImmobilierZone, error)
 }
 
 // ErrEmailTaken est renvoyée par CreateUser quand l'email existe déjà.

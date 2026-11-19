@@ -114,6 +114,23 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		communes = []models.CommuneSecurite{}
 	}
 
+	codes := make([]string, len(communes))
+	for i, c := range communes {
+		codes[i] = c.CodeCommune
+	}
+	immo, err := h.Store.FindImmobilierInZone(r.Context(), geo.PolygonWKT(iso), codes)
+	if err != nil {
+		log.Error("immobilier zone search failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if immo.Communes == nil {
+		immo.Communes = []models.CommuneImmobilier{}
+	}
+	if immo.Quartiers == nil {
+		immo.Quartiers = []models.QuartierImmobilier{}
+	}
+
 	log.Info("etablissements searched in zone",
 		"adresse", body.Adresse,
 		"dist", body.Dist,
@@ -122,12 +139,14 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		"secteur", body.Secteur,
 		"count", len(etabs),
 		"count_communes", len(communes),
+		"count_quartiers", len(immo.Quartiers),
 	)
 
 	writeJSON(w, http.StatusOK, models.ListeEtablissementsAvecIsochrone{
 		Etablissements: etabs,
 		Isochrone:      iso,
 		Communes:       communes,
+		Immobilier:     immo,
 	})
 }
 

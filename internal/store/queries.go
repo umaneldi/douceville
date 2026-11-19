@@ -266,6 +266,88 @@ func (s *PgStore) FindCommunesInZone(ctx context.Context, polygonWKT string) ([]
 	return communes, rows.Err()
 }
 
+// FindImmobilierInZone implémente Store.FindImmobilierInZone. Le prix est la
+// médiane de valeur_fonciere / surface_reelle_bati sur toutes les ventes de
+// immobilier ; celui d'une commune porte sur tous ses IRIS (pas seulement
+// ceux de la zone).
+func (s *PgStore) FindImmobilierInZone(ctx context.Context, polygonWKT string, codesCommunes []string) (models.ImmobilierZone, error) {
+	zone := models.ImmobilierZone{
+		Communes:  []models.CommuneImmobilier{},
+		Quartiers: []models.QuartierImmobilier{},
+	}
+	if err := s.pool.QueryRow(ctx,
+		`SELECT min(date_mutation)::text, max(date_mutation)::text FROM immobilier`,
+	).Scan(&zone.DateMin, &zone.DateMax); err != nil {
+		return zone, err
+	}
+	if zone.DateMin == nil {
+		return zone, nil // table vide
+	}
+
+	const qQuartiers = `SELECT q.iris, q.code_commune, q.nom_iris, p.prix, p.ventes,
+			ST_AsGeoJSON(q.contour, 5)
+		FROM quartier q
+		CROSS JOIN LATERAL (
+			SELECT round(percentile_cont(0.5) WITHIN GROUP (
+					ORDER BY i.valeur_fonciere / i.surface_reelle_bati))::integer AS prix,
+				count(*)::integer AS ventes
+			FROM immobilier i WHERE i.iris = q.iris
+		) p
+		WHERE ST_Intersects(q.contour, ST_SetSRID(ST_GeomFromText($1), 4326))
+		ORDER BY q.iris`
+	rows, err := s.pool.Query(ctx, qQuartiers, polygonWKT)
+	if err != nil {
+		return zone, err
+	}
+	for rows.Next() {
+		var q models.QuartierImmobilier
+		var prix *int
+		var ventes int
+		var contour string
+		if err := rows.Scan(&q.Iris, &q.CodeCommune, &q.Nom, &prix, &ventes, &contour); err != nil {
+			rows.Close()
+			return zone, err
+		}
+		if prix != nil {
+			q.Prix = &models.PrixM2{PrixM2: *prix, Ventes: ventes}
+		}
+		q.Contour = json.RawMessage(contour)
+		zone.Quartiers = append(zone.Quartiers, q)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return zone, err
+	}
+
+	if len(codesCommunes) == 0 {
+		return zone, nil
+	}
+	const qCommunes = `SELECT q.code_commune,
+			round(percentile_cont(0.5) WITHIN GROUP (
+				ORDER BY i.valeur_fonciere / i.surface_reelle_bati))::integer,
+			count(*)::integer
+		FROM quartier q
+		JOIN immobilier i ON i.iris = q.iris
+		WHERE q.code_commune = ANY($1)
+		GROUP BY q.code_commune
+		ORDER BY q.code_commune`
+	rows, err = s.pool.Query(ctx, qCommunes, codesCommunes)
+	if err != nil {
+		return zone, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c models.CommuneImmobilier
+		var p models.PrixM2
+		if err := rows.Scan(&c.CodeCommune, &p.PrixM2, &p.Ventes); err != nil {
+			return zone, err
+		}
+		c.Prix = &p
+		zone.Communes = append(zone.Communes, c)
+	}
+	return zone, rows.Err()
+}
+
 func (s *PgStore) resultatsForUAI(ctx context.Context, uai string) ([]models.Resultat, error) {
 	const q = `SELECT idx, diplome, annee, presents, admis, mentions, etablissement_uai
 		FROM resultat WHERE etablissement_uai = $1 ORDER BY annee DESC, diplome`

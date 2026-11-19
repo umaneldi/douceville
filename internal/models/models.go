@@ -149,4 +149,39 @@ type ListeEtablissementsAvecIsochrone struct {
 	Etablissements []Etablissement   `json:"etablissements"`
 	Isochrone      Isochrone         `json:"isochrone"`
 	Communes       []CommuneSecurite `json:"communes"`
+	Immobilier     ImmobilierZone    `json:"immobilier"`
+}
+
+// PrixM2 est le prix au m² médian (valeur_fonciere / surface_reelle_bati) des
+// ventes DVF de la table immobilier, et le nombre de ces ventes.
+type PrixM2 struct {
+	PrixM2 int `json:"prix_m2"`
+	Ventes int `json:"ventes"`
+}
+
+// QuartierImmobilier est un quartier IRIS touché par l'isochrone, avec son
+// prix au m² (nul si aucune vente) et son contour GeoJSON (MultiPolygon, WGS84).
+type QuartierImmobilier struct {
+	Iris        string          `json:"iris"`
+	CodeCommune string          `json:"code_commune"`
+	Nom         string          `json:"nom"`
+	Prix        *PrixM2         `json:"prix"`
+	Contour     json.RawMessage `json:"contour"`
+}
+
+// CommuneImmobilier est le prix au m² d'une commune : médiane des ventes de
+// tous ses IRIS. Le contour est celui de CommuneSecurite (même code_commune).
+type CommuneImmobilier struct {
+	CodeCommune string  `json:"code_commune"`
+	Prix        *PrixM2 `json:"prix"`
+}
+
+// ImmobilierZone regroupe les prix au m² des quartiers et des communes touchés
+// par l'isochrone, calculés sur toutes les ventes de la table, dont DateMin et
+// DateMax (AAAA-MM-JJ, nulles si la table est vide) bornent la période.
+type ImmobilierZone struct {
+	DateMin   *string              `json:"date_min"`
+	DateMax   *string              `json:"date_max"`
+	Communes  []CommuneImmobilier  `json:"communes"`
+	Quartiers []QuartierImmobilier `json:"quartiers"`
 }

@@ -21,6 +21,7 @@ type mockStore struct {
 	etab      *models.Etablissement
 	zone      []models.Etablissement
 	communes  []models.CommuneSecurite
+	immo      models.ImmobilierZone
 	user      *models.DvUser
 	rec       *models.UserRecord
 	err       error
@@ -68,6 +69,10 @@ func (m mockStore) FindEtablissementsInZone(ctx context.Context, wkt string, nat
 
 func (m mockStore) FindCommunesInZone(ctx context.Context, wkt string) ([]models.CommuneSecurite, error) {
 	return m.communes, m.err
+}
+
+func (m mockStore) FindImmobilierInZone(ctx context.Context, wkt string, codes []string) (models.ImmobilierZone, error) {
+	return m.immo, m.err
 }
 
 type mockIso struct{ iso models.Isochrone }
@@ -125,12 +130,27 @@ func TestReadEtablissement_NotFound(t *testing.T) {
 
 func TestEtablissementsInZone(t *testing.T) {
 	score := 42
+	dateMin, dateMax := "2021-07-01", "2025-06-30"
 	h := &Handlers{
 		Store: mockStore{
 			zone: []models.Etablissement{{UAI: "A"}, {UAI: "B"}},
 			communes: []models.CommuneSecurite{
 				{CodeCommune: "31555", Nom: "Toulouse", Score: &score, Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
 				{CodeCommune: "31069", Nom: "Blagnac"},
+			},
+			immo: models.ImmobilierZone{
+				DateMin: &dateMin,
+				DateMax: &dateMax,
+				Communes: []models.CommuneImmobilier{
+					{CodeCommune: "31555", Prix: &models.PrixM2{PrixM2: 3400, Ventes: 1200}},
+				},
+				Quartiers: []models.QuartierImmobilier{
+					{Iris: "315550101", CodeCommune: "31555", Nom: "Capitole",
+						Prix:    &models.PrixM2{PrixM2: 5100, Ventes: 12},
+						Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
+					{Iris: "315550102", CodeCommune: "31555", Nom: "Arnaud Bernard",
+						Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
+				},
 			},
 		},
 		Isochron: mockIso{iso: models.Isochrone{Transp: "driving-car", Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
@@ -163,6 +183,16 @@ func TestEtablissementsInZone(t *testing.T) {
 	}
 	if got.Communes[1].Score != nil {
 		t.Errorf("communes[1].score = %v, want null", *got.Communes[1].Score)
+	}
+	im := got.Immobilier
+	if im.DateMin == nil || *im.DateMin != dateMin || im.DateMax == nil || *im.DateMax != dateMax {
+		t.Errorf("immobilier dates = %v..%v, want %s..%s", im.DateMin, im.DateMax, dateMin, dateMax)
+	}
+	if len(im.Communes) != 1 || im.Communes[0].Prix == nil || im.Communes[0].Prix.PrixM2 != 3400 {
+		t.Errorf("immobilier.communes = %+v, want 31555 prix 3400", im.Communes)
+	}
+	if len(im.Quartiers) != 2 || im.Quartiers[0].Prix == nil || im.Quartiers[0].Prix.Ventes != 12 || im.Quartiers[1].Prix != nil {
+		t.Errorf("immobilier.quartiers = %+v, want Capitole 12 ventes, Arnaud Bernard sans prix", im.Quartiers)
 	}
 }
 

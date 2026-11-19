@@ -237,10 +237,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* Leaflet popups */
 .leaflet-popup-content { font-size: 0.85rem; }
 
-/* ---------- Choroplèthe sécurité ---------- */
+/* ---------- Choroplèthes (sécurité, prix au m²) ---------- */
 .leaflet-tooltip .muted { color: #57534e; font-size: 0.8em; }
 
-.security-legend {
+.map-legend {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -249,18 +249,26 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   font-size: 0.78rem;
   line-height: 1.5;
 }
-.security-legend .legend-title { font-weight: 600; margin-bottom: 0.25rem; }
-.security-legend ul { list-style: none; margin: 0; padding: 0; }
-.security-legend li { display: flex; align-items: center; gap: 0.45rem; }
-.security-legend .swatch {
+.map-legend .legend-title { font-weight: 600; margin-bottom: 0.25rem; }
+.map-legend ul { list-style: none; margin: 0; padding: 0; }
+.map-legend li { display: flex; align-items: center; gap: 0.45rem; }
+.map-legend .swatch {
   width: 14px;
   height: 14px;
   border-radius: 3px;
   flex: none;
 }
-.security-legend .swatch.nodata {
+.map-legend .swatch.nodata {
   background: rgba(154, 154, 150, 0.5);
   border: 1px dashed #e7e5e4;
+}
+.map-legend[hidden] { display: none; }
+.immo-legend .legend-hint {
+  margin-top: 0.3rem;
+  max-width: 13rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.3;
 }
 .popup-title { font-weight: 700; margin-bottom: 0.2rem; }
 .popup-meta { color: #475569; margin-bottom: 0.4rem; }
