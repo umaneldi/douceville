@@ -18,6 +18,8 @@ https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-valeur-ajoutee-c
 https://www.data.gouv.fr/datasets/bases-statistiques-communale-departementale-et-regionale-de-la-delinquance-enregistree-par-la-police-et-la-gendarmerie-nationales?resource_id=604d71b8-337d-4869-9226-49e01bae87df
 https://www.data.gouv.fr/datasets/code-officiel-geographique-1?resource_id=eb836ef4-8be2-4a55-bfdb-eb1ad041933e
 https://etalab-datasets.geo.data.gouv.fr/contours-administratifs/2026/geojson/communes-50m.geojson.gz
+https://hydra.s3.rbx.io.cloud.ovh.net/parquet/1c646767-d34d-434d-ae28-65b5db8cad8d.parquet
+https://data.geopf.fr/wfs/ows?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0&TYPENAMES=STATISTICALUNITS.IRIS%3Acontours_iris&OUTPUTFORMAT=application%2Fjson&SRSNAME=EPSG%3A4326
 
 ## Architecture
 

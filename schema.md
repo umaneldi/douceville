@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **sept tables physiques** : `etablissement`, `resultat`, `commune`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **huit tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -34,6 +34,17 @@ La base contient **sept tables physiques** : `etablissement`, `resultat`, `commu
                              └──────>│ code_commune      PK     │
                                      │ nom                      │
                                      │ date_creation            │
+                                     │ contour (MULTIPOLYGON)   │
+                                     └──────────────────────────┘
+                                                  ^
+                                     ┌────────────┼─────────────┐
+                                     │         quartier         │
+                                     ├──────────────────────────┤
+                                     │ iris              PK     │
+                                     │ code_commune      FK     │
+                                     │ nom_iris                 │
+                                     │ type_iris                │
+                                     │ contour (MULTIPOLYGON)   │
                                      └──────────────────────────┘
 
 Relation : etablissement (1) ──< (N) resultat
@@ -43,6 +54,8 @@ Relation : commune (1) ──< (N) etablissement
   - clé étrangère : etablissement.code_commune → commune.code_commune (NULL autorisé)
 Relation : commune (1) ──< (N) securite
   - clé étrangère : securite.code_commune → commune.code_commune
+Relation : commune (1) ──< (N) quartier
+  - clé étrangère : quartier.code_commune → commune.code_commune
 ```
 
 ## Table `etablissement`
@@ -97,6 +110,18 @@ Référentiel des communes actuelles (Code officiel géographique INSEE, fichier
 | `nom`           | `TEXT`   | NOT NULL    | Nom en typographie riche (colonne `NCCENR`). |
 | `date_creation` | `DATE`   | NOT NULL    | Début de validité de la commune (colonne `DATE_DEBUT`). |
 | `contour`       | `geometry(MultiPolygon, 4326)` | NULL | Contour de la commune (WGS84), ajouté par `migrations/008_commune_contour.sql` et chargé par `scripts/import_contours_communes.py` depuis les « contours administratifs » Etalab (`communes-50m.geojson.gz`, même millésime COG). Index GIST `commune_contour_gist`. Sert à trouver les communes touchées par une isochrone (`ST_Intersects`). |
+
+## Table `quartier`
+
+Quartiers IRIS (« Ilots Regroupés pour l'Information Statistique », IGN « contours IRIS », couche WFS `STATISTICALUNITS.IRIS:contours_iris` de la Géoplateforme). Créée par `internal/store/migrations/010_quartier.sql`, chargée par `scripts/import_contours_iris.py` : sans fichier en argument, le script télécharge toutes les entités du WFS par pages de 5 000 (un export WFS unique est tronqué à 5 000 entités). Les IRIS des arrondissements de Paris/Marseille/Lyon sont rattachés à la commune parente ; les IRIS dont la commune est absente de `commune` sont ignorés. Import en upsert sur `iris`.
+
+| Colonne        | Type SQL                       | Contraintes | Description |
+|----------------|--------------------------------|-------------|-------------|
+| `iris`         | `TEXT`                         | **PK** (unique, NOT NULL) | Code IRIS complet sur 9 caractères (propriété `code_iris` = code INSEE + n° IRIS, ex. `670430101`). Le n° IRIS seul (propriété `iris`, 4 chiffres) n'est pas unique. |
+| `code_commune` | `TEXT`                         | NOT NULL, **FK** → `commune.code_commune` | Code INSEE de la commune (propriété `code_insee`, arrondissements ramenés à la commune parente). Indexé (`quartier_code_commune_idx`). |
+| `nom_iris`     | `TEXT`                         | NOT NULL    | Nom de l'IRIS. |
+| `type_iris`    | `TEXT`                         | NOT NULL    | Type d'IRIS : `H` habitat, `A` activité, `D` divers, `Z` commune non découpée. |
+| `contour`      | `geometry(MultiPolygon, 4326)` | NOT NULL    | Contour de l'IRIS (WGS84). Index GIST `quartier_contour_gist`. |
 
 ## Table `securite`
 
