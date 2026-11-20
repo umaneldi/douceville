@@ -10,7 +10,7 @@ const PENDING_MSG =
   "Votre compte est en attente de validation par un administrateur. " +
   "Vous pourrez vous connecter dès qu'il aura été approuvé.";
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
-let map, isoLayer, markerLayer, communeLayer, immoLayer;
+let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
 
 const $ = (sel) => document.querySelector(sel);
@@ -195,11 +195,22 @@ function initMap() {
     style: immoStyle,
     onEachFeature: (f, layer) => layer.bindTooltip(immoTooltip(f.properties), { sticky: true }),
   }); // désactivée par défaut
+  // Fiscalité : même niveau, exclusive elle aussi.
+  map.createPane("fiscalite").style.zIndex = 345;
+  fiscLayer = L.geoJSON(null, {
+    pane: "fiscalite",
+    style: fiscStyle,
+    onEachFeature: (f, layer) => layer.bindTooltip(fiscTooltip(f.properties), { sticky: true }),
+  }); // désactivée par défaut
   isoLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   const layers = L.control.layers(
     null,
-    { [securityLayerLabel()]: communeLayer, [immoLayerLabel()]: immoLayer },
+    {
+      [securityLayerLabel()]: communeLayer,
+      [immoLayerLabel()]: immoLayer,
+      [fiscLayerLabel()]: fiscLayer,
+    },
     { collapsed: false },
   );
   layers.addTo(map);
@@ -213,6 +224,7 @@ function initMap() {
   );
   securityLegend().addTo(map);
   immoLegend().addTo(map);
+  fiscLegend().addTo(map);
   map.on("overlayadd overlayremove", (e) => {
     const added = e.type === "overlayadd";
     if (e.layer === communeLayer) $(".security-legend").hidden = !added;
@@ -220,10 +232,16 @@ function initMap() {
       if (added) restyleImmobilier();
       else $(".immo-legend").hidden = true;
     }
-    // Les deux choroplèthes se superposent mal : en activer une masque l'autre.
+    if (e.layer === fiscLayer) {
+      if (added) restyleFiscalite();
+      else $(".fisc-legend").hidden = true;
+    }
+    // Les choroplèthes se superposent mal : en activer une masque les autres.
     // Différé : pendant le clic, le contrôle des couches ne se met pas à jour.
-    const other = e.layer === communeLayer ? immoLayer : e.layer === immoLayer ? communeLayer : null;
-    if (added && other) setTimeout(() => map.removeLayer(other), 0);
+    const choros = [communeLayer, immoLayer, fiscLayer];
+    if (added && choros.includes(e.layer)) {
+      setTimeout(() => choros.forEach((l) => l !== e.layer && map.removeLayer(l)), 0);
+    }
   });
   // Niveau de détail : communes de loin, quartiers IRIS de près.
   map.on("zoomend", () => {
@@ -232,6 +250,7 @@ function initMap() {
   // Échelle dynamique : recalculée sur la zone visible.
   map.on("moveend", () => {
     if (immoData && map.hasLayer(immoLayer)) restyleImmobilier();
+    if (map.hasLayer(fiscLayer)) restyleFiscalite();
   });
 }
 
@@ -405,24 +424,25 @@ function prixFor(p) {
   return p.prix ? p.prix.prix_m2 : null;
 }
 
-// Quantiles (au plus 5 classes, bornes arrondies à 100 €) des prix des entités
-// visibles, ou de toutes si aucune n'est visible.
-function computeImmoScale() {
+// Quantiles (au plus ramp.length classes, bornes arrondies au multiple de
+// step) des valeurs (valueOf) des entités visibles de layer, ou de toutes si
+// aucune n'est visible.
+function computeQuantileScale(layer, valueOf, ramp, step) {
   const view = map.getBounds();
   const all = [];
   let visible = [];
-  immoLayer.eachLayer((l) => {
-    const v = prixFor(l.feature.properties);
+  layer.eachLayer((l) => {
+    const v = valueOf(l.feature.properties);
     if (v == null) return;
     all.push(v);
     if (view.intersects(l.getBounds())) visible.push(v);
   });
   const vals = (visible.length ? visible : all).sort((a, b) => a - b);
   if (!vals.length) return null;
-  const n = IMMO_COLORS.length;
+  const n = ramp.length;
   const breaks = [];
   for (let i = 1; i < n; i++) {
-    const b = Math.round(vals[Math.floor((i * vals.length) / n)] / 100) * 100;
+    const b = Math.round(vals[Math.floor((i * vals.length) / n)] / step) * step;
     if (b > vals[0] && b <= vals[vals.length - 1] && b > (breaks[breaks.length - 1] ?? -Infinity)) {
       breaks.push(b);
     }
@@ -430,14 +450,47 @@ function computeImmoScale() {
   // Couleurs réparties sur toute la rampe quel que soit le nombre de classes.
   const k = breaks.length + 1;
   const colors = Array.from({ length: k }, (_, i) =>
-    IMMO_COLORS[k === 1 ? Math.floor(n / 2) : Math.round((i * (n - 1)) / (k - 1))],
+    ramp[k === 1 ? Math.floor(n / 2) : Math.round((i * (n - 1)) / (k - 1))],
   );
   return { breaks, colors, min: vals[0], max: vals[vals.length - 1] };
 }
 
+function scaleColor(scale, v) {
+  if (v == null || !scale) return NO_DATA_COLOR;
+  return scale.colors[scale.breaks.filter((b) => v >= b).length];
+}
+
+// Lignes de légende d'une échelle de quantiles, de la classe la plus haute
+// (en haut) à la plus basse, comme la légende sécurité. fmt formate une
+// valeur avec son unité, num sans.
+function scaleLegendRows(scale, fmt, num) {
+  const rows = [];
+  if (scale) {
+    const { breaks, colors, min, max } = scale;
+    if (!breaks.length) {
+      rows.push([colors[0], min === max ? fmt(min) : `${num(min)} – ${fmt(max)}`]);
+    } else {
+      breaks.forEach((b, i) => {
+        const label = i === 0 ? `< ${fmt(b)}` : `${num(breaks[i - 1])} – ${fmt(b)}`;
+        rows.push([colors[i], label]);
+      });
+      rows.push([colors[breaks.length], `≥ ${fmt(breaks[breaks.length - 1])}`]);
+    }
+  }
+  return (
+    rows
+      .reverse()
+      .map(([c, l]) => `<li><span class="swatch" style="background:${c}"></span>${l}</li>`)
+      .join("") + `<li><span class="swatch nodata"></span>Pas de données</li>`
+  );
+}
+
+function computeImmoScale() {
+  return computeQuantileScale(immoLayer, prixFor, IMMO_COLORS, 100);
+}
+
 function immoColor(v) {
-  if (v == null || !immoScale) return NO_DATA_COLOR;
-  return immoScale.colors[immoScale.breaks.filter((b) => v >= b).length];
+  return scaleColor(immoScale, v);
 }
 
 function immoStyle(feature) {
@@ -489,25 +542,7 @@ function updateImmoLegend() {
   const y1 = immoData.date_max ? immoData.date_max.slice(0, 4) : "";
   const periode = y0 ? ` (${y0 === y1 ? y0 : `${y0}–${y1}`})` : "";
   div.querySelector(".legend-title").textContent = `Prix au m²${periode}`;
-  const rows = [];
-  if (immoScale) {
-    const { breaks, colors, min, max } = immoScale;
-    if (!breaks.length) {
-      rows.push([colors[0], min === max ? fmtPrix(min) : `${min.toLocaleString("fr-FR")} – ${fmtPrix(max)}`]);
-    } else {
-      breaks.forEach((b, i) => {
-        const label = i === 0 ? `< ${fmtPrix(b)}` : `${breaks[i - 1].toLocaleString("fr-FR")} – ${fmtPrix(b)}`;
-        rows.push([colors[i], label]);
-      });
-      rows.push([colors[breaks.length], `≥ ${fmtPrix(breaks[breaks.length - 1])}`]);
-    }
-  }
-  // Du plus cher (en haut) au moins cher, comme la légende sécurité.
-  div.querySelector("ul").innerHTML =
-    rows
-      .reverse()
-      .map(([c, l]) => `<li><span class="swatch" style="background:${c}"></span>${l}</li>`)
-      .join("") + `<li><span class="swatch nodata"></span>Pas de données</li>`;
+  div.querySelector("ul").innerHTML = scaleLegendRows(immoScale, fmtPrix, (n) => n.toLocaleString("fr-FR"));
   div.querySelector(".legend-hint").textContent =
     immoLevel === "iris"
       ? "Niveau : quartiers IRIS — dézoomez pour la médiane par commune"
@@ -566,6 +601,104 @@ function renderImmobilier(immo, communes) {
   buildImmobilier();
 }
 
+// ---------------------------------------------------------------------------
+// Choroplèthe « fiscalité » (taux global TFB + taux plein TEOM, dernier exercice)
+// ---------------------------------------------------------------------------
+// Rampe séquentielle violette, du moins taxé (clair) au plus taxé (foncé).
+const FISC_COLORS = ["#efedf5", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"];
+let fiscScale = null; // échelle courante (voir computeQuantileScale)
+
+const fmtNumTaux = (n) => n.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
+const fmtTaux = (n) => `${fmtNumTaux(n)} %`;
+
+function fiscLayerLabel() {
+  return (
+    `Fiscalité locale ` +
+    `<span class="info-tip" tabindex="0" role="button" aria-label="Calcul du taux">i` +
+    `<span class="tip-body" role="tooltip">` +
+    `<strong>Taxe foncière + ordures ménagères</strong>` +
+    `<p>Somme du taux global de taxe foncière sur les propriétés bâties (commune, ` +
+    `intercommunalité…) et du taux plein de TEOM, en % de la valeur locative ` +
+    `cadastrale (DGFiP, dernier exercice).</p>` +
+    `<p>Une commune sans TEOM (ordures financées autrement, p. ex. par la REOM) ` +
+    `compte 0 pour celle-ci.</p>` +
+    `<p>Les couleurs sont réparties en quantiles des taux de la zone visible.</p>` +
+    `</span></span>`
+  );
+}
+
+const fiscFor = (p) => (p.fisc ? p.fisc.taux : null);
+
+function fiscStyle(feature) {
+  const v = fiscFor(feature.properties);
+  return {
+    color: "#ffffff",
+    weight: 1,
+    opacity: 0.9,
+    fillColor: scaleColor(fiscScale, v),
+    fillOpacity: v == null ? 0.35 : 0.65,
+    dashArray: v == null ? "3 3" : null,
+  };
+}
+
+function fiscTooltip(p) {
+  const nom = `<strong>${esc(p.nom)}</strong>`;
+  const f = p.fisc;
+  if (!f) return `${nom}<br>Fiscalité : <span class="muted">pas de données</span>`;
+  const teom = f.taux_teom == null ? "pas de TEOM" : fmtTaux(f.taux_teom);
+  return (
+    `${nom}<br>TFB + TEOM : <strong>${fmtTaux(f.taux)}</strong>` +
+    `<br><span class="muted">TFB ${fmtTaux(f.taux_tfb)}, TEOM ${teom}` +
+    `<br>exercice ${f.annee}</span>`
+  );
+}
+
+function fiscLegend() {
+  const legend = L.control({ position: "bottomright" });
+  legend.onAdd = () => {
+    const div = L.DomUtil.create("div", "map-legend fisc-legend");
+    div.innerHTML = `<div class="legend-title"></div><ul></ul>`;
+    div.hidden = true;
+    return div;
+  };
+  return legend;
+}
+
+function updateFiscLegend() {
+  const div = $(".fisc-legend");
+  div.hidden = fiscLayer.getLayers().length === 0 || !map.hasLayer(fiscLayer);
+  if (div.hidden) return;
+  let annee = null;
+  fiscLayer.eachLayer((l) => {
+    const f = l.feature.properties.fisc;
+    if (f && (annee == null || f.annee > annee)) annee = f.annee;
+  });
+  div.querySelector(".legend-title").textContent = `TFB + TEOM${annee ? ` (${annee})` : ""}`;
+  div.querySelector("ul").innerHTML = scaleLegendRows(fiscScale, fmtTaux, fmtNumTaux);
+}
+
+// Recalcule l'échelle (zone visible) puis recolore.
+function restyleFiscalite() {
+  if (!fiscLayer) return;
+  fiscScale = computeQuantileScale(fiscLayer, fiscFor, FISC_COLORS, 0.5);
+  fiscLayer.setStyle(fiscStyle);
+  updateFiscLegend();
+}
+
+function renderFiscalite(communes) {
+  fiscLayer.clearLayers();
+  fiscLayer.addData(
+    (communes || [])
+      .filter((c) => c.contour)
+      .map((c) => ({
+        type: "Feature",
+        geometry: c.contour,
+        properties: { nom: c.nom, fisc: c.fiscalite },
+      })),
+  );
+  restyleFiscalite();
+}
+
 $("#time").addEventListener("input", (e) => {
   $("#time-val").textContent = e.target.value;
 });
@@ -582,6 +715,7 @@ $("#logout").addEventListener("click", async () => {
   if (markerLayer) markerLayer.clearLayers();
   if (communeLayer) renderCommunes([]);
   if (immoLayer) renderImmobilier(null, []);
+  if (fiscLayer) renderFiscalite([]);
   lastData = null;
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
@@ -820,6 +954,7 @@ function render(data) {
   markerLayer.clearLayers();
   renderCommunes(data.communes);
   renderImmobilier(data.immobilier, data.communes);
+  renderFiscalite(data.communes);
 
   // Isochrone : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
   const iso = data.isochrone;

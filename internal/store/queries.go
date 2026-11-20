@@ -236,13 +236,17 @@ func (s *PgStore) FindEtablissementsInZone(ctx context.Context, polygonWKT strin
 
 // FindCommunesInZone implémente Store.FindCommunesInZone. Le WKT de
 // l'isochrone n'a pas de SRID : il est fixé à 4326 pour correspondre à
-// commune.contour.
+// commune.contour. La fiscalité est celle du dernier exercice de la table
+// fiscalite (nulle si la commune n'y figure pas ou sans taux TFB).
 func (s *PgStore) FindCommunesInZone(ctx context.Context, polygonWKT string) ([]models.CommuneSecurite, error) {
 	const q = `SELECT c.code_commune, c.nom, s.annee, s.score, s.nb_indicateurs,
+			f.year, f.taux_global_tfb, f.taux_plein_teom,
 			ST_AsGeoJSON(c.contour, 5)
 		FROM commune c
 		LEFT JOIN securite_score s ON s.code_commune = c.code_commune
 			AND s.annee = (SELECT max(annee) FROM securite_score)
+		LEFT JOIN fiscalite f ON f.code_commune = c.code_commune
+			AND f.year = (SELECT max(year) FROM fiscalite)
 		WHERE c.contour IS NOT NULL
 			AND ST_Intersects(c.contour, ST_SetSRID(ST_GeomFromText($1), 4326))
 		ORDER BY c.code_commune`
@@ -257,8 +261,18 @@ func (s *PgStore) FindCommunesInZone(ctx context.Context, polygonWKT string) ([]
 	for rows.Next() {
 		var c models.CommuneSecurite
 		var contour string
-		if err := rows.Scan(&c.CodeCommune, &c.Nom, &c.Annee, &c.Score, &c.NbIndicateurs, &contour); err != nil {
+		var fYear *int
+		var tfb, teom *float64
+		if err := rows.Scan(&c.CodeCommune, &c.Nom, &c.Annee, &c.Score, &c.NbIndicateurs,
+			&fYear, &tfb, &teom, &contour); err != nil {
 			return nil, err
+		}
+		if fYear != nil && tfb != nil {
+			f := models.Fiscalite{Annee: *fYear, TauxTFB: *tfb, TauxTEOM: teom, Taux: *tfb}
+			if teom != nil {
+				f.Taux += *teom
+			}
+			c.Fiscalite = &f
 		}
 		c.Contour = json.RawMessage(contour)
 		communes = append(communes, c)

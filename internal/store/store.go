@@ -38,7 +38,7 @@ type Store interface {
 	FindEtablissementsInZone(ctx context.Context, polygonWKT string, nature, secteur []string) ([]models.Etablissement, error)
 	// FindCommunesInZone renvoie les communes dont le contour intersecte le
 	// polygone WKT (coordonnées WGS84), avec leur score de sécurité de la
-	// dernière année disponible.
+	// dernière année disponible et leur fiscalité locale du dernier exercice.
 	FindCommunesInZone(ctx context.Context, polygonWKT string) ([]models.CommuneSecurite, error)
 	// FindImmobilierInZone renvoie les prix au m² médians (ventes DVF) des
 	// quartiers IRIS intersectant le polygone WKT et, sur tous leurs IRIS,

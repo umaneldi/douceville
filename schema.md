@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **neuf tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `immobilier`, `securite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py` ; la table `immobilier` (ventes DVF géolocalisées, rattachées à un IRIS) est chargée par `scripts/import_immobilier_dvf.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **dix tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `immobilier`, `securite`, `fiscalite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py` ; la table `immobilier` (ventes DVF géolocalisées, rattachées à un IRIS) est chargée par `scripts/import_immobilier_dvf.py` et la table `fiscalite` (taux d'imposition locale par commune) par `scripts/import_fiscalite_parquet.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -66,6 +66,8 @@ Relation : commune (1) ──< (N) etablissement
   - clé étrangère : etablissement.code_commune → commune.code_commune (NULL autorisé)
 Relation : commune (1) ──< (N) securite
   - clé étrangère : securite.code_commune → commune.code_commune
+Relation : commune (1) ──< (N) fiscalite
+  - clé étrangère : fiscalite.code_commune → commune.code_commune
 Relation : commune (1) ──< (N) quartier
   - clé étrangère : quartier.code_commune → commune.code_commune
 Relation : quartier (1) ──< (N) immobilier
@@ -172,6 +174,22 @@ Délinquance enregistrée par la police et la gendarmerie, par commune, année e
 | `est_diffuse`     | `BOOLEAN`          | NOT NULL    | `true` si la donnée est diffusée (`diff`), `false` sinon (`ndiff`, secret statistique). |
 
 **Clé primaire** : `(code_commune, annee, indicateur)` — elle sert aussi d'index pour la FK.
+
+## Table `fiscalite`
+
+Taux de fiscalité locale des particuliers, par commune et exercice (DGFiP, « fiscalité locale des particuliers », fichier Parquet de data.gouv.fr). Créée par `internal/store/migrations/012_fiscalite.sql`, chargée par `scripts/import_fiscalite_parquet.py` (option `--start-year` pour ne garder que les exercices récents). Les lignes dont le code n'est pas dans `commune` sont ignorées.
+
+| Colonne            | Type SQL           | Contraintes | Description |
+|--------------------|--------------------|-------------|-------------|
+| `code_commune`     | `TEXT`             | NOT NULL, **FK** → `commune.code_commune` | Code INSEE de la commune (colonne `INSEE COM`). |
+| `year`             | `INTEGER`          | NOT NULL    | Exercice fiscal (colonne `EXERCICE`). |
+| `taux_global_tfb`  | `DOUBLE PRECISION` | NULL        | Taux global de taxe foncière sur les propriétés bâties (%). |
+| `taux_plein_teom`  | `DOUBLE PRECISION` | NULL        | Taux plein de taxe d'enlèvement des ordures ménagères (%) ; NULL si pas de TEOM. |
+| `taux_global_tfnb` | `DOUBLE PRECISION` | NULL        | Taux global de taxe foncière sur les propriétés non bâties (%). |
+| `taux_global_th`   | `DOUBLE PRECISION` | NULL        | Taux global de taxe d'habitation (%). |
+| `optepci`          | `TEXT`             | NULL        | Régime fiscal de l'EPCI (`FPU`, `FPZ`, `FPA`) ; NULL pour une commune isolée. |
+
+**Clé primaire** : `(code_commune, year)` — elle sert aussi d'index pour la FK.
 
 ## Vue matérialisée `securite_score`
 

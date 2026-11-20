@@ -9,3 +9,4 @@ uv run scripts/import_immobilier_dvf.py --psql 'docker exec -i douceville_go-geo
 uv run scripts/import_etablissements_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/fr-en-adresse-et-geolocalisation-etablissements-premier-et-second-degre.parquet
 uv run scripts/import_resultats_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' --dir .parquet
 uv run scripts/import_securite_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/donnee-comm-data.gouv-parquet-2025-geographie2026-produit-le2026-06-25.parquet --start-year 2024
+uv run scripts/import_fiscalite_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/fiscalite-locale-des-particuliers-geo.parquet --start-year 2024

@@ -141,7 +141,18 @@ type CommuneSecurite struct {
 	Annee         *int            `json:"annee"`
 	Score         *int            `json:"score"`
 	NbIndicateurs *int            `json:"nb_indicateurs"`
+	Fiscalite     *Fiscalite      `json:"fiscalite"`
 	Contour       json.RawMessage `json:"contour"`
+}
+
+// Fiscalite est la fiscalité locale d'une commune (table fiscalite, dernier
+// exercice disponible). TauxTEOM est nul si la commune ne perçoit pas de TEOM.
+// Taux = TauxTFB + TauxTEOM (TEOM comptée 0 si absente), en %.
+type Fiscalite struct {
+	Annee    int      `json:"annee"`
+	TauxTFB  float64  `json:"taux_tfb"`
+	TauxTEOM *float64 `json:"taux_teom"`
+	Taux     float64  `json:"taux"`
 }
 
 // ListeEtablissementsAvecIsochrone est la réponse de POST /etablissements.

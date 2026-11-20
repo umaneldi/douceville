@@ -237,7 +237,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* Leaflet popups */
 .leaflet-popup-content { font-size: 0.85rem; }
 
-/* ---------- Choroplèthes (sécurité, prix au m²) ---------- */
+/* ---------- Choroplèthes (sécurité, prix au m², fiscalité) ---------- */
 .leaflet-tooltip .muted { color: #57534e; font-size: 0.8em; }
 
 .map-legend {
