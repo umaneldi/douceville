@@ -8,7 +8,7 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **dix tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `immobilier`, `securite`, `fiscalite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py` ; la table `immobilier` (ventes DVF géolocalisées, rattachées à un IRIS) est chargée par `scripts/import_immobilier_dvf.py` et la table `fiscalite` (taux d'imposition locale par commune) par `scripts/import_fiscalite_parquet.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **onze tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `immobilier`, `logement_social`, `securite`, `fiscalite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py` ; la table `immobilier` (ventes DVF géolocalisées, rattachées à un IRIS) est chargée par `scripts/import_immobilier_dvf.py`, la table `logement_social` (logements des bailleurs sociaux RPLS, rattachés à un IRIS) par `scripts/import_logement_social.py` et la table `fiscalite` (taux d'imposition locale par commune) par `scripts/import_fiscalite_parquet.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
 
 ## Diagramme relationnel
 
@@ -59,6 +59,18 @@ La base contient **dix tables physiques** : `etablissement`, `resultat`, `commun
                                      │ surface_reelle_bati      │
                                      └──────────────────────────┘
 
+                                     ┌──────────────────────────┐
+                                     │     logement_social      │
+                                     ├──────────────────────────┤
+                                     │ iris (→ quartier) FK     │
+                                     │ type_droit_immobilier    │
+                                     │ type_construction        │
+                                     │ nb_pieces                │
+                                     │ surface                  │
+                                     │ annee_construction       │
+                                     │ position   (POINT)       │
+                                     └──────────────────────────┘
+
 Relation : etablissement (1) ──< (N) resultat
   - clé étrangère : resultat.etablissement_uai → etablissement.UAI
   - ON DELETE CASCADE (la suppression d'un établissement supprime ses résultats)
@@ -72,6 +84,8 @@ Relation : commune (1) ──< (N) quartier
   - clé étrangère : quartier.code_commune → commune.code_commune
 Relation : quartier (1) ──< (N) immobilier
   - clé étrangère : immobilier.iris → quartier.iris
+Relation : quartier (1) ──< (N) logement_social
+  - clé étrangère : logement_social.iris → quartier.iris
 ```
 
 ## Table `etablissement`
@@ -158,6 +172,24 @@ Filtres à l'import : `nature_mutation = 'Vente'`, `surface_reelle_bati > 0`, `v
 **Index** : `immobilier_iris_date_idx (iris, date_mutation)` — sert aussi d'index pour la FK. Pas de clé primaire (la source n'en fournit pas une fois `id_mutation` écarté).
 
 L'API (`FindImmobilierInZone`) calcule le prix au m² médian (`valeur_fonciere / surface_reelle_bati`) par IRIS et par commune sur toutes les ventes de la table.
+
+## Table `logement_social`
+
+Logements locatifs des bailleurs sociaux (RPLS, fichier CSV « données détaillées au logement du répertoire des logements locatifs des bailleurs sociaux » de data.gouv.fr, séparateur `;`), une ligne par logement. Créée par `internal/store/migrations/013_logement_social.sql`, chargée par `scripts/import_logement_social.py`.
+
+Filtres à l'import : les lignes dont `PLG_IRIS2024_CODE` est vide ou contient autre chose que des chiffres (IRIS fictifs `…XXXX`, Corse `2A…`/`2B…`) sont ignorées, ainsi que celles dont l'IRIS est absent de `quartier`. L'import remplace toute la table, en une seule transaction.
+
+| Colonne                 | Type SQL           | Contraintes | Description |
+|-------------------------|--------------------|-------------|-------------|
+| `iris`                  | `TEXT`             | NOT NULL, **FK** → `quartier.iris` | Code IRIS 2024 du logement (`PLG_IRIS2024_CODE`). |
+| `type_droit_immobilier` | `TEXT`             | NULL        | Droit réel du bailleur (`DROIT_LIBELLE` : pleine propriété, usufruit, bail emphytéotique, …). |
+| `type_construction`     | `TEXT`             | NULL        | `TYPECONST_LIBELLE` (collectif, individuel, logement étudiant) ; NULL si `NC`. |
+| `nb_pieces`             | `INTEGER`          | NULL        | Nombre de pièces (`NBPIECE`) ; NULL si `NC`. |
+| `surface`               | `INTEGER`          | NULL        | Surface habitable en m² (`SURFHAB`) ; NULL si absente ou de plus de 4 chiffres. |
+| `annee_construction`    | `INTEGER`          | NULL        | Année de construction (`CONSTRUCT`) ; NULL si absente ou ≤ 1000. |
+| `position`              | `geometry(Point)` (SRID 0) | NULL | Position (lon, lat) WGS84, convertie depuis `X`, `Y` dans la projection `EPSG` de la ligne (2154 Lambert-93, 2975 Réunion, 5490 Antilles, 2972 Guyane) ; SRID 0 comme `etablissement.position` (cohérent avec les isochrones). Index GiST `logement_social_position_gist`. NULL si non géolocalisé. |
+
+**Index** : `logement_social_iris_idx (iris)` — sert aussi d'index pour la FK ; `logement_social_position_gist` (GiST sur `position`). Pas de clé primaire (la source n'a pas d'identifiant de logement).
 
 ## Table `securite`
 

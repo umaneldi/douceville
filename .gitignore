@@ -25,6 +25,7 @@ logs/
 *.xls*
 *.raw
 *.pkl
+.pytest_cache/
 
 # External service data dirs
 ors-docker/

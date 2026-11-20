@@ -20,6 +20,8 @@ https://www.data.gouv.fr/datasets/code-officiel-geographique-1?resource_id=eb836
 https://etalab-datasets.geo.data.gouv.fr/contours-administratifs/2026/geojson/communes-50m.geojson.gz
 https://www.data.gouv.fr/datasets/demandes-de-valeurs-foncieres-geolocalisees?resource_id=d7933994-2c66-4131-a4da-cf7cd18040a4
 https://www.data.gouv.fr/datasets/fiscalite-locale-des-particuliers?resource_id=f48d0fcc-f732-445d-ba2d-886ec4952bce
+https://www.data.gouv.fr/datasets/donnees-detaillees-au-logement-du-repertoire-des-logements-locatifs-des-bailleurs-sociaux-rpls
+https://www.data.gouv.fr/datasets/revenus-et-pauvrete-des-menages-aux-niveaux-national-et-local-revenus-localises-sociaux-et-fiscaux
 
 ## Architecture
 
