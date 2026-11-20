@@ -161,6 +161,29 @@ type ListeEtablissementsAvecIsochrone struct {
 	Isochrone      Isochrone         `json:"isochrone"`
 	Communes       []CommuneSecurite `json:"communes"`
 	Immobilier     ImmobilierZone    `json:"immobilier"`
+	// LogementsSociaux sont les positions (bâtiments) de logements sociaux
+	// RPLS contenues dans l'isochrone.
+	LogementsSociaux []LogementSocialPosition `json:"logements_sociaux"`
+}
+
+// LogementSocialGroupe regroupe les logements sociaux identiques (mêmes
+// caractéristiques) d'une même position ; Nb est leur nombre.
+type LogementSocialGroupe struct {
+	TypeConstruction  *string `json:"type_construction"`
+	TypeDroit         *string `json:"type_droit_immobilier"`
+	NbPieces          *int    `json:"nb_pieces"`
+	Surface           *int    `json:"surface"`
+	AnneeConstruction *int    `json:"annee_construction"`
+	Nb                int     `json:"nb"`
+}
+
+// LogementSocialPosition est une position (en pratique un bâtiment) portant
+// NbLogements logements sociaux, détaillés par groupes identiques.
+type LogementSocialPosition struct {
+	Lon         float64                `json:"lon"`
+	Lat         float64                `json:"lat"`
+	NbLogements int                    `json:"nb_logements"`
+	Logements   []LogementSocialGroupe `json:"logements"`
 }
 
 // PrixM2 est le prix au m² médian (valeur_fonciere / surface_reelle_bati) des

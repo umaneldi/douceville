@@ -280,6 +280,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .popup-table th:first-child, .popup-table td:first-child { text-align: left; }
 .popup-table th { background: #f1f5f9; }
+.popup-scroll { max-height: 14rem; overflow-y: auto; }
 
 @media (max-width: 720px) {
   .layout { flex-direction: column; }

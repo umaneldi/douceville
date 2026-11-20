@@ -295,6 +295,7 @@ Structures Go d'échange API (`internal/models/models.go`), sans table associée
 - `Etablissement`, `Resultat` — projections lues depuis la base.
 - `Isochrone` — zone d'accessibilité (géométrie `POLYGON`) calculée à la volée, non stockée.
 - `CommuneSecurite` — commune touchée par l'isochrone : code, nom, `score` / `annee` / `nb_indicateurs` (dernière année de `securite_score`, `null` sans données) et `contour` GeoJSON ; renvoyée dans le champ `communes` de `POST /api/etablissements`.
+- `LogementSocialPosition`, `LogementSocialGroupe` — logements sociaux de `logement_social` contenus dans l'isochrone, regroupés par position (bâtiment) puis par caractéristiques identiques ; renvoyés dans le champ `logements_sociaux` de `POST /api/etablissements`.
 - `ListeEtablissementsAvecIsochrone`, `QueryParameters` — réponse/requête de `POST /api/etablissements`.
 
 ## Références dans le code

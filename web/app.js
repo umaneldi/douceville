@@ -10,7 +10,7 @@ const PENDING_MSG =
   "Votre compte est en attente de validation par un administrateur. " +
   "Vous pourrez vous connecter dès qu'il aura été approuvé.";
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
-let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer;
+let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer, logementLayer, logementRenderer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
 
 const $ = (sel) => document.querySelector(sel);
@@ -202,6 +202,11 @@ function initMap() {
     style: fiscStyle,
     onEachFeature: (f, layer) => layer.bindTooltip(fiscTooltip(f.properties), { sticky: true }),
   }); // désactivée par défaut
+  // Logements sociaux : au-dessus des choroplèthes, sous les marqueurs.
+  // Rendu canvas : une zone peut contenir des milliers de bâtiments.
+  map.createPane("logements").style.zIndex = 450;
+  logementRenderer = L.canvas({ pane: "logements" });
+  logementLayer = L.layerGroup(); // désactivée par défaut
   isoLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   const layers = L.control.layers(
@@ -210,6 +215,7 @@ function initMap() {
       [securityLayerLabel()]: communeLayer,
       [immoLayerLabel()]: immoLayer,
       [fiscLayerLabel()]: fiscLayer,
+      "Logements sociaux": logementLayer,
     },
     { collapsed: false },
   );
@@ -716,6 +722,7 @@ $("#logout").addEventListener("click", async () => {
   if (communeLayer) renderCommunes([]);
   if (immoLayer) renderImmobilier(null, []);
   if (fiscLayer) renderFiscalite([]);
+  if (logementLayer) renderLogements([]);
   lastData = null;
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
@@ -955,6 +962,7 @@ function render(data) {
   renderCommunes(data.communes);
   renderImmobilier(data.immobilier, data.communes);
   renderFiscalite(data.communes);
+  renderLogements(data.logements_sociaux || []);
 
   // Isochrone : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
   const iso = data.isochrone;
@@ -1013,6 +1021,8 @@ function renderMarkers() {
     etabs.length === all.length
       ? `${all.length} établissement(s) trouvé(s).`
       : `${etabs.length} établissement(s) affiché(s) sur ${all.length} trouvé(s).`;
+  const nbLogements = (lastData.logements_sociaux || []).reduce((n, p) => n + p.nb_logements, 0);
+  if (nbLogements) status.textContent += ` ${nbLogements} logement(s) social(aux).`;
   return bounds;
 }
 
@@ -1134,6 +1144,44 @@ function popupHtml(etab) {
   } else {
     html += `<em>Aucun résultat d'examen disponible.</em>`;
   }
+  return html;
+}
+
+// ---------------------------------------------------------------------------
+// Logements sociaux (RPLS) : un point par position (bâtiment)
+// ---------------------------------------------------------------------------
+function renderLogements(positions) {
+  logementLayer.clearLayers();
+  for (const p of positions) {
+    // Rayon croissant (log) avec le nombre de logements du bâtiment.
+    const radius = Math.min(12, 3 + 1.5 * Math.log2(Math.max(1, p.nb_logements)));
+    L.circleMarker([p.lat, p.lon], {
+      renderer: logementRenderer,
+      pane: "logements",
+      radius,
+      color: "#fff",
+      weight: 1,
+      fillColor: "#ea580c",
+      fillOpacity: 0.85,
+    })
+      .bindPopup(() => logementPopupHtml(p))
+      .addTo(logementLayer);
+  }
+}
+
+function logementPopupHtml(p) {
+  const dash = (v) => (v == null ? "—" : esc(v));
+  let html = `<div class="popup-title">${p.nb_logements} logement(s) social(aux)</div>`;
+  html += `<div class="popup-meta">Position : ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</div>`;
+  html += `<div class="popup-scroll"><table class="popup-table"><thead><tr>
+    <th>Type</th><th>Droit</th><th>Pièces</th><th>Surface (m²)</th><th>Année</th><th>Nb</th>
+    </tr></thead><tbody>`;
+  for (const g of p.logements || []) {
+    html += `<tr><td>${dash(g.type_construction)}</td><td>${dash(g.type_droit_immobilier)}</td>
+      <td>${dash(g.nb_pieces)}</td><td>${dash(g.surface)}</td>
+      <td>${dash(g.annee_construction)}</td><td>${esc(g.nb)}</td></tr>`;
+  }
+  html += `</tbody></table></div>`;
   return html;
 }
 

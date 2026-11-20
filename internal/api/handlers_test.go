@@ -22,6 +22,7 @@ type mockStore struct {
 	zone      []models.Etablissement
 	communes  []models.CommuneSecurite
 	immo      models.ImmobilierZone
+	logements []models.LogementSocialPosition
 	user      *models.DvUser
 	rec       *models.UserRecord
 	err       error
@@ -73,6 +74,10 @@ func (m mockStore) FindCommunesInZone(ctx context.Context, wkt string) ([]models
 
 func (m mockStore) FindImmobilierInZone(ctx context.Context, wkt string, codes []string) (models.ImmobilierZone, error) {
 	return m.immo, m.err
+}
+
+func (m mockStore) FindLogementsSociauxInZone(ctx context.Context, wkt string) ([]models.LogementSocialPosition, error) {
+	return m.logements, m.err
 }
 
 type mockIso struct{ iso models.Isochrone }
@@ -130,6 +135,7 @@ func TestReadEtablissement_NotFound(t *testing.T) {
 
 func TestEtablissementsInZone(t *testing.T) {
 	score := 42
+	t3, t4 := 3, 4
 	dateMin, dateMax := "2021-07-01", "2025-06-30"
 	h := &Handlers{
 		Store: mockStore{
@@ -151,6 +157,12 @@ func TestEtablissementsInZone(t *testing.T) {
 					{Iris: "315550102", CodeCommune: "31555", Nom: "Arnaud Bernard",
 						Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
 				},
+			},
+			logements: []models.LogementSocialPosition{
+				{Lon: 1.44, Lat: 43.6, NbLogements: 5, Logements: []models.LogementSocialGroupe{
+					{NbPieces: &t3, Nb: 3},
+					{NbPieces: &t4, Nb: 2},
+				}},
 			},
 		},
 		Isochron: mockIso{iso: models.Isochrone{Transp: "driving-car", Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
@@ -194,6 +206,10 @@ func TestEtablissementsInZone(t *testing.T) {
 	if len(im.Quartiers) != 2 || im.Quartiers[0].Prix == nil || im.Quartiers[0].Prix.Ventes != 12 || im.Quartiers[1].Prix != nil {
 		t.Errorf("immobilier.quartiers = %+v, want Capitole 12 ventes, Arnaud Bernard sans prix", im.Quartiers)
 	}
+	if ls := got.LogementsSociaux; len(ls) != 1 || ls[0].NbLogements != 5 || len(ls[0].Logements) != 2 ||
+		ls[0].Logements[1].NbPieces == nil || *ls[0].Logements[1].NbPieces != 4 {
+		t.Errorf("logements_sociaux = %+v, want 1 position, 5 logements en 2 groupes", ls)
+	}
 }
 
 // Sans commune dans la zone, le champ communes est un tableau vide (pas null).
@@ -212,6 +228,9 @@ func TestEtablissementsInZone_NoCommunes(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"communes":[]`) {
 		t.Errorf("body = %s, want \"communes\":[]", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"logements_sociaux":[]`) {
+		t.Errorf("body = %s, want \"logements_sociaux\":[]", rr.Body.String())
 	}
 }
 

@@ -362,6 +362,45 @@ func (s *PgStore) FindImmobilierInZone(ctx context.Context, polygonWKT string, c
 	return zone, rows.Err()
 }
 
+// FindLogementsSociauxInZone implémente Store.FindLogementsSociauxInZone.
+// position est en SRID 0 comme etablissement.position : même prédicat que
+// FindEtablissementsInZone. Les logements identiques d'une position sont
+// comptés ensemble, puis les lignes (triées par position) sont regroupées.
+func (s *PgStore) FindLogementsSociauxInZone(ctx context.Context, polygonWKT string) ([]models.LogementSocialPosition, error) {
+	const q = `SELECT ST_X(position), ST_Y(position), type_construction,
+			type_droit_immobilier, nb_pieces, surface, annee_construction,
+			count(*)::integer
+		FROM logement_social
+		WHERE position IS NOT NULL AND ST_Within(position, ST_GeomFromEWKT($1))
+		GROUP BY 1, 2, 3, 4, 5, 6, 7
+		ORDER BY 1, 2, nb_pieces NULLS LAST, surface NULLS LAST`
+
+	rows, err := s.pool.Query(ctx, q, polygonWKT)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	positions := []models.LogementSocialPosition{}
+	for rows.Next() {
+		var lon, lat float64
+		var g models.LogementSocialGroupe
+		if err := rows.Scan(&lon, &lat, &g.TypeConstruction, &g.TypeDroit,
+			&g.NbPieces, &g.Surface, &g.AnneeConstruction, &g.Nb); err != nil {
+			return nil, err
+		}
+		n := len(positions)
+		if n == 0 || positions[n-1].Lon != lon || positions[n-1].Lat != lat {
+			positions = append(positions, models.LogementSocialPosition{Lon: lon, Lat: lat})
+			n++
+		}
+		p := &positions[n-1]
+		p.NbLogements += g.Nb
+		p.Logements = append(p.Logements, g)
+	}
+	return positions, rows.Err()
+}
+
 func (s *PgStore) resultatsForUAI(ctx context.Context, uai string) ([]models.Resultat, error) {
 	const q = `SELECT idx, diplome, annee, presents, admis, mentions, etablissement_uai
 		FROM resultat WHERE etablissement_uai = $1 ORDER BY annee DESC, diplome`

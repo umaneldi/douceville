@@ -131,6 +131,16 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		immo.Quartiers = []models.QuartierImmobilier{}
 	}
 
+	logements, err := h.Store.FindLogementsSociauxInZone(r.Context(), geo.PolygonWKT(iso))
+	if err != nil {
+		log.Error("logements sociaux zone search failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if logements == nil {
+		logements = []models.LogementSocialPosition{}
+	}
+
 	log.Info("etablissements searched in zone",
 		"adresse", body.Adresse,
 		"dist", body.Dist,
@@ -140,13 +150,15 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		"count", len(etabs),
 		"count_communes", len(communes),
 		"count_quartiers", len(immo.Quartiers),
+		"count_logements_sociaux", len(logements),
 	)
 
 	writeJSON(w, http.StatusOK, models.ListeEtablissementsAvecIsochrone{
-		Etablissements: etabs,
-		Isochrone:      iso,
-		Communes:       communes,
-		Immobilier:     immo,
+		Etablissements:   etabs,
+		Isochrone:        iso,
+		Communes:         communes,
+		Immobilier:       immo,
+		LogementsSociaux: logements,
 	})
 }
 

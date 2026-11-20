@@ -44,6 +44,9 @@ type Store interface {
 	// quartiers IRIS intersectant le polygone WKT et, sur tous leurs IRIS,
 	// des communes codesCommunes.
 	FindImmobilierInZone(ctx context.Context, polygonWKT string, codesCommunes []string) (models.ImmobilierZone, error)
+	// FindLogementsSociauxInZone renvoie les logements sociaux géolocalisés
+	// contenus dans le polygone WKT, regroupés par position.
+	FindLogementsSociauxInZone(ctx context.Context, polygonWKT string) ([]models.LogementSocialPosition, error)
 }
 
 // ErrEmailTaken est renvoyée par CreateUser quand l'email existe déjà.
