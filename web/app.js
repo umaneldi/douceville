@@ -169,6 +169,7 @@ function startApp(user) {
 
   const name = user && (user.login || user.email);
   $("#user-label").textContent = name || "";
+  $("#user-avatar").textContent = (name || "?").trim().charAt(0).toUpperCase();
 
   if (!map) initMap();
   // Leaflet a besoin de recalculer sa taille une fois le conteneur visible.
@@ -176,7 +177,8 @@ function startApp(user) {
 }
 
 function initMap() {
-  map = L.map("map").setView([46.6, 2.5], 6); // France
+  map = L.map("map", { zoomControl: false }).setView([46.6, 2.5], 6); // France
+  L.control.zoom({ position: "topright" }).addTo(map);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap",
@@ -220,6 +222,8 @@ function initMap() {
     { collapsed: false },
   );
   layers.addTo(map);
+  // Le contrôle des couches vit dans le panneau latéral, pas sur la carte.
+  $("#layers-slot").appendChild(layers.getContainer());
   // L'icône d'info est dans le <label> de la case : son clic ne doit pas
   // basculer la couche (le survol / focus affiche l'infobulle).
   layers.getContainer().querySelectorAll(".info-tip").forEach((tip) =>
@@ -724,6 +728,7 @@ $("#logout").addEventListener("click", async () => {
   if (fiscLayer) renderFiscalite([]);
   if (logementLayer) renderLogements([]);
   lastData = null;
+  renderInsights([]);
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
   $("#password").value = "";
@@ -1007,13 +1012,16 @@ function renderMarkers() {
 
   const all = lastData.etablissements || [];
   const etabs = all.filter(passesRateFilter);
+  markerByEtab = new Map();
   for (const etab of etabs) {
     const coords = etab.position && etab.position.coordinates;
     if (!coords) continue;
     const [lon, lat] = coords;
     bounds.push([lat, lon]);
-    L.marker([lat, lon]).bindPopup(popupHtml(etab)).addTo(markerLayer);
+    const marker = L.marker([lat, lon]).bindPopup(popupHtml(etab)).addTo(markerLayer);
+    markerByEtab.set(etab, marker);
   }
+  renderInsights(etabs);
 
   const status = $("#search-status");
   status.classList.remove("err");
@@ -1184,6 +1192,175 @@ function logementPopupHtml(p) {
   html += `</tbody></table></div>`;
   return html;
 }
+
+// ---------------------------------------------------------------------------
+// Panneau de droite : onglets, répartition par nature, taux, liste
+// ---------------------------------------------------------------------------
+let markerByEtab = new Map();
+
+document.querySelectorAll(".tabs .tab").forEach((tab) =>
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tabs .tab").forEach((t) => {
+      const on = t === tab;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on);
+    });
+    document.querySelectorAll(".tab-pane").forEach((pane) => {
+      pane.hidden = pane.dataset.pane !== tab.dataset.tab;
+    });
+  }),
+);
+
+// Couleur attachée à la nature (jamais au rang) : ordre catégoriel fixe.
+const NATURE_GROUPS = [
+  { key: "matern", label: "Maternelle", color: "#3987e5" },
+  { key: "elem", label: "Élémentaire", color: "#d95926" },
+  { key: "coll", label: "Collège", color: "#199e70" },
+  { key: "lycee", label: "Lycée", color: "#c98500" },
+];
+const OTHER_GROUP = { key: "", label: "Autres", color: "#6b7280" };
+
+function natureGroup(nature) {
+  const n = String(nature || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return NATURE_GROUPS.find((g) => n.includes(g.key)) || OTHER_GROUP;
+}
+
+const EMPTY_HINT = `<p class="empty">Lancez une recherche pour afficher les statistiques.</p>`;
+
+function renderInsights(etabs) {
+  renderNatureChart(etabs);
+  renderRateChart(etabs);
+  const rated = etabs
+    .map((e) => ({ e, r: successRate(e) }))
+    .filter((x) => x.r != null)
+    .sort((a, b) => b.r - a.r)
+    .slice(0, 5);
+  renderEtabList($("#etab-top"), rated.map((x) => x.e), true);
+  renderEtabList($("#etab-list"), etabs, false);
+}
+
+function renderNatureChart(etabs) {
+  const el = $("#nature-chart");
+  if (!etabs.length) {
+    el.innerHTML = EMPTY_HINT;
+    return;
+  }
+  const counts = new Map();
+  for (const e of etabs) {
+    const g = natureGroup(e.nature);
+    counts.set(g, (counts.get(g) || 0) + 1);
+  }
+  const groups = [...NATURE_GROUPS, OTHER_GROUP].filter((g) => counts.has(g));
+  const total = etabs.length;
+  const R = 52;
+  const C = 2 * Math.PI * R;
+  const gap = groups.length > 1 ? 3 : 0; // espace (surface) entre segments
+  let offset = 0;
+  const arcs = groups
+    .map((g) => {
+      const n = counts.get(g);
+      const len = (n / total) * C;
+      const arc =
+        `<circle cx="64" cy="64" r="${R}" fill="none" stroke="${g.color}" stroke-width="12"` +
+        ` stroke-dasharray="${Math.max(0, len - gap)} ${C}" stroke-dashoffset="${-offset}"` +
+        ` transform="rotate(-90 64 64)"><title>${g.label} : ${n}</title></circle>`;
+      offset += len;
+      return arc;
+    })
+    .join("");
+  const legend = groups
+    .map((g) => {
+      const n = counts.get(g);
+      return (
+        `<li><span class="dot" style="background:${g.color}"></span>` +
+        `<span class="lg-name">${g.label}</span>` +
+        `<span class="lg-val">${Math.round((100 * n) / total)} %</span></li>`
+      );
+    })
+    .join("");
+  el.innerHTML =
+    `<div class="donut-wrap">` +
+    `<svg class="donut" viewBox="0 0 128 128" role="img" aria-label="Répartition des établissements par nature">` +
+    `${arcs}<text x="64" y="62" class="donut-num">${total}</text>` +
+    `<text x="64" y="80" class="donut-sub">établ.</text></svg>` +
+    `<ul class="chart-legend">${legend}</ul></div>`;
+}
+
+function renderRateChart(etabs) {
+  const el = $("#rate-chart");
+  if (!etabs.length) {
+    el.innerHTML = EMPTY_HINT;
+    return;
+  }
+  const bins = new Array(10).fill(0);
+  let none = 0;
+  for (const e of etabs) {
+    const r = successRate(e);
+    if (r == null) none++;
+    else bins[Math.min(9, Math.floor(r / 10))]++;
+  }
+  const max = Math.max(...bins);
+  if (!max) {
+    el.innerHTML = `<p class="empty">Aucun résultat d'examen pour ces établissements.</p>`;
+    return;
+  }
+  const bars = bins
+    .map((n, i) => {
+      const h = n ? Math.max(2, (100 * n) / max) : 0;
+      return (
+        `<div class="bar-slot" title="${i * 10}–${i * 10 + 10} % : ${n} établissement(s)">` +
+        `<div class="bar" style="height:${h}%"></div></div>`
+      );
+    })
+    .join("");
+  el.innerHTML =
+    `<div class="bars-head"><span>Établissements par tranche de taux</span><span>max ${max}</span></div>` +
+    `<div class="bars">${bars}</div>` +
+    `<div class="bars-axis"><span>0 %</span><span>50 %</span><span>100 %</span></div>` +
+    (none ? `<p class="chart-note">${none} sans résultats d'examen</p>` : "");
+}
+
+function secteurClass(secteur) {
+  const s = String(secteur || "").toLowerCase();
+  if (s.includes("hors")) return "badge-hc";
+  if (s.includes("priv")) return "badge-prive";
+  return "badge-public";
+}
+
+function renderEtabList(ul, etabs, withRate) {
+  if (!etabs.length) {
+    ul.innerHTML = `<li class="empty">${lastData ? "Aucun établissement." : "Aucune recherche."}</li>`;
+    return;
+  }
+  ul.innerHTML = "";
+  for (const e of etabs) {
+    const li = document.createElement("li");
+    li.className = "etab-item";
+    li.tabIndex = 0;
+    const rate = successRate(e);
+    const sub = [e.nature, e.commune].filter(Boolean).join(" · ");
+    li.innerHTML =
+      `<div class="etab-main"><div class="etab-name">${esc(e.nom)}</div>` +
+      `<div class="etab-sub">${esc(sub)}</div></div>` +
+      `<div class="etab-side">` +
+      (withRate && rate != null ? `<span class="etab-rate">${rate.toFixed(0)} %</span>` : "") +
+      (e.secteur ? `<span class="badge ${secteurClass(e.secteur)}">${esc(e.secteur)}</span>` : "") +
+      `</div>`;
+    const open = () => {
+      const m = markerByEtab.get(e);
+      if (!m) return;
+      map.setView(m.getLatLng(), Math.max(map.getZoom(), 15));
+      m.openPopup();
+    };
+    li.addEventListener("click", open);
+    li.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") open();
+    });
+    ul.appendChild(li);
+  }
+}
+
+renderInsights([]);
 
 // ---------------------------------------------------------------------------
 // Démarrage : session existante ?

@@ -48,71 +48,113 @@
 
   <!-- Application principale -->
   <div id="app" class="app" hidden>
-    <header class="topbar">
-      <img src="logo.png" alt="" class="logo-sm" />
-      <span class="brand-sm">Douceville <span class="version">{{VERSION}}</span></span>
+    <nav class="rail" aria-label="Navigation">
+      <img src="logo.png" alt="Douceville" class="rail-logo" />
+      <span class="rail-btn active" title="Carte" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Zm0 0v14m6-12v14"/></svg>
+      </span>
       <div class="spacer"></div>
-      <span id="user-label" class="user-label"></span>
-      <button id="logout" class="btn-ghost">Déconnexion</button>
-    </header>
+      <button id="logout" class="rail-btn" title="Déconnexion" aria-label="Déconnexion">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>
+      </button>
+    </nav>
 
-    <div class="layout">
-      <aside class="panel">
-        <form id="search-form">
-          <label class="lbl" for="address">Adresse de départ</label>
-          <div class="ac-wrap">
-            <input id="address" type="text" placeholder="12 rue de la Paix, Paris" required
-              autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="both"
-              aria-controls="address-list" aria-expanded="false" />
-            <ul id="address-list" class="ac-list" role="listbox" hidden></ul>
+    <div class="main">
+      <header class="topbar">
+        <span class="brand-sm">Douceville <span class="version">{{VERSION}}</span></span>
+        <div class="search-pill ac-wrap">
+          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg>
+          <input id="address" form="search-form" type="text" placeholder="Adresse de départ — ex. 12 rue de la Paix, Paris" required
+            autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="both" aria-label="Adresse de départ"
+            aria-controls="address-list" aria-expanded="false" />
+          <ul id="address-list" class="ac-list" role="listbox" hidden></ul>
+        </div>
+        <div class="user-chip">
+          <span id="user-avatar" class="avatar" aria-hidden="true"></span>
+          <span id="user-label" class="user-label"></span>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="panel card">
+          <h2 class="panel-title">Couches</h2>
+          <div id="layers-slot" class="layers-slot"></div>
+
+          <hr class="sep" />
+
+          <h2 class="panel-title">Filtres</h2>
+          <form id="search-form">
+            <label class="lbl" for="time">Temps de trajet : <strong id="time-val">15</strong> min</label>
+            <input id="time" type="range" min="5" max="60" step="5" value="15" />
+
+            <label class="lbl" for="transp">Mode de transport</label>
+            <select id="transp">
+              <option value="driving-car">Voiture</option>
+              <option value="cycling-regular">Vélo</option>
+              <option value="foot-walking">À pied</option>
+            </select>
+
+            <fieldset class="filters">
+              <legend>Nature</legend>
+              <label><input type="checkbox" name="nature" value="Maternelle" /> Maternelle</label>
+              <label><input type="checkbox" name="nature" value="Elementaire" /> Élémentaire</label>
+              <label><input type="checkbox" name="nature" value="Collège" /> Collège</label>
+              <label><input type="checkbox" name="nature" value="Lycée" /> Lycée</label>
+            </fieldset>
+
+            <fieldset class="filters">
+              <legend>Secteur</legend>
+              <label><input type="checkbox" name="secteur" value="public" /> Public</label>
+              <label><input type="checkbox" name="secteur" value="privé" /> Privé</label>
+              <label><input type="checkbox" name="secteur" value="hors contrat" /> Hors contrat</label>
+            </fieldset>
+
+            <fieldset class="filters">
+              <legend>Taux de réussite (Admis / Présents)</legend>
+              <div class="dual-range">
+                <div class="dual-range-track"><div id="rate-fill" class="dual-range-fill"></div></div>
+                <input id="rate-min" type="range" min="0" max="100" step="1" value="0" aria-label="Taux minimum" />
+                <input id="rate-max" type="range" min="0" max="100" step="1" value="100" aria-label="Taux maximum" />
+              </div>
+              <div class="range-inputs">
+                <label>Min <input id="rate-min-txt" type="number" min="0" max="100" step="1" value="0" /> %</label>
+                <label>Max <input id="rate-max-txt" type="number" min="0" max="100" step="1" value="100" /> %</label>
+              </div>
+            </fieldset>
+
+            <button id="search-btn" type="submit" class="btn-primary">Rechercher</button>
+            <p id="search-status" class="status"></p>
+          </form>
+
+          <div id="results-summary" class="results-summary" hidden></div>
+        </aside>
+
+        <div class="map-wrap">
+          <main id="map" class="map"></main>
+        </div>
+
+        <aside class="insights">
+          <div class="tabs" role="tablist">
+            <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="overview">Aperçu</button>
+            <button type="button" class="tab" role="tab" aria-selected="false" data-tab="list">Établissements</button>
           </div>
 
-          <label class="lbl" for="time">Temps de trajet : <strong id="time-val">15</strong> min</label>
-          <input id="time" type="range" min="5" max="60" step="5" value="15" />
+          <section class="tab-pane" data-pane="overview" role="tabpanel">
+            <h3 class="section-title">Répartition par nature</h3>
+            <div id="nature-chart" class="card chart-card"></div>
 
-          <label class="lbl" for="transp">Mode de transport</label>
-          <select id="transp">
-            <option value="driving-car">Voiture</option>
-            <option value="cycling-regular">Vélo</option>
-            <option value="foot-walking">À pied</option>
-          </select>
+            <h3 class="section-title">Taux de réussite</h3>
+            <div id="rate-chart" class="card chart-card"></div>
 
-          <fieldset class="filters">
-            <legend>Nature</legend>
-            <label><input type="checkbox" name="nature" value="Maternelle" /> Maternelle</label>
-            <label><input type="checkbox" name="nature" value="Elementaire" /> Élémentaire</label>
-            <label><input type="checkbox" name="nature" value="Collège" /> Collège</label>
-            <label><input type="checkbox" name="nature" value="Lycée" /> Lycée</label>
-          </fieldset>
+            <h3 class="section-title">Meilleurs taux de réussite</h3>
+            <ul id="etab-top" class="etab-list"></ul>
+          </section>
 
-          <fieldset class="filters">
-            <legend>Secteur</legend>
-            <label><input type="checkbox" name="secteur" value="public" /> Public</label>
-            <label><input type="checkbox" name="secteur" value="privé" /> Privé</label>
-            <label><input type="checkbox" name="secteur" value="hors contrat" /> Hors contrat</label>
-          </fieldset>
-
-          <fieldset class="filters">
-            <legend>Taux de réussite (Admis / Présents)</legend>
-            <div class="dual-range">
-              <div class="dual-range-track"><div id="rate-fill" class="dual-range-fill"></div></div>
-              <input id="rate-min" type="range" min="0" max="100" step="1" value="0" aria-label="Taux minimum" />
-              <input id="rate-max" type="range" min="0" max="100" step="1" value="100" aria-label="Taux maximum" />
-            </div>
-            <div class="range-inputs">
-              <label>Min <input id="rate-min-txt" type="number" min="0" max="100" step="1" value="0" /> %</label>
-              <label>Max <input id="rate-max-txt" type="number" min="0" max="100" step="1" value="100" /> %</label>
-            </div>
-          </fieldset>
-
-          <button id="search-btn" type="submit" class="btn-primary">Rechercher</button>
-          <p id="search-status" class="status"></p>
-        </form>
-
-        <div id="results-summary" class="results-summary" hidden></div>
-      </aside>
-
-      <main id="map" class="map"></main>
+          <section class="tab-pane" data-pane="list" role="tabpanel" hidden>
+            <ul id="etab-list" class="etab-list"></ul>
+          </section>
+        </aside>
+      </div>
     </div>
   </div>
 
