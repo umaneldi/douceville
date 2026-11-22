@@ -503,20 +503,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .popup-table th { background: #f1f5f9; }
 .popup-scroll { max-height: 14rem; overflow-y: auto; }
 
-@media (max-width: 1180px) {
-  .layout { grid-template-columns: 270px minmax(0, 1fr); grid-template-rows: minmax(420px, 1fr) auto; }
-  .insights { grid-column: 1 / -1; overflow: visible; }
-  .main { overflow-y: auto; }
-}
-@media (max-width: 720px) {
-  .app { flex-direction: column; }
-  .rail { width: 100%; flex-direction: row; padding: 0.5rem 0.75rem; }
-  .rail-logo { margin: 0 0.6rem 0 0; }
-  .topbar { display: none; }
-  .layout { grid-template-columns: 1fr; grid-template-rows: auto 60vh auto; padding: 0 0.75rem 0.75rem; }
-  .panel { overflow: visible; }
-}
-
 /* Infobulle « indicateurs du score » dans le contrôle des couches */
 .info-tip {
   position: relative;
@@ -601,4 +587,88 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Responsive ---------- */
+.tabs { flex-wrap: wrap; }
+.info-tip .tip-body { max-width: calc(100vw - 2rem); }
+.popup-scroll { max-width: 70vw; overflow-x: auto; }
+
+/* Tablette : filtres | carte, panneau d'analyse en dessous. */
+@media (max-width: 1180px) {
+  .layout {
+    grid-template-columns: 270px minmax(0, 1fr);
+    grid-template-rows: minmax(420px, 70vh) auto;
+    grid-template-rows: minmax(420px, 70dvh) auto;
+  }
+  .insights { grid-column: 1 / -1; overflow: visible; }
+  .main { overflow-y: auto; }
+  .tab-pane[data-pane="overview"]:not([hidden]) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 1rem;
+  }
+  /* Titre + graphique par colonne ; la liste « meilleurs taux » sur toute la largeur. */
+  .tab-pane[data-pane="overview"] > :nth-child(1) { grid-area: 1 / 1; }
+  .tab-pane[data-pane="overview"] > :nth-child(2) { grid-area: 2 / 1; }
+  .tab-pane[data-pane="overview"] > :nth-child(3) { grid-area: 1 / 2; }
+  .tab-pane[data-pane="overview"] > :nth-child(4) { grid-area: 2 / 2; }
+  .tab-pane[data-pane="overview"] > :nth-child(n+5) { grid-column: 1 / -1; }
+}
+
+/* Téléphone : tout est empilé, carte en premier. */
+@media (max-width: 720px) {
+  .app { flex-direction: column; height: auto; min-height: 100%; }
+  .rail {
+    position: sticky;
+    top: 0;
+    z-index: 1100;
+    width: 100%;
+    flex-direction: row;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .rail-logo { margin: 0 0.6rem 0 0; }
+  .topbar { display: none; }
+  .main { overflow: visible; }
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 55vh auto auto;
+    grid-template-rows: 55dvh auto auto;
+    gap: 0.75rem;
+    padding: 0.75rem;
+  }
+  .map-wrap { order: -1; border-radius: 14px; scroll-margin-top: 4.5rem; }
+  .panel { overflow: visible; }
+  .tab-pane[data-pane="overview"]:not([hidden]) { display: block; }
+  .name-fields { flex-direction: column; }
+  /* Sous 16px, iOS zoome à la mise au point d'un champ. */
+  input[type="text"], input[type="email"], input[type="password"],
+  input[type="number"], select { font-size: 16px; }
+
+  /* Légendes compactes pour ne pas se chevaucher sur une petite carte. */
+  .map-legend { font-size: 0.7rem; padding: 0.35rem 0.5rem; max-width: 45vw; }
+  .map-legend .swatch { width: 11px; height: 11px; }
+  .immo-legend .legend-hint { display: none; }
+  .leaflet-control-container .leaflet-bottom .leaflet-control { margin-bottom: 6px; }
+}
+
+@media (max-width: 400px) {
+  .donut-wrap { flex-direction: column; align-items: stretch; }
+  .donut { align-self: center; }
+  .range-inputs { flex-direction: column; }
+}
+
+/* Écrans tactiles : cibles plus grandes. */
+@media (pointer: coarse) {
+  .dual-range { height: 32px; }
+  .dual-range input[type="range"]::-webkit-slider-thumb { width: 24px; height: 24px; }
+  .dual-range input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; }
+  .filters label { min-height: 40px; }
+  .layers-slot .leaflet-control-layers-overlays label { padding: 0.6rem 0; }
+  .origin-remove { min-width: 40px; min-height: 40px; }
+  .btn-link { min-height: 40px; }
+  .ac-list li { padding: 0.75rem; }
+  .info-tip { width: 20px; height: 20px; }
 }

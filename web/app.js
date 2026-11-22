@@ -180,6 +180,13 @@ function startApp(user) {
 function initMap() {
   map = L.map("map", { zoomControl: false }).setView([46.6, 2.5], 6); // France
   L.control.zoom({ position: "topright" }).addTo(map);
+  // La taille de la carte suit la grille (points de rupture, rotation) et pas
+  // seulement la fenêtre : on prévient Leaflet à chaque redimensionnement.
+  let resizeFrame = 0;
+  new ResizeObserver(() => {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = requestAnimationFrame(() => map.invalidateSize());
+  }).observe($(".map-wrap"));
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap",
@@ -1148,6 +1155,7 @@ function render(data) {
     status.classList.add("err");
   }
 
+  showMapOnNarrow();
   if (bounds.length) {
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
   } else if (zoneBounds.isValid()) {
@@ -1352,6 +1360,13 @@ function logementPopupHtml(p) {
 // ---------------------------------------------------------------------------
 let markerByEtab = new Map();
 
+// Sur téléphone, la carte, les filtres et la liste sont empilés : on ramène
+// la carte à l'écran quand une action la met à jour.
+const narrowQuery = window.matchMedia("(max-width: 720px)");
+function showMapOnNarrow() {
+  if (narrowQuery.matches) $(".map-wrap").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 document.querySelectorAll(".tabs .tab").forEach((tab) =>
   tab.addEventListener("click", () => {
     document.querySelectorAll(".tabs .tab").forEach((t) => {
@@ -1504,6 +1519,7 @@ function renderEtabList(ul, etabs, withRate) {
     const open = () => {
       const m = markerByEtab.get(e);
       if (!m) return;
+      showMapOnNarrow();
       map.setView(m.getLatLng(), Math.max(map.getZoom(), 15));
       m.openPopup();
     };
