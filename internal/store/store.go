@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -47,6 +48,10 @@ type Store interface {
 	// FindLogementsSociauxInZone renvoie les logements sociaux géolocalisés
 	// contenus dans le polygone WKT, regroupés par position.
 	FindLogementsSociauxInZone(ctx context.Context, polygonWKT string) ([]models.LogementSocialPosition, error)
+	// IntersectZones calcule l'intersection (surfacique) des polygones WKT
+	// donnés. Elle renvoie son WKT (sans SRID, utilisable par les méthodes
+	// Find*InZone), sa géométrie GeoJSON, et empty=true si elle est vide.
+	IntersectZones(ctx context.Context, polygonWKTs []string) (wkt string, geojson json.RawMessage, empty bool, err error)
 }
 
 // ErrEmailTaken est renvoyée par CreateUser quand l'email existe déjà.

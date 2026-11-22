@@ -84,15 +84,10 @@
 
           <h2 class="panel-title">Filtres</h2>
           <form id="search-form">
-            <label class="lbl" for="time">Temps de trajet : <strong id="time-val">15</strong> min</label>
-            <input id="time" type="range" min="5" max="60" step="5" value="15" />
-
-            <label class="lbl" for="transp">Mode de transport</label>
-            <select id="transp">
-              <option value="driving-car">Voiture</option>
-              <option value="cycling-regular">Vélo</option>
-              <option value="foot-walking">À pied</option>
-            </select>
+            <h3 class="lbl">Points de départ</h3>
+            <p class="hint">La recherche porte sur la zone accessible depuis tous les points.</p>
+            <div id="origins" class="origins"></div>
+            <button id="add-origin" type="button" class="btn-link">+ Ajouter un point de départ</button>
 
             <fieldset class="filters">
               <legend>Nature</legend>
@@ -157,6 +152,30 @@
       </div>
     </div>
   </div>
+
+  <!-- Ligne « point de départ » (le premier utilise l'adresse de la barre de recherche) -->
+  <template id="origin-tpl">
+    <div class="origin-row">
+      <div class="origin-head">
+        <span class="origin-dot" aria-hidden="true"></span>
+        <span class="origin-title"></span>
+        <button type="button" class="origin-remove" title="Retirer ce point de départ" aria-label="Retirer ce point de départ">×</button>
+      </div>
+      <div class="ac-wrap origin-address">
+        <input type="text" placeholder="Adresse" autocomplete="off" spellcheck="false"
+               role="combobox" aria-autocomplete="both" aria-expanded="false" aria-label="Adresse du point de départ" />
+        <ul class="ac-list" role="listbox" hidden></ul>
+      </div>
+      <label class="origin-time">Temps : <strong class="origin-time-val">15</strong> min
+        <input type="range" min="5" max="60" step="5" value="15" aria-label="Temps de trajet (min)" />
+      </label>
+      <select aria-label="Mode de transport">
+        <option value="driving-car">Voiture</option>
+        <option value="cycling-regular">Vélo</option>
+        <option value="foot-walking">À pied</option>
+      </select>
+    </div>
+  </template>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="

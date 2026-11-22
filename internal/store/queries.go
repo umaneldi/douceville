@@ -401,6 +401,34 @@ func (s *PgStore) FindLogementsSociauxInZone(ctx context.Context, polygonWKT str
 	return positions, rows.Err()
 }
 
+// IntersectZones implémente Store.IntersectZones. Les polygones sont rendus
+// valides (ST_MakeValid) puis intersectés successivement ; seules les parties
+// surfaciques sont conservées (des isochrones qui se touchent peuvent donner
+// des lignes ou des points).
+func (s *PgStore) IntersectZones(ctx context.Context, polygonWKTs []string) (string, json.RawMessage, bool, error) {
+	if len(polygonWKTs) == 0 {
+		return "", nil, true, errors.New("IntersectZones: no polygon")
+	}
+	expr := "ST_MakeValid(ST_GeomFromText($1))"
+	args := []any{polygonWKTs[0]}
+	for _, wkt := range polygonWKTs[1:] {
+		args = append(args, wkt)
+		expr = fmt.Sprintf("ST_Intersection(%s, ST_MakeValid(ST_GeomFromText($%d)))", expr, len(args))
+	}
+	q := fmt.Sprintf(`SELECT ST_IsEmpty(g), ST_AsText(g), ST_AsGeoJSON(g, 6)
+		FROM (SELECT ST_CollectionExtract(%s, 3) AS g) z`, expr)
+
+	var empty bool
+	var wkt, gj string
+	if err := s.pool.QueryRow(ctx, q, args...).Scan(&empty, &wkt, &gj); err != nil {
+		return "", nil, true, err
+	}
+	if empty {
+		return "", nil, true, nil
+	}
+	return wkt, json.RawMessage(gj), false, nil
+}
+
 func (s *PgStore) resultatsForUAI(ctx context.Context, uai string) ([]models.Resultat, error) {
 	const q = `SELECT idx, diplome, annee, presents, admis, mentions, etablissement_uai
 		FROM resultat WHERE etablissement_uai = $1 ORDER BY annee DESC, diplome`

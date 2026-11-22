@@ -566,3 +566,39 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .info-tip .tip-body p { margin: 0.3rem 0 0.4rem; color: var(--muted); }
 .info-tip .tip-weight { font-weight: 600; margin-top: 0.35rem; }
 .info-tip .tip-body ul { margin: 0.1rem 0 0; padding-left: 1rem; }
+
+/* ---------- Points de départ ---------- */
+.hint { margin: 0 0 0.5rem; font-size: 0.78rem; color: var(--muted); }
+.origins { display: flex; flex-direction: column; gap: 0.5rem; }
+.origin-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.origin-head { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; }
+.origin-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.origin-title { flex: 1; color: var(--text); }
+.origin-remove {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+.origin-remove:hover { color: var(--text); }
+.origin-time { display: block; font-size: 0.82rem; color: var(--muted); }
+.btn-link {
+  margin-top: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.btn-link:hover { text-decoration: underline; }

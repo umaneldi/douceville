@@ -31,6 +31,19 @@ type mockStore struct {
 	verified *models.DvUser
 	// revoked reçoit le jti passé à RevokeToken (si non nil).
 	revoked *string
+	// interEmpty est renvoyé par IntersectZones ; interCalls compte ses appels.
+	interEmpty bool
+	interCalls *int
+}
+
+func (m mockStore) IntersectZones(ctx context.Context, wkts []string) (string, json.RawMessage, bool, error) {
+	if m.interCalls != nil {
+		*m.interCalls++
+	}
+	if m.interEmpty {
+		return "", nil, true, m.err
+	}
+	return "MULTIPOLYGON(((1 2,3 4,5 6,1 2)))", json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`), false, m.err
 }
 
 func (m mockStore) CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
@@ -238,6 +251,112 @@ func TestEtablissementsInZone_MissingAdresse(t *testing.T) {
 	h := &Handlers{Store: mockStore{}, Isochron: mockIso{}, Geocoder: mockGeo{}}
 
 	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(`{"dist":600}`))
+	rr := httptest.NewRecorder()
+	h.etablissementsInZone(rr, req)
+
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", rr.Code)
+	}
+}
+
+func TestEtablissementsInZone_MultipleOrigines(t *testing.T) {
+	calls := 0
+	h := &Handlers{
+		Store:    mockStore{zone: []models.Etablissement{{UAI: "A"}}, interCalls: &calls},
+		Isochron: mockIso{iso: models.Isochrone{Transp: "foot-walking", Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
+		Geocoder: mockGeo{},
+	}
+	body := `{"origines":[{"adresse":"a","dist":600,"transp":"driving-car"},{"adresse":"b","dist":900,"transp":"foot-walking"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.etablissementsInZone(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rr.Code, rr.Body.String())
+	}
+	var got models.ListeEtablissementsAvecIsochrone
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("IntersectZones called %d times, want 1", calls)
+	}
+	if len(got.Isochrones) != 2 {
+		t.Errorf("got %d isochrones, want 2", len(got.Isochrones))
+	}
+	if len(got.Zone) == 0 || string(got.Zone) == "null" {
+		t.Errorf("zone = %s, want intersection geometry", got.Zone)
+	}
+	if len(got.Etablissements) != 1 {
+		t.Errorf("got %d etablissements, want 1", len(got.Etablissements))
+	}
+}
+
+// Un seul point de départ : pas de calcul d'intersection, zone nulle.
+func TestEtablissementsInZone_SingleOrigineNoIntersection(t *testing.T) {
+	calls := 0
+	h := &Handlers{
+		Store:    mockStore{interCalls: &calls},
+		Isochron: mockIso{iso: models.Isochrone{Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
+		Geocoder: mockGeo{},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(`{"origines":[{"adresse":"a","dist":600}]}`))
+	rr := httptest.NewRecorder()
+	h.etablissementsInZone(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if calls != 0 {
+		t.Errorf("IntersectZones called %d times, want 0", calls)
+	}
+	if !strings.Contains(rr.Body.String(), `"zone":null`) {
+		t.Errorf("body = %s, want \"zone\":null", rr.Body.String())
+	}
+}
+
+// Intersection vide : 200 avec des listes vides, sans interroger les zones.
+func TestEtablissementsInZone_EmptyIntersection(t *testing.T) {
+	h := &Handlers{
+		Store:    mockStore{zone: []models.Etablissement{{UAI: "A"}}, interEmpty: true},
+		Isochron: mockIso{iso: models.Isochrone{Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
+		Geocoder: mockGeo{},
+	}
+	body := `{"origines":[{"adresse":"a","dist":600},{"adresse":"b","dist":600}]}`
+	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.etablissementsInZone(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	for _, want := range []string{`"etablissements":[]`, `"communes":[]`, `"logements_sociaux":[]`, `"zone":null`} {
+		if !strings.Contains(rr.Body.String(), want) {
+			t.Errorf("body = %s, want %s", rr.Body.String(), want)
+		}
+	}
+}
+
+func TestEtablissementsInZone_OrigineMissingAdresse(t *testing.T) {
+	h := &Handlers{Store: mockStore{}, Isochron: mockIso{}, Geocoder: mockGeo{}}
+	body := `{"origines":[{"adresse":"a","dist":600},{"adresse":"  ","dist":600}]}`
+	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.etablissementsInZone(rr, req)
+
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", rr.Code)
+	}
+}
+
+func TestEtablissementsInZone_TooManyOrigines(t *testing.T) {
+	h := &Handlers{Store: mockStore{}, Isochron: mockIso{}, Geocoder: mockGeo{}}
+	o := make([]string, maxOrigines+1)
+	for i := range o {
+		o[i] = `{"adresse":"a","dist":600}`
+	}
+	body := `{"origines":[` + strings.Join(o, ",") + `]}`
+	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
 	rr := httptest.NewRecorder()
 	h.etablissementsInZone(rr, req)
 

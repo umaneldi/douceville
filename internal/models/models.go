@@ -130,6 +130,18 @@ type QueryParameters struct {
 	Adresse string   `json:"adresse"`
 	Dist    float64  `json:"dist"`
 	Transp  string   `json:"transp"`
+	// Origines sont les points de départ de la recherche : la zone est
+	// l'intersection de leurs isochrones. Si vide, Adresse/Dist/Transp
+	// forment l'unique point de départ.
+	Origines []Origine `json:"origines"`
+}
+
+// Origine est un point de départ : une adresse, un temps de trajet (en
+// secondes) et un mode de transport.
+type Origine struct {
+	Adresse string  `json:"adresse"`
+	Dist    float64 `json:"dist"`
+	Transp  string  `json:"transp"`
 }
 
 // CommuneSecurite est une commune touchée par l'isochrone, avec son score de
@@ -157,10 +169,16 @@ type Fiscalite struct {
 
 // ListeEtablissementsAvecIsochrone est la réponse de POST /etablissements.
 type ListeEtablissementsAvecIsochrone struct {
-	Etablissements []Etablissement   `json:"etablissements"`
-	Isochrone      Isochrone         `json:"isochrone"`
-	Communes       []CommuneSecurite `json:"communes"`
-	Immobilier     ImmobilierZone    `json:"immobilier"`
+	Etablissements []Etablissement `json:"etablissements"`
+	// Isochrone est l'isochrone du premier point de départ (compatibilité).
+	Isochrone Isochrone `json:"isochrone"`
+	// Isochrones contient l'isochrone de chaque point de départ, dans l'ordre.
+	Isochrones []Isochrone `json:"isochrones"`
+	// Zone est la géométrie GeoJSON de l'intersection des isochrones quand il
+	// y a plusieurs points de départ (null sinon, ou si l'intersection est vide).
+	Zone       json.RawMessage   `json:"zone"`
+	Communes   []CommuneSecurite `json:"communes"`
+	Immobilier ImmobilierZone    `json:"immobilier"`
 	// LogementsSociaux sont les positions (bâtiments) de logements sociaux
 	// RPLS contenues dans l'isochrone.
 	LogementsSociaux []LogementSocialPosition `json:"logements_sociaux"`

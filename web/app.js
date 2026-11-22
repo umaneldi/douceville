@@ -709,9 +709,59 @@ function renderFiscalite(communes) {
   restyleFiscalite();
 }
 
-$("#time").addEventListener("input", (e) => {
-  $("#time-val").textContent = e.target.value;
-});
+// ---------------------------------------------------------------------------
+// Points de départ : la zone de recherche est l'intersection de leurs
+// isochrones. Le premier utilise l'adresse de la barre de recherche.
+// ---------------------------------------------------------------------------
+const ORIGIN_COLORS = ["#a855f7", "#f97316", "#14b8a6", "#ec4899", "#eab308", "#3b82f6"];
+const MAX_ORIGINS = 10; // même limite que le serveur
+
+function originColor(i) {
+  return ORIGIN_COLORS[i % ORIGIN_COLORS.length];
+}
+
+// Renumérote les lignes (titre, couleur) après un ajout ou une suppression.
+function refreshOrigins() {
+  const rows = document.querySelectorAll("#origins .origin-row");
+  rows.forEach((row, i) => {
+    row.querySelector(".origin-dot").style.background = originColor(i);
+    row.querySelector(".origin-title").textContent =
+      i === 0 ? "Départ 1 (barre de recherche)" : `Départ ${i + 1}`;
+  });
+  $("#add-origin").hidden = rows.length >= MAX_ORIGINS;
+}
+
+function addOrigin(first = false) {
+  const row = $("#origin-tpl").content.firstElementChild.cloneNode(true);
+  const range = row.querySelector('input[type="range"]');
+  range.addEventListener("input", () => {
+    row.querySelector(".origin-time-val").textContent = range.value;
+  });
+  if (first) {
+    row.querySelector(".origin-address").remove();
+    row.querySelector(".origin-remove").remove();
+  } else {
+    row.querySelector(".origin-remove").addEventListener("click", () => {
+      row.remove();
+      refreshOrigins();
+    });
+    setupAddressAutocomplete(row.querySelector(".origin-address input"), row.querySelector(".origin-address .ac-list"));
+  }
+  $("#origins").appendChild(row);
+  refreshOrigins();
+  if (!first) row.querySelector(".origin-address input").focus();
+}
+
+// Liste des points de départ saisis : [{adresse, dist, transp}, ...].
+function collectOrigins() {
+  return Array.from(document.querySelectorAll("#origins .origin-row")).map((row, i) => ({
+    adresse: (i === 0 ? $("#address") : row.querySelector(".origin-address input")).value.trim(),
+    dist: parseInt(row.querySelector('input[type="range"]').value, 10) * 60, // minutes → secondes
+    transp: row.querySelector("select").value,
+  }));
+}
+
+$("#add-origin").addEventListener("click", () => addOrigin());
 
 $("#logout").addEventListener("click", async () => {
   // Révoque le token côté serveur ; on se déconnecte localement quoi qu'il arrive.
@@ -747,13 +797,20 @@ $("#search-form").addEventListener("submit", async (e) => {
   const status = $("#search-status");
   const btn = $("#search-btn");
   status.classList.remove("err");
+
+  const origines = collectOrigins();
+  const missing = origines.findIndex((o) => !o.adresse);
+  if (missing >= 0) {
+    status.textContent = `Adresse manquante pour le départ ${missing + 1}.`;
+    status.classList.add("err");
+    return;
+  }
+
   status.textContent = "Recherche en cours…";
   btn.disabled = true;
 
   const body = {
-    adresse: $("#address").value.trim(),
-    dist: parseInt($("#time").value, 10) * 60, // minutes → secondes
-    transp: $("#transp").value,
+    origines,
     nature: checkedValues("nature"),
     secteur: checkedValues("secteur"),
   };
@@ -775,9 +832,10 @@ $("#search-form").addEventListener("submit", async (e) => {
 // ---------------------------------------------------------------------------
 // Autocomplétion de l'adresse de départ
 // ---------------------------------------------------------------------------
-(function setupAddressAutocomplete() {
-  const input = $("#address");
-  const list = $("#address-list");
+let acSeq = 0; // préfixe unique des identifiants d'options par liste
+
+function setupAddressAutocomplete(input, list) {
+  const optPrefix = `ac${++acSeq}-opt-`;
   const MIN_CHARS = 3;
   const cache = new Map(); // requête (minuscules) → suggestions
   let items = []; // suggestions affichées
@@ -841,7 +899,7 @@ $("#search-form").addEventListener("submit", async (e) => {
         const html = label.toLowerCase().startsWith(q)
           ? "<mark>" + escapeHTML(label.slice(0, q.length)) + "</mark>" + escapeHTML(label.slice(q.length))
           : escapeHTML(label);
-        return `<li id="address-opt-${i}" role="option" aria-selected="false">${html}</li>`;
+        return `<li id="${optPrefix}${i}" role="option" aria-selected="false">${html}</li>`;
       })
       .join("");
     list.hidden = false;
@@ -959,7 +1017,10 @@ $("#search-form").addEventListener("submit", async (e) => {
   });
 
   $("#search-form").addEventListener("submit", close);
-})();
+}
+
+setupAddressAutocomplete($("#address"), $("#address-list"));
+addOrigin(true);
 
 function render(data) {
   isoLayer.clearLayers();
@@ -969,37 +1030,55 @@ function render(data) {
   renderFiscalite(data.communes);
   renderLogements(data.logements_sociaux || []);
 
-  // Isochrone : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
-  const iso = data.isochrone;
-  if (iso && Array.isArray(iso.geometry) && iso.geometry.length) {
+  // Isochrones : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
+  const isos = Array.isArray(data.isochrones) && data.isochrones.length
+    ? data.isochrones
+    : data.isochrone ? [data.isochrone] : [];
+  const multi = isos.length > 1;
+  const zoneBounds = L.latLngBounds([]);
+  isos.forEach((iso, i) => {
+    if (!Array.isArray(iso.geometry) || !iso.geometry.length) return;
     const ring = iso.geometry.map(([lon, lat]) => [lat, lon]);
-    // Contour sombre sans remplissage : lisible par-dessus la choroplèthe bleue.
-    const poly = L.polygon(ring, {
-      color: "#0f172a",
-      weight: 2.5,
-      fill: false,
-      interactive: false,
-    });
+    // Une seule isochrone : contour sombre sans remplissage, lisible par-dessus
+    // la choroplèthe. Plusieurs : contours fins pointillés à la couleur du départ.
+    const poly = L.polygon(ring, multi
+      ? { color: originColor(i), weight: 1.5, dashArray: "6 5", fill: false, interactive: false }
+      : { color: "#0f172a", weight: 2.5, fill: false, interactive: false });
     isoLayer.addLayer(poly);
+    zoneBounds.extend(poly.getBounds());
     if (iso.lonlat) {
       L.circleMarker([iso.lonlat[1], iso.lonlat[0]], {
         radius: 7,
-        color: "#a855f7",
-        fillColor: "#a855f7",
+        color: originColor(i),
+        fillColor: originColor(i),
         fillOpacity: 0.9,
       })
-        .bindPopup("Point de départ")
+        .bindPopup(multi ? `Point de départ ${i + 1}` : "Point de départ")
         .addTo(isoLayer);
     }
+  });
+
+  // Intersection des isochrones : c'est la zone de recherche.
+  if (data.zone) {
+    L.geoJSON(data.zone, {
+      style: { color: "#0f172a", weight: 2.5, fillColor: "#ffffff", fillOpacity: 0.08 },
+      interactive: false,
+    }).addTo(isoLayer);
   }
 
   lastData = data;
   const bounds = renderMarkers();
 
+  if (multi && !data.zone) {
+    const status = $("#search-status");
+    status.textContent = "Aucune zone commune à tous les points de départ.";
+    status.classList.add("err");
+  }
+
   if (bounds.length) {
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
-  } else if (iso && iso.lonlat) {
-    map.setView([iso.lonlat[1], iso.lonlat[0]], 12);
+  } else if (zoneBounds.isValid()) {
+    map.fitBounds(zoneBounds, { padding: [40, 40], maxZoom: 13 });
   }
 }
 
