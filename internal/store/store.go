@@ -52,6 +52,9 @@ type Store interface {
 	// donnés. Elle renvoie son WKT (sans SRID, utilisable par les méthodes
 	// Find*InZone), sa géométrie GeoJSON, et empty=true si elle est vide.
 	IntersectZones(ctx context.Context, polygonWKTs []string) (wkt string, geojson json.RawMessage, empty bool, err error)
+	// PointLevels renvoie, pour chaque point [lon, lat], l'indice du premier
+	// polygone WKT de levelWKTs qui le contient (-1 si aucun).
+	PointLevels(ctx context.Context, lonlats [][2]float64, levelWKTs []string) ([]int, error)
 }
 
 // ErrEmailTaken est renvoyée par CreateUser quand l'email existe déjà.

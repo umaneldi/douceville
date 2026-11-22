@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,6 +45,21 @@ func (m mockStore) IntersectZones(ctx context.Context, wkts []string) (string, j
 		return "", nil, true, m.err
 	}
 	return "MULTIPOLYGON(((1 2,3 4,5 6,1 2)))", json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`), false, m.err
+}
+
+// PointLevels place tous les points dans le premier niveau.
+func (m mockStore) PointLevels(ctx context.Context, lonlats [][2]float64, wkts []string) ([]int, error) {
+	return make([]int, len(lonlats)), m.err
+}
+
+// isoWithLevels renvoie une isochrone factice aux niveaux dists (secondes).
+func isoWithLevels(dists ...float64) models.Isochrone {
+	ring := [][2]float64{{1, 2}, {3, 4}, {5, 6}}
+	iso := models.Isochrone{Dist: dists[len(dists)-1], Geometry: ring}
+	for _, d := range dists {
+		iso.Levels = append(iso.Levels, models.IsoLevel{Dist: d, Geometry: ring})
+	}
+	return iso
 }
 
 func (m mockStore) CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
@@ -95,7 +111,7 @@ func (m mockStore) FindLogementsSociauxInZone(ctx context.Context, wkt string) (
 
 type mockIso struct{ iso models.Isochrone }
 
-func (m mockIso) CalcIsochrone(ctx context.Context, lonlat [2]float64, dist float64, transp string) (models.Isochrone, error) {
+func (m mockIso) CalcIsochrone(ctx context.Context, lonlat [2]float64, dist, interval float64, transp string) (models.Isochrone, error) {
 	return m.iso, nil
 }
 
@@ -262,8 +278,12 @@ func TestEtablissementsInZone_MissingAdresse(t *testing.T) {
 func TestEtablissementsInZone_MultipleOrigines(t *testing.T) {
 	calls := 0
 	h := &Handlers{
-		Store:    mockStore{zone: []models.Etablissement{{UAI: "A"}}, interCalls: &calls},
-		Isochron: mockIso{iso: models.Isochrone{Transp: "foot-walking", Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
+		Store: mockStore{
+			zone:       []models.Etablissement{{UAI: "A", Position: json.RawMessage(`{"type":"Point","coordinates":[1.4,43.6]}`)}},
+			logements:  []models.LogementSocialPosition{{Lon: 1.4, Lat: 43.6, NbLogements: 1}},
+			interCalls: &calls,
+		},
+		Isochron: mockIso{iso: isoWithLevels(300, 600, 900)},
 		Geocoder: mockGeo{},
 	}
 	body := `{"origines":[{"adresse":"a","dist":600,"transp":"driving-car"},{"adresse":"b","dist":900,"transp":"foot-walking"}]}`
@@ -278,8 +298,11 @@ func TestEtablissementsInZone_MultipleOrigines(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if calls != 1 {
-		t.Errorf("IntersectZones called %d times, want 1", calls)
+	if calls != 3 {
+		t.Errorf("IntersectZones called %d times, want 3 (one per level)", calls)
+	}
+	if len(got.ZoneLevels) != 3 || got.ZoneLevels[0].Dist != 300 || got.ZoneLevels[2].Dist != 900 {
+		t.Errorf("zone_levels = %+v, want levels 300, 600, 900", got.ZoneLevels)
 	}
 	if len(got.Isochrones) != 2 {
 		t.Errorf("got %d isochrones, want 2", len(got.Isochrones))
@@ -287,17 +310,19 @@ func TestEtablissementsInZone_MultipleOrigines(t *testing.T) {
 	if len(got.Zone) == 0 || string(got.Zone) == "null" {
 		t.Errorf("zone = %s, want intersection geometry", got.Zone)
 	}
-	if len(got.Etablissements) != 1 {
-		t.Errorf("got %d etablissements, want 1", len(got.Etablissements))
+	if len(got.Etablissements) != 1 || got.Etablissements[0].Niveau == nil || *got.Etablissements[0].Niveau != 300 {
+		t.Errorf("etablissements = %+v, want 1 with niveau 300", got.Etablissements)
+	}
+	if len(got.LogementsSociaux) != 1 || got.LogementsSociaux[0].Niveau == nil || *got.LogementsSociaux[0].Niveau != 300 {
+		t.Errorf("logements_sociaux = %+v, want 1 with niveau 300", got.LogementsSociaux)
 	}
 }
 
-// Un seul point de départ : pas de calcul d'intersection, zone nulle.
-func TestEtablissementsInZone_SingleOrigineNoIntersection(t *testing.T) {
-	calls := 0
+// Un seul point de départ : ses niveaux forment ceux de la zone.
+func TestEtablissementsInZone_SingleOrigineLevels(t *testing.T) {
 	h := &Handlers{
-		Store:    mockStore{interCalls: &calls},
-		Isochron: mockIso{iso: models.Isochrone{Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
+		Store:    mockStore{},
+		Isochron: mockIso{iso: isoWithLevels(300, 600)},
 		Geocoder: mockGeo{},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(`{"origines":[{"adresse":"a","dist":600}]}`))
@@ -307,11 +332,46 @@ func TestEtablissementsInZone_SingleOrigineNoIntersection(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	if calls != 0 {
-		t.Errorf("IntersectZones called %d times, want 0", calls)
+	var got models.ListeEtablissementsAvecIsochrone
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	if !strings.Contains(rr.Body.String(), `"zone":null`) {
-		t.Errorf("body = %s, want \"zone\":null", rr.Body.String())
+	if len(got.Zone) == 0 || string(got.Zone) == "null" {
+		t.Errorf("zone = %s, want geometry", got.Zone)
+	}
+	if len(got.ZoneLevels) != 2 || got.ZoneLevels[1].Dist != 600 {
+		t.Errorf("zone_levels = %+v, want levels 300, 600", got.ZoneLevels)
+	}
+}
+
+func TestZoneLevelWKTs(t *testing.T) {
+	// A : 5/10/15 min ; B : 10/20 min (pas de niveau 5 min).
+	a := isoWithLevels(300, 600, 900)
+	b := isoWithLevels(600, 1200)
+	b.Levels[1].Geometry = [][2]float64{{7, 8}, {9, 10}, {11, 12}}
+
+	levels := zoneLevelWKTs([]models.Isochrone{a, b})
+	var dists []float64
+	for _, lv := range levels {
+		dists = append(dists, lv.Dist)
+		if len(lv.WKTs) != 2 {
+			t.Errorf("level %v has %d WKTs, want 2", lv.Dist, len(lv.WKTs))
+		}
+	}
+	if fmt.Sprint(dists) != "[600 900 1200]" {
+		t.Fatalf("dists = %v, want [600 900 1200] (300 skipped: B has no level <= 300)", dists)
+	}
+	// À 15 min, B contribue son niveau 10 min ; à 20 min, A contribue son max (15 min).
+	if levels[1].WKTs[1] != geo.RingWKT(b.Levels[0].Geometry) {
+		t.Errorf("level 900: B WKT = %s, want its 600 level", levels[1].WKTs[1])
+	}
+	if levels[2].WKTs[1] != geo.RingWKT(b.Levels[1].Geometry) || levels[2].WKTs[0] != geo.RingWKT(a.Levels[2].Geometry) {
+		t.Errorf("level 1200 = %v, want A max + B max", levels[2].WKTs)
+	}
+
+	// Isochrone sans niveaux : un seul niveau, son temps maximal.
+	if got := zoneLevelWKTs([]models.Isochrone{{Dist: 600, Geometry: a.Geometry}}); len(got) != 1 || got[0].Dist != 600 {
+		t.Errorf("no levels: got %+v, want one level 600", got)
 	}
 }
 

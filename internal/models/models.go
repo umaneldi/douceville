@@ -109,15 +109,35 @@ type Etablissement struct {
 	Ouverture   *time.Time      `json:"ouverture"`
 	Nature      string          `json:"nature"`
 	Resultats   []Resultat      `json:"resultats"`
+	// Niveau est le plus petit niveau de temps (en secondes) de la zone de
+	// recherche contenant l'établissement (null hors recherche par zone).
+	Niveau *float64 `json:"niveau,omitempty"`
 }
 
 // Isochrone décrit une zone d'accessibilité calculée par OpenRouteService.
-// geometry est l'anneau du polygone, chaque point étant [lon, lat].
+// geometry est l'anneau du polygone du temps maximal (dist), chaque point
+// étant [lon, lat] ; levels contient les isochrones emboîtées (par temps
+// croissant, la dernière étant celle de dist).
 type Isochrone struct {
 	LonLat   [2]float64   `json:"lonlat"`
 	Dist     float64      `json:"dist"`
 	Transp   string       `json:"transp"`
 	Geometry [][2]float64 `json:"geometry"`
+	Levels   []IsoLevel   `json:"levels"`
+}
+
+// IsoLevel est une isochrone emboîtée : temps de trajet (secondes) et anneau.
+type IsoLevel struct {
+	Dist     float64      `json:"dist"`
+	Geometry [][2]float64 `json:"geometry"`
+}
+
+// ZoneLevel est un niveau de la zone de recherche : intersection des
+// isochrones de tous les points de départ pour un temps de trajet (secondes),
+// en GeoJSON.
+type ZoneLevel struct {
+	Dist     float64         `json:"dist"`
+	Geometry json.RawMessage `json:"geometry"`
 }
 
 // QueryParameters est le corps de POST /etablissements.
@@ -174,14 +194,17 @@ type ListeEtablissementsAvecIsochrone struct {
 	Isochrone Isochrone `json:"isochrone"`
 	// Isochrones contient l'isochrone de chaque point de départ, dans l'ordre.
 	Isochrones []Isochrone `json:"isochrones"`
-	// Zone est la géométrie GeoJSON de l'intersection des isochrones quand il
-	// y a plusieurs points de départ (null sinon, ou si l'intersection est vide).
+	// Zone est la géométrie GeoJSON de la zone de recherche (intersection des
+	// isochrones de temps maximal), null si elle est vide.
 	Zone       json.RawMessage   `json:"zone"`
 	Communes   []CommuneSecurite `json:"communes"`
 	Immobilier ImmobilierZone    `json:"immobilier"`
 	// LogementsSociaux sont les positions (bâtiments) de logements sociaux
 	// RPLS contenues dans l'isochrone.
 	LogementsSociaux []LogementSocialPosition `json:"logements_sociaux"`
+	// ZoneLevels sont les niveaux emboîtés de la zone, par temps croissant ;
+	// le dernier est la zone elle-même.
+	ZoneLevels []ZoneLevel `json:"zone_levels"`
 }
 
 // LogementSocialGroupe regroupe les logements sociaux identiques (mêmes
@@ -202,6 +225,9 @@ type LogementSocialPosition struct {
 	Lat         float64                `json:"lat"`
 	NbLogements int                    `json:"nb_logements"`
 	Logements   []LogementSocialGroupe `json:"logements"`
+	// Niveau est le plus petit niveau de temps (secondes) de la zone contenant
+	// la position.
+	Niveau *float64 `json:"niveau,omitempty"`
 }
 
 // PrixM2 est le prix au m² médian (valeur_fonciere / surface_reelle_bati) des

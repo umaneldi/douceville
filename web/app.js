@@ -12,6 +12,7 @@ const PENDING_MSG =
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
 let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer, logementLayer, logementRenderer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
+let levelLegend = null; // légende des niveaux de temps de la zone
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -233,6 +234,7 @@ function initMap() {
     }),
   );
   securityLegend().addTo(map);
+  levelLegend = levelLegendControl().addTo(map);
   immoLegend().addTo(map);
   fiscLegend().addTo(map);
   map.on("overlayadd overlayremove", (e) => {
@@ -357,6 +359,58 @@ function communeTooltip(p) {
     `<br><span class="muted">plus sûre que ${p.score} % des communes` +
     `<br>${p.annee}, ${p.nb_indicateurs}/15 indicateurs diffusés</span>`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Niveaux de temps de trajet de la zone de recherche
+// ---------------------------------------------------------------------------
+const ZONE_COLOR = "#0f172a";
+const ZONE_ALPHA = 0.45; // opacité cumulée du niveau le plus intérieur
+
+// « ≤ N min » pour un niveau exprimé en secondes.
+function levelLabel(dist) {
+  return `≤ ${Math.round(dist / 60)} min`;
+}
+
+function levelLegendControl() {
+  const legend = L.control({ position: "bottomleft" });
+  legend.onAdd = () => {
+    const div = L.DomUtil.create("div", "map-legend level-legend");
+    div.hidden = true;
+    return div;
+  };
+  return legend;
+}
+
+// Met à jour la légende : le niveau i (par temps croissant) est recouvert par
+// les bandes de tous les niveaux >= i, d'où son opacité cumulée.
+function updateLevelLegend(levels, multi) {
+  if (!levelLegend) return;
+  const div = levelLegend.getContainer();
+  if (!levels || !levels.length) {
+    div.hidden = true;
+    div.innerHTML = "";
+    return;
+  }
+  const alpha = ZONE_ALPHA / levels.length;
+  const rows = levels
+    .map((lv, i) => {
+      const a = (alpha * (levels.length - i)).toFixed(3);
+      return `<li><span class="swatch" style="background:linear-gradient(rgba(15,23,42,${a}),rgba(15,23,42,${a})),#f1f5f9"></span>${levelLabel(lv.dist)}</li>`;
+    })
+    .join("");
+  div.innerHTML =
+    `<div class="legend-title">Temps de trajet${multi ? "<br/><small>depuis tous les départs</small>" : ""}</div>` +
+    `<ul>${rows}</ul>`;
+  div.hidden = false;
+}
+
+// Ligne de popup du niveau de temps d'un résultat.
+function levelPopupLine(niveau) {
+  if (niveau == null) return "";
+  const multi = lastData && (lastData.isochrones || []).length > 1;
+  return `<div class="popup-meta">Temps de trajet : <strong>${levelLabel(niveau)}</strong>` +
+    `${multi ? " depuis tous les départs" : ""}</div>`;
 }
 
 function securityLegend() {
@@ -725,37 +779,34 @@ function refreshOrigins() {
   const rows = document.querySelectorAll("#origins .origin-row");
   rows.forEach((row, i) => {
     row.querySelector(".origin-dot").style.background = originColor(i);
-    row.querySelector(".origin-title").textContent =
-      i === 0 ? "Départ 1 (barre de recherche)" : `Départ ${i + 1}`;
+    row.querySelector(".origin-title").textContent = `Départ ${i + 1}`;
+    // Au moins un point de départ est requis : pas de suppression s'il est seul.
+    row.querySelector(".origin-remove").hidden = rows.length === 1;
   });
   $("#add-origin").hidden = rows.length >= MAX_ORIGINS;
 }
 
-function addOrigin(first = false) {
+function addOrigin({ focus = true } = {}) {
   const row = $("#origin-tpl").content.firstElementChild.cloneNode(true);
   const range = row.querySelector('input[type="range"]');
   range.addEventListener("input", () => {
     row.querySelector(".origin-time-val").textContent = range.value;
   });
-  if (first) {
-    row.querySelector(".origin-address").remove();
-    row.querySelector(".origin-remove").remove();
-  } else {
-    row.querySelector(".origin-remove").addEventListener("click", () => {
-      row.remove();
-      refreshOrigins();
-    });
-    setupAddressAutocomplete(row.querySelector(".origin-address input"), row.querySelector(".origin-address .ac-list"));
-  }
+  row.querySelector(".origin-remove").addEventListener("click", () => {
+    row.remove();
+    refreshOrigins();
+  });
+  const input = row.querySelector(".origin-address input");
+  setupAddressAutocomplete(input, row.querySelector(".origin-address .ac-list"));
   $("#origins").appendChild(row);
   refreshOrigins();
-  if (!first) row.querySelector(".origin-address input").focus();
+  if (focus) input.focus();
 }
 
 // Liste des points de départ saisis : [{adresse, dist, transp}, ...].
 function collectOrigins() {
-  return Array.from(document.querySelectorAll("#origins .origin-row")).map((row, i) => ({
-    adresse: (i === 0 ? $("#address") : row.querySelector(".origin-address input")).value.trim(),
+  return Array.from(document.querySelectorAll("#origins .origin-row")).map((row) => ({
+    adresse: row.querySelector(".origin-address input").value.trim(),
     dist: parseInt(row.querySelector('input[type="range"]').value, 10) * 60, // minutes → secondes
     transp: row.querySelector("select").value,
   }));
@@ -777,6 +828,7 @@ $("#logout").addEventListener("click", async () => {
   if (immoLayer) renderImmobilier(null, []);
   if (fiscLayer) renderFiscalite([]);
   if (logementLayer) renderLogements([]);
+  updateLevelLegend([]);
   lastData = null;
   renderInsights([]);
   $("#results-summary").hidden = true;
@@ -1019,8 +1071,7 @@ function setupAddressAutocomplete(input, list) {
   $("#search-form").addEventListener("submit", close);
 }
 
-setupAddressAutocomplete($("#address"), $("#address-list"));
-addOrigin(true);
+addOrigin({ focus: false });
 
 function render(data) {
   isoLayer.clearLayers();
@@ -1037,15 +1088,23 @@ function render(data) {
   const multi = isos.length > 1;
   const zoneBounds = L.latLngBounds([]);
   isos.forEach((iso, i) => {
-    if (!Array.isArray(iso.geometry) || !iso.geometry.length) return;
-    const ring = iso.geometry.map(([lon, lat]) => [lat, lon]);
-    // Une seule isochrone : contour sombre sans remplissage, lisible par-dessus
-    // la choroplèthe. Plusieurs : contours fins pointillés à la couleur du départ.
-    const poly = L.polygon(ring, multi
-      ? { color: originColor(i), weight: 1.5, dashArray: "6 5", fill: false, interactive: false }
-      : { color: "#0f172a", weight: 2.5, fill: false, interactive: false });
-    isoLayer.addLayer(poly);
-    zoneBounds.extend(poly.getBounds());
+    // Plusieurs départs : isochrones emboîtées de chaque départ en pointillés
+    // à sa couleur (avec un seul départ, elles se confondent avec la zone).
+    const levels = iso.levels && iso.levels.length ? iso.levels : [{ dist: iso.dist, geometry: iso.geometry }];
+    levels.forEach((lv, k) => {
+      if (!Array.isArray(lv.geometry) || !lv.geometry.length) return;
+      const outer = k === levels.length - 1;
+      const poly = L.polygon(lv.geometry.map(([lon, lat]) => [lat, lon]), {
+        color: originColor(i),
+        weight: outer ? 2.2 : 1.4,
+        opacity: outer ? 1 : 0.75,
+        dashArray: "6 5",
+        fill: false,
+        interactive: false,
+      });
+      if (multi) isoLayer.addLayer(poly);
+      zoneBounds.extend(poly.getBounds());
+    });
     if (iso.lonlat) {
       L.circleMarker([iso.lonlat[1], iso.lonlat[0]], {
         radius: 7,
@@ -1058,13 +1117,27 @@ function render(data) {
     }
   });
 
-  // Intersection des isochrones : c'est la zone de recherche.
-  if (data.zone) {
-    L.geoJSON(data.zone, {
-      style: { color: "#0f172a", weight: 2.5, fillColor: "#ffffff", fillOpacity: 0.08 },
-      interactive: false,
-    }).addTo(isoLayer);
-  }
+  // Niveaux de la zone de recherche (intersection des isochrones par temps) :
+  // bandes superposées de l'extérieur vers l'intérieur, plus sombres au centre.
+  const zoneLevels = data.zone_levels || [];
+  const alpha = zoneLevels.length ? ZONE_ALPHA / zoneLevels.length : 0;
+  zoneLevels
+    .slice()
+    .reverse()
+    .forEach((lv, k) => {
+      const outer = k === 0;
+      L.geoJSON(lv.geometry, {
+        style: {
+          color: ZONE_COLOR,
+          weight: outer ? 2.5 : 1,
+          opacity: outer ? 1 : 0.55,
+          fillColor: ZONE_COLOR,
+          fillOpacity: alpha,
+        },
+        interactive: false,
+      }).addTo(isoLayer);
+    });
+  updateLevelLegend(zoneLevels, multi);
 
   lastData = data;
   const bounds = renderMarkers();
@@ -1213,6 +1286,7 @@ function popupHtml(etab) {
   html += `<div class="popup-meta">${esc(meta)}<br/>${esc(addr)}`;
   if (etab.UAI) html += `<br/>UAI : ${esc(etab.UAI)}`;
   html += `</div>`;
+  html += levelPopupLine(etab.niveau);
 
   const res = etab.resultats || [];
   const rate = successRate(etab);
@@ -1260,6 +1334,7 @@ function logementPopupHtml(p) {
   const dash = (v) => (v == null ? "—" : esc(v));
   let html = `<div class="popup-title">${p.nb_logements} logement(s) social(aux)</div>`;
   html += `<div class="popup-meta">Position : ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</div>`;
+  html += levelPopupLine(p.niveau);
   html += `<div class="popup-scroll"><table class="popup-table"><thead><tr>
     <th>Type</th><th>Droit</th><th>Pièces</th><th>Surface (m²)</th><th>Année</th><th>Nb</th>
     </tr></thead><tbody>`;
@@ -1422,6 +1497,7 @@ function renderEtabList(ul, etabs, withRate) {
       `<div class="etab-main"><div class="etab-name">${esc(e.nom)}</div>` +
       `<div class="etab-sub">${esc(sub)}</div></div>` +
       `<div class="etab-side">` +
+      (e.niveau != null ? `<span class="etab-time">${levelLabel(e.niveau)}</span>` : "") +
       (withRate && rate != null ? `<span class="etab-rate">${rate.toFixed(0)} %</span>` : "") +
       (e.secteur ? `<span class="badge ${secteurClass(e.secteur)}">${esc(e.secteur)}</span>` : "") +
       `</div>`;

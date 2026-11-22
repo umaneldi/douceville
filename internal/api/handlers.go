@@ -19,7 +19,7 @@ import (
 
 // Isochroner calcule une isochrone (implémenté par geo.ORSClient).
 type Isochroner interface {
-	CalcIsochrone(ctx context.Context, lonlat [2]float64, dist float64, transp string) (models.Isochrone, error)
+	CalcIsochrone(ctx context.Context, lonlat [2]float64, dist, interval float64, transp string) (models.Isochrone, error)
 }
 
 // Geocoder résout une adresse en coordonnées (implémenté par geo.BANClient).
@@ -113,7 +113,7 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 			}
 			log.Debug("address geocoded", "origine", i, "adresse", o.Adresse, "lat", ban.Latitude, "lon", ban.Longitude)
 
-			iso, err := h.Isochron.CalcIsochrone(gctx, [2]float64{ban.Longitude, ban.Latitude}, o.Dist, o.Transp)
+			iso, err := h.Isochron.CalcIsochrone(gctx, [2]float64{ban.Longitude, ban.Latitude}, o.Dist, geo.LevelInterval(o.Dist), o.Transp)
 			if err != nil {
 				log.Error("isochrone computation failed", "origine", i, "lat", ban.Latitude, "lon", ban.Longitude,
 					"dist", o.Dist, "transp", o.Transp, "error", err)
@@ -137,27 +137,45 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		LogementsSociaux: []models.LogementSocialPosition{},
 	}
 
-	// Zone de recherche : l'isochrone unique, ou l'intersection des isochrones.
-	zoneWKT := geo.PolygonWKT(isos[0])
-	if len(isos) > 1 {
-		wkts := make([]string, len(isos))
-		for i, iso := range isos {
-			wkts[i] = geo.PolygonWKT(iso)
-		}
-		wkt, gj, empty, err := h.Store.IntersectZones(r.Context(), wkts)
+	// Zone de recherche : intersection des isochrones de temps maximal (dernier
+	// niveau), calculée d'abord ; puis les niveaux emboîtés intérieurs.
+	levels := zoneLevelWKTs(isos)
+	if len(levels) == 0 {
+		log.Info("etablissements searched in zone: no zone level", "count_origines", len(isos))
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	outer := levels[len(levels)-1]
+	zoneWKT, zoneGJ, empty, err := h.Store.IntersectZones(r.Context(), outer.WKTs)
+	if err != nil {
+		log.Error("isochrones intersection failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if empty {
+		log.Info("etablissements searched in zone: empty intersection", "count_origines", len(isos))
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp.Zone = zoneGJ
+
+	var levelWKT []string // WKT des niveaux non vides, par temps croissant
+	resp.ZoneLevels = []models.ZoneLevel{}
+	for _, lv := range levels[:len(levels)-1] {
+		wkt, gj, empty, err := h.Store.IntersectZones(r.Context(), lv.WKTs)
 		if err != nil {
-			log.Error("isochrones intersection failed", "error", err)
+			log.Error("zone level intersection failed", "dist", lv.Dist, "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if empty {
-			log.Info("etablissements searched in zone: empty intersection", "count_origines", len(isos))
-			writeJSON(w, http.StatusOK, resp)
-			return
+			continue
 		}
-		zoneWKT = wkt
-		resp.Zone = gj
+		levelWKT = append(levelWKT, wkt)
+		resp.ZoneLevels = append(resp.ZoneLevels, models.ZoneLevel{Dist: lv.Dist, Geometry: gj})
 	}
+	levelWKT = append(levelWKT, zoneWKT)
+	resp.ZoneLevels = append(resp.ZoneLevels, models.ZoneLevel{Dist: outer.Dist, Geometry: zoneGJ})
 
 	etabs, err := h.Store.FindEtablissementsInZone(r.Context(), zoneWKT, body.Nature, body.Secteur)
 	if err != nil {
@@ -207,6 +225,12 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		resp.LogementsSociaux = logements
 	}
 
+	if err := h.tagLevels(r.Context(), &resp, levelWKT); err != nil {
+		log.Error("zone levels tagging failed", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	log.Info("etablissements searched in zone",
 		"count_origines", len(origines),
 		"origines", origines,
@@ -216,9 +240,45 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		"count_communes", len(resp.Communes),
 		"count_quartiers", len(resp.Immobilier.Quartiers),
 		"count_logements_sociaux", len(resp.LogementsSociaux),
+		"count_levels", len(resp.ZoneLevels),
 	)
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// tagLevels renseigne le niveau (plus petit niveau de zone contenant le
+// point) des établissements et des logements sociaux de resp ; levelWKT sont
+// les WKT des niveaux de resp.ZoneLevels.
+func (h *Handlers) tagLevels(ctx context.Context, resp *models.ListeEtablissementsAvecIsochrone, levelWKT []string) error {
+	type target struct{ niveau **float64 }
+	var points [][2]float64
+	var targets []target
+	for i := range resp.Etablissements {
+		if p, ok := pointLonLat(resp.Etablissements[i].Position); ok {
+			points = append(points, p)
+			targets = append(targets, target{&resp.Etablissements[i].Niveau})
+		}
+	}
+	for i := range resp.LogementsSociaux {
+		l := &resp.LogementsSociaux[i]
+		points = append(points, [2]float64{l.Lon, l.Lat})
+		targets = append(targets, target{&l.Niveau})
+	}
+	if len(points) == 0 {
+		return nil
+	}
+
+	ks, err := h.Store.PointLevels(ctx, points, levelWKT)
+	if err != nil {
+		return err
+	}
+	for i, k := range ks {
+		if k >= 0 && k < len(resp.ZoneLevels) {
+			d := resp.ZoneLevels[k].Dist
+			*targets[i].niveau = &d
+		}
+	}
+	return nil
 }
 
 // isochrone gère GET /isochrone.
@@ -236,7 +296,7 @@ func (h *Handlers) isochrone(w http.ResponseWriter, r *http.Request) {
 	}
 	transp := q.Get("transp")
 
-	iso, err := h.Isochron.CalcIsochrone(r.Context(), [2]float64{lon, lat}, dist, transp)
+	iso, err := h.Isochron.CalcIsochrone(r.Context(), [2]float64{lon, lat}, dist, 0, transp)
 	if err != nil {
 		log.Error("isochrone computation failed", "lat", lat, "lon", lon, "dist", dist, "transp", transp, "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())

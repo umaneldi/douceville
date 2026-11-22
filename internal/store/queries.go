@@ -429,6 +429,53 @@ func (s *PgStore) IntersectZones(ctx context.Context, polygonWKTs []string) (str
 	return wkt, json.RawMessage(gj), false, nil
 }
 
+// PointLevels implémente Store.PointLevels en une seule requête : les
+// polygones sont convertis une fois (CTE matérialisée), puis chaque point
+// prend le plus petit indice de polygone qui le contient.
+func (s *PgStore) PointLevels(ctx context.Context, lonlats [][2]float64, levelWKTs []string) ([]int, error) {
+	if len(lonlats) == 0 || len(levelWKTs) == 0 {
+		levels := make([]int, len(lonlats))
+		for i := range levels {
+			levels[i] = -1
+		}
+		return levels, nil
+	}
+	lons := make([]float64, len(lonlats))
+	lats := make([]float64, len(lonlats))
+	for i, p := range lonlats {
+		lons[i], lats[i] = p[0], p[1]
+	}
+
+	const q = `WITH l AS MATERIALIZED (
+			SELECT k, ST_GeomFromText(w) AS g
+			FROM unnest($3::text[]) WITH ORDINALITY l(w, k)
+		)
+		SELECT coalesce((SELECT min(k) FROM l WHERE ST_Intersects(l.g, ST_MakePoint(p.lon, p.lat))), 0)::integer - 1
+		FROM unnest($1::float8[], $2::float8[]) WITH ORDINALITY p(lon, lat, i)
+		ORDER BY p.i`
+	rows, err := s.pool.Query(ctx, q, lons, lats, levelWKTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	levels := make([]int, 0, len(lonlats))
+	for rows.Next() {
+		var k int
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		levels = append(levels, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(levels) != len(lonlats) {
+		return nil, fmt.Errorf("PointLevels: got %d levels for %d points", len(levels), len(lonlats))
+	}
+	return levels, nil
+}
+
 func (s *PgStore) resultatsForUAI(ctx context.Context, uai string) ([]models.Resultat, error) {
 	const q = `SELECT idx, diplome, annee, presents, admis, mentions, etablissement_uai
 		FROM resultat WHERE etablissement_uai = $1 ORDER BY annee DESC, diplome`

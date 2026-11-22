@@ -62,13 +62,6 @@
     <div class="main">
       <header class="topbar">
         <span class="brand-sm">Douceville <span class="version">{{VERSION}}</span></span>
-        <div class="search-pill ac-wrap">
-          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg>
-          <input id="address" form="search-form" type="text" placeholder="Adresse de départ — ex. 12 rue de la Paix, Paris" required
-            autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="both" aria-label="Adresse de départ"
-            aria-controls="address-list" aria-expanded="false" />
-          <ul id="address-list" class="ac-list" role="listbox" hidden></ul>
-        </div>
         <div class="user-chip">
           <span id="user-avatar" class="avatar" aria-hidden="true"></span>
           <span id="user-label" class="user-label"></span>
@@ -166,7 +159,7 @@
                role="combobox" aria-autocomplete="both" aria-expanded="false" aria-label="Adresse du point de départ" />
         <ul class="ac-list" role="listbox" hidden></ul>
       </div>
-      <label class="origin-time">Temps : <strong class="origin-time-val">15</strong> min
+      <label class="origin-time">Temps max : <strong class="origin-time-val">15</strong> min
         <input type="range" min="5" max="60" step="5" value="15" aria-label="Temps de trajet (min)" />
       </label>
       <select aria-label="Mode de transport">
