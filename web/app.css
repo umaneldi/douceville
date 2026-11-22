@@ -569,6 +569,31 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .origin-remove:hover { color: var(--text); }
 .origin-time { display: block; font-size: 0.82rem; color: var(--muted); }
+.origin-time input[type="range"] { width: 100%; margin-bottom: 0; }
+/* Graduation tous les 5 min sous le curseur (7px ≈ demi-largeur du curseur). */
+.time-ticks {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 7px;
+  margin-bottom: 0.9rem;
+}
+.time-ticks span {
+  position: relative;
+  width: 1px;
+  height: 5px;
+  background: var(--muted);
+  opacity: 0.6;
+}
+.time-ticks span[data-label] { height: 8px; opacity: 1; }
+.time-ticks span[data-label]::after {
+  content: attr(data-label);
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.65rem;
+  line-height: 1;
+}
 .btn-link {
   margin-top: 0.5rem;
   padding: 0;

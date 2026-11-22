@@ -371,7 +371,9 @@ function communeTooltip(p) {
 // ---------------------------------------------------------------------------
 // Niveaux de temps de trajet de la zone de recherche
 // ---------------------------------------------------------------------------
-const ZONE_COLOR = "#0f172a";
+const ZONE_COLOR = "#eab308"; // jaune : remplissage des niveaux
+const ZONE_STROKE = "#ca8a04"; // contour, plus foncé pour rester lisible
+const ZONE_RGB = "234,179,8"; // ZONE_COLOR en RGB (légende)
 const ZONE_ALPHA = 0.45; // opacité cumulée du niveau le plus intérieur
 
 // « ≤ N min » pour un niveau exprimé en secondes.
@@ -403,7 +405,7 @@ function updateLevelLegend(levels, multi) {
   const rows = levels
     .map((lv, i) => {
       const a = (alpha * (levels.length - i)).toFixed(3);
-      return `<li><span class="swatch" style="background:linear-gradient(rgba(15,23,42,${a}),rgba(15,23,42,${a})),#f1f5f9"></span>${levelLabel(lv.dist)}</li>`;
+      return `<li><span class="swatch" style="background:linear-gradient(rgba(${ZONE_RGB},${a}),rgba(${ZONE_RGB},${a})),#f1f5f9"></span>${levelLabel(lv.dist)}</li>`;
     })
     .join("");
   div.innerHTML =
@@ -774,7 +776,7 @@ function renderFiscalite(communes) {
 // Points de départ : la zone de recherche est l'intersection de leurs
 // isochrones. Le premier utilise l'adresse de la barre de recherche.
 // ---------------------------------------------------------------------------
-const ORIGIN_COLORS = ["#a855f7", "#f97316", "#14b8a6", "#ec4899", "#eab308", "#3b82f6"];
+const ORIGIN_COLORS = ["#a855f7", "#f97316", "#14b8a6", "#ec4899", "#84cc16", "#3b82f6"];
 const MAX_ORIGINS = 10; // même limite que le serveur
 
 function originColor(i) {
@@ -1135,7 +1137,7 @@ function render(data) {
       const outer = k === 0;
       L.geoJSON(lv.geometry, {
         style: {
-          color: ZONE_COLOR,
+          color: ZONE_STROKE,
           weight: outer ? 2.5 : 1,
           opacity: outer ? 1 : 0.55,
           fillColor: ZONE_COLOR,
