@@ -39,6 +39,10 @@
       </p>
 
       <button id="auth-submit" type="submit" class="btn-primary">Se connecter</button>
+      <div id="oidc-block" hidden>
+        <p class="auth-sep"><span>ou</span></p>
+        <a id="oidc-login" class="btn-secondary" href="/api/auth/oidc/login">Se connecter avec SSO</a>
+      </div>
       <p class="switch">
         <span id="switch-text">Pas encore de compte ?</span>
         <a href="#" id="switch-mode">Créer un compte</a>
@@ -62,10 +66,10 @@
     <div class="main">
       <header class="topbar">
         <span class="brand-sm">Douceville <span class="version">{{VERSION}}</span></span>
-        <div class="user-chip">
+        <button id="user-chip" type="button" class="user-chip" aria-haspopup="dialog" title="Paramètres du compte">
           <span id="user-avatar" class="avatar" aria-hidden="true"></span>
           <span id="user-label" class="user-label"></span>
-        </div>
+        </button>
       </header>
 
       <div class="layout">
@@ -145,6 +149,65 @@
       </div>
     </div>
   </div>
+
+  <!-- Paramètres du compte (ouvert depuis l'avatar) -->
+  <dialog id="settings" class="settings" aria-labelledby="settings-title">
+    <div class="settings-head">
+      <h2 id="settings-title">Paramètres du compte</h2>
+      <button type="button" id="settings-close" class="settings-close" aria-label="Fermer">×</button>
+    </div>
+
+    <form id="profile-form" class="settings-section">
+      <h3>Profil</h3>
+      <div class="profile-row">
+        <span id="profile-avatar" class="avatar avatar-lg" aria-hidden="true"></span>
+        <div class="profile-fields">
+          <div class="field name-fields">
+            <input id="set-first-name" type="text" placeholder="Prénom" autocomplete="given-name" maxlength="100" />
+            <input id="set-last-name" type="text" placeholder="Nom" autocomplete="family-name" maxlength="100" />
+          </div>
+          <div class="field">
+            <input id="set-avatar-url" type="url" placeholder="URL de l'avatar (sinon Gravatar ou initiales)" maxlength="2048" />
+          </div>
+        </div>
+      </div>
+      <p class="settings-msg" role="status" hidden></p>
+      <button type="submit" class="btn-primary">Enregistrer</button>
+    </form>
+
+    <form id="email-form" class="settings-section">
+      <h3>Adresse e-mail</h3>
+      <p class="hint">Adresse actuelle : <strong id="current-email"></strong></p>
+      <p id="pending-email" class="hint" hidden></p>
+      <div class="field">
+        <input id="set-email" type="email" placeholder="Nouvelle adresse e-mail" required autocomplete="email" />
+      </div>
+      <div class="field" data-needs-password>
+        <input id="email-password" type="password" placeholder="Mot de passe actuel" autocomplete="current-password" />
+      </div>
+      <p class="settings-msg" role="status" hidden></p>
+      <button type="submit" class="btn-primary">Changer d'adresse</button>
+    </form>
+
+    <form id="password-form" class="settings-section">
+      <h3>Mot de passe</h3>
+      <p id="no-password-hint" class="hint" hidden>
+        Votre compte n'a pas encore de mot de passe : définissez-en un pour pouvoir vous connecter avec votre adresse e-mail.
+      </p>
+      <input type="text" autocomplete="username" hidden aria-hidden="true" tabindex="-1" id="password-username" />
+      <div class="field" data-needs-password>
+        <input id="pw-current" type="password" placeholder="Mot de passe actuel" autocomplete="current-password" />
+      </div>
+      <div class="field">
+        <input id="pw-new" type="password" placeholder="Nouveau mot de passe (8 caractères min.)" required minlength="8" autocomplete="new-password" />
+      </div>
+      <div class="field">
+        <input id="pw-confirm" type="password" placeholder="Confirmer le nouveau mot de passe" required minlength="8" autocomplete="new-password" />
+      </div>
+      <p class="settings-msg" role="status" hidden></p>
+      <button type="submit" class="btn-primary">Mettre à jour le mot de passe</button>
+    </form>
+  </dialog>
 
   <!-- Ligne « point de départ » (le premier utilise l'adresse de la barre de recherche) -->
   <template id="origin-tpl">

@@ -35,6 +35,21 @@ type mockStore struct {
 	// interEmpty est renvoyé par IntersectZones ; interCalls compte ses appels.
 	interEmpty bool
 	interCalls *int
+	// emailChanged est renvoyé par VerifyEmail.
+	emailChanged bool
+	// byID est renvoyé par GetUserRecordByID.
+	byID *models.UserRecord
+	// setPassword reçoit le hash passé à SetPassword ; emailChange reçoit la
+	// nouvelle adresse passée à CreateEmailChange (si non nil).
+	setPassword *string
+	emailChange *string
+	// oidcUser et oidcErr sont renvoyés par FindOrCreateOIDCUser.
+	oidcUser *models.DvUser
+	oidcErr  error
+}
+
+func (m mockStore) FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdentity, defaultPerms models.Perms) (*models.DvUser, error) {
+	return m.oidcUser, m.oidcErr
 }
 
 func (m mockStore) IntersectZones(ctx context.Context, wkts []string) (string, json.RawMessage, bool, error) {
@@ -65,8 +80,29 @@ func isoWithLevels(dists ...float64) models.Isochrone {
 func (m mockStore) CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
 	return m.err
 }
-func (m mockStore) VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, error) {
-	return m.verified, m.err
+func (m mockStore) VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, bool, error) {
+	return m.verified, m.emailChanged, m.err
+}
+func (m mockStore) GetUserRecordByID(ctx context.Context, id string) (*models.UserRecord, error) {
+	return m.byID, m.err
+}
+func (m mockStore) UpdateProfile(ctx context.Context, id string, p models.ProfileUpdate) (*models.DvUser, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &models.DvUser{ID: id, FirstName: p.FirstName, LastName: p.LastName, AvatarURL: p.AvatarURL}, nil
+}
+func (m mockStore) SetPassword(ctx context.Context, id, passwordHash string) error {
+	if m.setPassword != nil {
+		*m.setPassword = passwordHash
+	}
+	return m.err
+}
+func (m mockStore) CreateEmailChange(ctx context.Context, userID, newEmail, tokenHash string, expiresAt time.Time) error {
+	if m.emailChange != nil {
+		*m.emailChange = newEmail
+	}
+	return m.err
 }
 func (m mockStore) RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error {
 	if m.revoked != nil {

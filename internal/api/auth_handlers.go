@@ -138,7 +138,12 @@ func (h *Handlers) verifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.Store.VerifyEmail(r.Context(), auth.HashVerificationToken(body.Token))
+	user, emailChanged, err := h.Store.VerifyEmail(r.Context(), auth.HashVerificationToken(body.Token))
+	if errors.Is(err, store.ErrEmailTaken) {
+		log.Warn("verify: new e-mail address already in use")
+		writeError(w, http.StatusConflict, "this e-mail address is already in use")
+		return
+	}
 	if err != nil {
 		log.Error("verify: could not verify e-mail", "error", err)
 		writeError(w, http.StatusInternalServerError, "could not verify e-mail")
@@ -154,16 +159,24 @@ func (h *Handlers) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	if user.Email != nil {
 		email = *user.Email
 	}
-	log.Info("e-mail verified", "user_id", user.ID, "email", email, "perms", user.Perms)
+	log.Info("e-mail verified", "user_id", user.ID, "email", email, "perms", user.Perms, "email_changed", emailChanged)
 
 	if !user.Perms.AtLeast(models.PermsGranted) {
-		writeJSON(w, http.StatusOK, map[string]string{
-			"detail": "e-mail verified, account awaiting approval",
-			"perms":  string(user.Perms),
+		writeJSON(w, http.StatusOK, map[string]any{
+			"detail":        "e-mail verified, account awaiting approval",
+			"perms":         string(user.Perms),
+			"email_changed": emailChanged,
 		})
 		return
 	}
-	h.issueAndRespond(w, r, *user, email, http.StatusOK)
+	token, err := auth.IssueToken(user.ID, email, h.JWTSecret, auth.DefaultTokenTTL)
+	if err != nil {
+		log.Error("verify: could not issue token", "user_id", user.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "could not issue token")
+		return
+	}
+	user.Login = email
+	writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": user, "email_changed": emailChanged})
 }
 
 // logout gère POST /auth/logout : révoque le token courant.
@@ -275,4 +288,91 @@ func (h *Handlers) issueAndRespond(w http.ResponseWriter, r *http.Request, user 
 	}
 	user.Login = email
 	writeJSON(w, status, models.AuthResponse{Token: token, User: user})
+}
+
+// Codes d'erreur transmis au frontend (paramètre ?oidc_error=) à l'issue d'un
+// flux OIDC.
+const (
+	oidcErrFailed     = "failed"
+	oidcErrEmailTaken = "email_taken"
+)
+
+// oidcConfig gère GET /auth/oidc/config : indique au frontend si la connexion
+// OIDC est disponible et le libellé de son bouton.
+func (h *Handlers) oidcConfig(w http.ResponseWriter, r *http.Request) {
+	if h.OIDC == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "name": h.OIDC.DisplayName()})
+}
+
+// oidcLogin gère GET /auth/oidc/login : redirige vers le fournisseur OIDC.
+func (h *Handlers) oidcLogin(w http.ResponseWriter, r *http.Request) {
+	if h.OIDC == nil {
+		writeError(w, http.StatusNotFound, "OIDC login is not configured")
+		return
+	}
+	u, err := h.OIDC.AuthURL(w)
+	if err != nil {
+		logger(r.Context()).Error("oidc: could not start flow", "error", err)
+		writeError(w, http.StatusInternalServerError, "could not start OIDC login")
+		return
+	}
+	http.Redirect(w, r, u, http.StatusFound)
+}
+
+// oidcCallback gère GET /auth/oidc/callback : retour du fournisseur. Le compte
+// est retrouvé (ou créé), puis le navigateur est renvoyé vers l'application avec
+// un token Douceville dans le fragment d'URL (jamais transmis au serveur), ou
+// avec un code d'erreur ?oidc_error=.
+func (h *Handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
+	log := logger(r.Context())
+	if h.OIDC == nil {
+		writeError(w, http.StatusNotFound, "OIDC login is not configured")
+		return
+	}
+	fail := func(code string) {
+		http.Redirect(w, r, "/?oidc_error="+url.QueryEscape(code), http.StatusFound)
+	}
+
+	id, err := h.OIDC.Exchange(w, r)
+	if err != nil {
+		log.Warn("oidc: callback rejected", "error", err)
+		fail(oidcErrFailed)
+		return
+	}
+
+	user, err := h.Store.FindOrCreateOIDCUser(r.Context(), id, h.OIDC.NewUserPerms())
+	if err != nil {
+		if errors.Is(err, store.ErrEmailTaken) {
+			log.Warn("oidc: e-mail already used by another account (not verified by provider)",
+				"issuer", id.Issuer, "subject", id.Subject, "email", id.Email)
+			fail(oidcErrEmailTaken)
+			return
+		}
+		log.Error("oidc: could not find or create user", "issuer", id.Issuer, "subject", id.Subject, "error", err)
+		fail(oidcErrFailed)
+		return
+	}
+
+	if !user.Perms.AtLeast(models.PermsGranted) {
+		log.Warn("oidc login refused: account not granted", "user_id", user.ID, "perms", user.Perms)
+		fail(auth.CodeAccountNotGranted)
+		return
+	}
+
+	email := user.ID
+	if user.Email != nil {
+		email = *user.Email
+	}
+	token, err := auth.IssueToken(user.ID, email, h.JWTSecret, auth.DefaultTokenTTL)
+	if err != nil {
+		log.Error("oidc: could not issue token", "user_id", user.ID, "error", err)
+		fail(oidcErrFailed)
+		return
+	}
+	log.Info("user logged in via OIDC", "user_id", user.ID, "email", email, "issuer", id.Issuer)
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, "/#oidc_token="+url.QueryEscape(token), http.StatusFound)
 }

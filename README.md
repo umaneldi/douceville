@@ -61,6 +61,12 @@ niveau `granted` ou `admin` (sinon `403`, `code=account_not_granted`).
 | `POST`  | `/api/auth/login`          |  —   | Connexion, réservée aux comptes `granted`/`admin` (sinon `403`, `code=email_not_verified` ou `account_not_granted`). Renvoie `{token, user}`. |
 | `POST`  | `/api/auth/logout`         |  ✓   | Déconnexion : révoque le token courant (`204`).               |
 | `GET`   | `/api/user`                |  ✓   | Profil de l'utilisateur authentifié.                          |
+| `PATCH` | `/api/user`                |  ✓   | Met à jour `{first_name, last_name, avatar_url}` (vide : effacé). |
+| `POST`  | `/api/user/email`          |  ✓   | Demande de changement d'adresse (`{email, current_password}`) : lien de confirmation envoyé à la nouvelle adresse, qui ne remplace l'ancienne qu'après vérification (`202`). |
+| `POST`  | `/api/user/password`       |  ✓   | Change le mot de passe (`{current_password, new_password}` ; mot de passe actuel non requis pour un compte OIDC sans mot de passe) (`204`). |
+| `GET`   | `/api/auth/oidc/config`    |  —   | `{enabled, name}` : connexion OIDC disponible ?                |
+| `GET`   | `/api/auth/oidc/login`     |  —   | Redirige vers le fournisseur OIDC.                            |
+| `GET`   | `/api/auth/oidc/callback`  |  —   | Retour du fournisseur ; redirige vers `/#oidc_token=…` ou `/?oidc_error=…`. |
 | `GET`   | `/api/etablissement/{uai}` |  ✓   | Détail d'un établissement par son UAI.                        |
 | `POST`  | `/api/etablissements`      |  ✓   | Établissements dans la zone atteignable depuis une adresse.   |
 | `GET`   | `/api/isochrone`           |  ✓   | Isochrone depuis des coordonnées (`lat`, `lon`, `dist`, `transp`). |
@@ -105,6 +111,26 @@ Les JWT HS256 sont signés avec `JWT_SECRET` et portent un identifiant unique
 (`jti`). La déconnexion révoque ce `jti` côté serveur (table `revoked_token`)
 jusqu'à l'expiration du token. Le frontend stocke le token et l'envoie en Bearer.
 
+#### Connexion OpenID Connect (optionnelle)
+
+Si `OIDC_ISSUER_URL` est défini, un bouton « Se connecter avec … » apparaît à côté
+du formulaire (qui reste disponible). Le flux est un *authorization code* avec PKCE :
+`/api/auth/oidc/login` redirige vers le fournisseur, qui revient sur
+`/api/auth/oidc/callback` (URL à déclarer chez le fournisseur). Le backend vérifie
+l'ID token puis émet **son propre JWT**, comme pour la connexion par mot de passe.
+
+- Une identité inconnue crée un compte (sans mot de passe) au niveau `OIDC_DEFAULT_PERMS`.
+- Si un compte existe déjà avec le même e-mail, l'identité lui est rattachée
+  uniquement si le fournisseur atteste l'adresse (`email_verified`) ; sinon la
+  connexion est refusée.
+- Les identités sont stockées dans la table `oidc_identity` (issuer, subject).
+
+Un utilisateur connecté modifie son compte en cliquant sur son avatar (affiché
+depuis `avatar_url`, sinon son Gravatar, sinon ses initiales). Un changement
+d'adresse e-mail est **en attente** jusqu'au clic sur le lien envoyé à la nouvelle
+adresse (l'ancienne est prévenue) ; l'ancienne adresse reste utilisable jusque-là.
+Un mauvais mot de passe actuel renvoie `403` (`code=invalid_password`).
+
 Sans `SMTP_HOST`, les e-mails ne sont pas envoyés mais **journalisés** (niveau
 `WARN`, lien inclus) : pratique en développement.
 
@@ -131,6 +157,13 @@ lues par le backend :
 | `SMTP_USERNAME`        | — (vide)      | Identifiant SMTP (pas d'authentification si vide). |
 | `SMTP_PASSWORD`        | — (vide)      | Mot de passe SMTP.                                 |
 | `SMTP_FROM`            | — (requis si `SMTP_HOST`) | Expéditeur, ex. `Douceville <no-reply@domaine.tld>`. |
+| `OIDC_ISSUER_URL`      | — (vide)      | URL de l'émetteur OIDC. Vide : connexion OIDC désactivée. |
+| `OIDC_CLIENT_ID`       | — (requis si OIDC) | Identifiant du client OIDC.                 |
+| `OIDC_CLIENT_SECRET`   | — (vide)      | Secret du client (vide pour un client public, PKCE). |
+| `OIDC_PROVIDER_NAME`   | `SSO`         | Libellé du bouton « Se connecter avec … ».        |
+| `OIDC_SCOPES`          | `openid email profile` | Scopes demandés (séparés par des espaces). |
+| `OIDC_REDIRECT_URL`    | `${PUBLIC_URL}/api/auth/oidc/callback` | URL de retour déclarée chez le fournisseur. |
+| `OIDC_DEFAULT_PERMS`   | `verified`    | Niveau des comptes créés via OIDC (`granted` : accès immédiat). |
 
 ## Lancer le service
 

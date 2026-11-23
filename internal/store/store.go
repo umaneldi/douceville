@@ -24,14 +24,31 @@ type Store interface {
 	// CreateEmailVerification enregistre un jeton de vérification (hashé) pour
 	// l'utilisateur, en remplaçant les jetons précédents.
 	CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
-	// VerifyEmail consomme le jeton et fait passer le compte de 'unverified' à
-	// 'verified'. Renvoie
-	// (nil, nil) si le jeton est inconnu, déjà utilisé ou expiré.
-	VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, error)
+	// VerifyEmail consomme le jeton. Un jeton d'inscription fait passer le compte
+	// de 'unverified' à 'verified' ; un jeton de changement d'adresse remplace
+	// l'e-mail du compte (emailChanged=true, ErrEmailTaken si l'adresse a été prise
+	// entre-temps). Renvoie (nil, false, nil) si le jeton est inconnu, déjà utilisé
+	// ou expiré.
+	VerifyEmail(ctx context.Context, tokenHash string) (user *models.DvUser, emailChanged bool, err error)
+	// GetUserRecordByID renvoie l'utilisateur (hash du mot de passe inclus, vide
+	// si le compte n'en a pas) par identifiant, ou (nil, nil) si absent.
+	GetUserRecordByID(ctx context.Context, id string) (*models.UserRecord, error)
+	// UpdateProfile met à jour nom, prénom et avatar, et renvoie le profil.
+	UpdateProfile(ctx context.Context, id string, p models.ProfileUpdate) (*models.DvUser, error)
+	// SetPassword remplace le hash du mot de passe du compte.
+	SetPassword(ctx context.Context, id, passwordHash string) error
+	// CreateEmailChange enregistre un jeton (hashé) confirmant le passage du
+	// compte à newEmail, en remplaçant les demandes de changement précédentes.
+	CreateEmailChange(ctx context.Context, userID, newEmail, tokenHash string, expiresAt time.Time) error
 	// RevokeToken révoque un JWT (déconnexion) jusqu'à sa date d'expiration.
 	RevokeToken(ctx context.Context, jti string, expiresAt time.Time) error
 	// IsTokenRevoked indique si un JWT a été révoqué.
 	IsTokenRevoked(ctx context.Context, jti string) (bool, error)
+	// FindOrCreateOIDCUser renvoie le compte rattaché à l'identité OIDC, en le
+	// créant (niveau defaultPerms) ou en rattachant l'identité au compte de même
+	// e-mail si le fournisseur atteste l'adresse (email_verified). Renvoie
+	// ErrEmailTaken si l'e-mail appartient à un autre compte et n'est pas attesté.
+	FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdentity, defaultPerms models.Perms) (*models.DvUser, error)
 	// GetEtablissementByUAI renvoie un établissement et ses résultats, ou (nil, nil) si absent.
 	GetEtablissementByUAI(ctx context.Context, uai string) (*models.Etablissement, error)
 	// FindEtablissementsInZone renvoie les établissements contenus dans le polygone WKT,

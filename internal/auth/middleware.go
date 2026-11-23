@@ -86,8 +86,12 @@ func Middleware(secret string, users UserLookup) func(http.Handler) http.Handler
 				return
 			}
 
-			// Le login provient du claim email du token (comme en Python).
+			// Le login est l'e-mail courant du compte (il a pu changer depuis
+			// l'émission du token), à défaut le claim email du token.
 			user.Login = claims.Email
+			if user.Email != nil && *user.Email != "" {
+				user.Login = *user.Email
+			}
 
 			logger(r).Debug("auth: request authenticated", "user_id", user.ID)
 

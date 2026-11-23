@@ -33,6 +33,16 @@ type AddressSuggester interface {
 	Suggest(ctx context.Context, query string, limit int) ([]geo.BANSuggestion, error)
 }
 
+// OIDCProvider gère le flux de connexion OpenID Connect (implémenté par auth.OIDC).
+type OIDCProvider interface {
+	// DisplayName est le libellé du bouton de connexion.
+	DisplayName() string
+	// NewUserPerms est le niveau attribué aux comptes créés via OIDC.
+	NewUserPerms() models.Perms
+	AuthURL(w http.ResponseWriter) (string, error)
+	Exchange(w http.ResponseWriter, r *http.Request) (models.OIDCIdentity, error)
+}
+
 // Handlers porte les dépendances des endpoints.
 type Handlers struct {
 	Store     store.Store
@@ -44,6 +54,8 @@ type Handlers struct {
 	Mailer mail.Sender
 	// PublicURL est la base des liens envoyés par e-mail (sans "/" final).
 	PublicURL string
+	// OIDC est le client OpenID Connect ; nil si la connexion OIDC est désactivée.
+	OIDC OIDCProvider
 }
 
 // readEtablissement gère GET /etablissement/{uai}.

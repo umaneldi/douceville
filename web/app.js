@@ -9,6 +9,7 @@ let mode = "login"; // "login" | "register"
 const PENDING_MSG =
   "Votre compte est en attente de validation par un administrateur. " +
   "Vous pourrez vous connecter dès qu'il aura été approuvé.";
+let currentUser = null; // profil de l'utilisateur connecté (GET /user)
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
 let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer, logementLayer, logementRenderer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
@@ -168,14 +169,192 @@ function startApp(user) {
   $("#auth").hidden = true;
   $("#app").hidden = false;
 
-  const name = user && (user.login || user.email);
-  $("#user-label").textContent = name || "";
-  $("#user-avatar").textContent = (name || "?").trim().charAt(0).toUpperCase();
+  currentUser = user || null;
+  renderUser();
 
   if (!map) initMap();
   // Leaflet a besoin de recalculer sa taille une fois le conteneur visible.
   setTimeout(() => map.invalidateSize(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Utilisateur : avatar & paramètres du compte
+// ---------------------------------------------------------------------------
+function displayName(user) {
+  if (!user) return "";
+  const full = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+  return full || user.email || user.login || "";
+}
+
+function initials(user) {
+  if (!user) return "?";
+  const parts = [user.first_name, user.last_name].filter(Boolean).map((p) => p.trim().charAt(0));
+  const txt = parts.length ? parts.join("") : (user.email || user.login || "?").trim().charAt(0);
+  return (txt || "?").toUpperCase();
+}
+
+// SHA-256 hexadécimal (identifiant Gravatar). Indisponible hors contexte
+// sécurisé (HTTP non local) : renvoie null.
+async function sha256Hex(text) {
+  if (!window.crypto || !crypto.subtle) return null;
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Affiche dans el : l'avatar_url, sinon le Gravatar de l'e-mail, sinon les
+// initiales. Une image qui ne se charge pas retombe sur les initiales.
+let avatarSeq = 0;
+async function renderAvatar(el, user, avatarURL) {
+  const seq = (el._avatarSeq = ++avatarSeq);
+  const showInitials = () => {
+    if (el._avatarSeq !== seq) return;
+    el.replaceChildren(document.createTextNode(initials(user)));
+  };
+
+  let src = avatarURL !== undefined ? avatarURL : user && user.avatar_url;
+  if (!src && user && user.email) {
+    const hash = await sha256Hex(user.email.trim().toLowerCase());
+    if (hash) src = `https://gravatar.com/avatar/${hash}?s=96&d=404`;
+  }
+  if (el._avatarSeq !== seq) return; // un rendu plus récent a été demandé
+  if (!src) return showInitials();
+
+  const img = new Image();
+  img.alt = "";
+  img.referrerPolicy = "no-referrer";
+  img.onerror = showInitials;
+  img.src = src;
+  el.replaceChildren(img);
+}
+
+function renderUser() {
+  $("#user-label").textContent = displayName(currentUser);
+  renderAvatar($("#user-avatar"), currentUser);
+}
+
+async function refreshUser() {
+  currentUser = await api("/user");
+  renderUser();
+  fillSettings();
+}
+
+function settingsMsg(form, message, isError) {
+  const p = form.querySelector(".settings-msg");
+  p.textContent = message;
+  p.classList.toggle("error", !!isError);
+  p.classList.toggle("info", !isError);
+  p.hidden = !message;
+}
+
+function fillSettings() {
+  const u = currentUser || {};
+  $("#set-first-name").value = u.first_name || "";
+  $("#set-last-name").value = u.last_name || "";
+  $("#set-avatar-url").value = u.avatar_url || "";
+  renderAvatar($("#profile-avatar"), u);
+
+  $("#current-email").textContent = u.email || "—";
+  $("#password-username").value = u.email || "";
+  const pending = $("#pending-email");
+  pending.hidden = !u.pending_email;
+  pending.textContent = u.pending_email
+    ? `En attente de confirmation : ${u.pending_email} (consultez cette boîte de réception).`
+    : "";
+
+  const hasPassword = !!u.has_password;
+  document.querySelectorAll("#settings [data-needs-password]").forEach((el) => {
+    el.hidden = !hasPassword;
+    el.querySelector("input").required = hasPassword;
+  });
+  $("#no-password-hint").hidden = hasPassword;
+}
+
+$("#user-chip").addEventListener("click", () => {
+  document.querySelectorAll("#settings form").forEach((f) => {
+    settingsMsg(f, "");
+    f.querySelectorAll('input[type="password"], #set-email').forEach((i) => (i.value = ""));
+  });
+  fillSettings();
+  $("#settings").showModal();
+});
+$("#settings-close").addEventListener("click", () => $("#settings").close());
+// Clic sur le fond (hors du panneau) : fermeture.
+$("#settings").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.close();
+});
+
+// Aperçu de l'avatar pendant la saisie de l'URL.
+$("#set-avatar-url").addEventListener("input", (e) => {
+  const draft = Object.assign({}, currentUser, {
+    first_name: $("#set-first-name").value.trim(),
+    last_name: $("#set-last-name").value.trim(),
+  });
+  renderAvatar($("#profile-avatar"), draft, e.target.value.trim() || null);
+});
+
+// Soumission d'un formulaire de paramètres : bouton désactivé pendant l'appel,
+// message de succès ou d'erreur dans le formulaire.
+function settingsSubmit(form, handler) {
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    settingsMsg(form, "");
+    try {
+      settingsMsg(form, await handler());
+    } catch (ex) {
+      const msg =
+        ex.code === "invalid_password" ? "Mot de passe actuel incorrect." :
+        ex.status === 409 ? "Cette adresse e-mail est déjà utilisée." :
+        ex.message;
+      settingsMsg(form, msg, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+settingsSubmit($("#profile-form"), async () => {
+  const user = await api("/user", {
+    method: "PATCH",
+    body: JSON.stringify({
+      first_name: $("#set-first-name").value.trim() || null,
+      last_name: $("#set-last-name").value.trim() || null,
+      avatar_url: $("#set-avatar-url").value.trim() || null,
+    }),
+  });
+  currentUser = Object.assign({}, currentUser, user);
+  renderUser();
+  return "Profil enregistré.";
+});
+
+settingsSubmit($("#email-form"), async () => {
+  const email = $("#set-email").value.trim();
+  await api("/user/email", {
+    method: "POST",
+    body: JSON.stringify({ email, current_password: $("#email-password").value }),
+  });
+  $("#set-email").value = "";
+  $("#email-password").value = "";
+  await refreshUser();
+  return (
+    `Un lien de confirmation a été envoyé à ${email}. ` +
+    "Votre adresse actuelle reste active jusqu'à confirmation."
+  );
+});
+
+settingsSubmit($("#password-form"), async () => {
+  const next = $("#pw-new").value;
+  if (next !== $("#pw-confirm").value) throw new Error("Les deux mots de passe ne correspondent pas.");
+  await api("/user/password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: $("#pw-current").value, new_password: next }),
+  });
+  ["#pw-current", "#pw-new", "#pw-confirm"].forEach((sel) => ($(sel).value = ""));
+  const hadPassword = currentUser && currentUser.has_password;
+  await refreshUser();
+  return hadPassword ? "Mot de passe mis à jour." : "Mot de passe défini.";
+});
 
 function initMap() {
   map = L.map("map", { zoomControl: false }).setView([46.6, 2.5], 6); // France
@@ -1544,6 +1723,23 @@ renderInsights([]);
   let verifyFailed = false;
   let verifiedPending = false;
 
+  // Bouton de connexion OIDC, si le fournisseur est configuré côté serveur.
+  fetch("/api/auth/oidc/config")
+    .then((res) => (res.ok ? res.json() : null))
+    .then((cfg) => {
+      if (!cfg || !cfg.enabled) return;
+      $("#oidc-login").textContent = `Se connecter avec ${cfg.name || "SSO"}`;
+      $("#oidc-block").hidden = false;
+    })
+    .catch(() => {});
+
+  // Retour du flux OIDC : token dans le fragment (#oidc_token=...) ou erreur
+  // dans la requête (?oidc_error=...). L'URL est nettoyée dans les deux cas.
+  const oidcToken = new URLSearchParams(location.hash.slice(1)).get("oidc_token");
+  const oidcError = new URLSearchParams(location.search).get("oidc_error");
+  if (oidcToken || oidcError) history.replaceState(null, "", "/");
+  if (oidcToken) setToken(oidcToken);
+
   // Lien de vérification reçu par e-mail : /verify-email?token=...
   if (location.pathname === "/verify-email") {
     const verifyToken = new URLSearchParams(location.search).get("token");
@@ -1559,6 +1755,10 @@ renderInsights([]);
           // Compte déjà autorisé : connexion directe.
           setToken(data.token);
           startApp(data.user);
+          if (data.email_changed) {
+            $("#user-chip").click();
+            settingsMsg($("#email-form"), `Adresse e-mail confirmée : ${data.user.email}.`);
+          }
           return;
         }
         verifiedPending = true;
@@ -1578,7 +1778,15 @@ renderInsights([]);
     }
   }
   showAuth();
-  if (verifiedPending) {
+  if (oidcError === "account_not_granted") {
+    showInfo(PENDING_MSG, false);
+  } else if (oidcError === "email_taken") {
+    showError(
+      "Un compte existe déjà avec cette adresse e-mail. Connectez-vous avec votre mot de passe."
+    );
+  } else if (oidcError) {
+    showError("La connexion via le fournisseur d'identité a échoué. Veuillez réessayer.");
+  } else if (verifiedPending) {
     showInfo("Adresse e-mail vérifiée, merci ! " + PENDING_MSG, false);
   } else if (verifyFailed) {
     showInfo(

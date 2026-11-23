@@ -48,6 +48,11 @@ type DvUser struct {
 	AvatarURL   *string  `json:"avatar_url"`
 	Permissions []string `json:"permissions"`
 	Perms       Perms    `json:"perms"`
+	// HasPassword indique si le compte a un mot de passe (faux pour un compte
+	// créé via OIDC).
+	HasPassword bool `json:"has_password"`
+	// PendingEmail est la nouvelle adresse en attente de vérification, le cas échéant.
+	PendingEmail *string `json:"pending_email"`
 }
 
 // UserRecord est la représentation interne d'un utilisateur, incluant le hash
@@ -55,6 +60,37 @@ type DvUser struct {
 type UserRecord struct {
 	DvUser
 	PasswordHash string `json:"-"`
+}
+
+// OIDCIdentity est l'identité renvoyée par un fournisseur OpenID Connect
+// après vérification de l'ID token.
+type OIDCIdentity struct {
+	Issuer        string
+	Subject       string
+	Email         string
+	EmailVerified bool
+	GivenName     string
+	FamilyName    string
+	Picture       string
+}
+
+// ProfileUpdate est le corps de PATCH /user (champ vide ou absent : effacé).
+type ProfileUpdate struct {
+	FirstName *string `json:"first_name"`
+	LastName  *string `json:"last_name"`
+	AvatarURL *string `json:"avatar_url"`
+}
+
+// EmailChangeRequest est le corps de POST /user/email.
+type EmailChangeRequest struct {
+	Email           string `json:"email"`
+	CurrentPassword string `json:"current_password"`
+}
+
+// PasswordChangeRequest est le corps de POST /user/password.
+type PasswordChangeRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
 }
 
 // Credentials est le corps des requêtes d'inscription et de connexion.

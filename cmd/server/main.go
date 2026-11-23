@@ -11,9 +11,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/umaneldi/douceville/internal/api"
+	"github.com/umaneldi/douceville/internal/auth"
 	"github.com/umaneldi/douceville/internal/config"
 	"github.com/umaneldi/douceville/internal/geo"
 	"github.com/umaneldi/douceville/internal/mail"
+	"github.com/umaneldi/douceville/internal/models"
 	"github.com/umaneldi/douceville/internal/store"
 )
 
@@ -79,6 +81,26 @@ func main() {
 		JWTSecret: cfg.JWTSecret,
 		Mailer:    mailer,
 		PublicURL: cfg.PublicURL,
+	}
+
+	if cfg.OIDCEnabled() {
+		o, err := auth.NewOIDC(ctx, auth.OIDCConfig{
+			IssuerURL:    cfg.OIDCIssuerURL,
+			ClientID:     cfg.OIDCClientID,
+			ClientSecret: cfg.OIDCClientSecret,
+			RedirectURL:  cfg.OIDCRedirectURL,
+			Scopes:       cfg.OIDCScopes,
+			Name:         cfg.OIDCProviderName,
+			DefaultPerms: models.Perms(cfg.OIDCDefaultPerms),
+			Secret:       cfg.JWTSecret,
+			SecureCookie: strings.HasPrefix(cfg.PublicURL, "https://"),
+		})
+		if err != nil {
+			fatal("oidc", err)
+		}
+		handlers.OIDC = o
+		slog.Info("OIDC login enabled", "issuer", cfg.OIDCIssuerURL, "redirect_url", cfg.OIDCRedirectURL,
+			"default_perms", cfg.OIDCDefaultPerms)
 	}
 
 	router := api.NewRouter(cfg.JWTSecret, handlers, st)

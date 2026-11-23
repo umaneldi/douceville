@@ -28,6 +28,9 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 		api.Post("/auth/login", h.login)
 		api.Post("/auth/verify", h.verifyEmail)
 		api.Post("/auth/resend-verification", h.resendVerification)
+		api.Get("/auth/oidc/config", h.oidcConfig)
+		api.Get("/auth/oidc/login", h.oidcLogin)
+		api.Get("/auth/oidc/callback", h.oidcCallback)
 
 		// Routes protégées par un token Bearer.
 		api.Group(func(protected chi.Router) {
@@ -37,6 +40,9 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 			protected.Get("/isochrone", h.isochrone)
 			protected.Get("/address/suggest", h.addressSuggest)
 			protected.Get("/user", h.getUser)
+			protected.Patch("/user", h.updateProfile)
+			protected.Post("/user/email", h.changeEmail)
+			protected.Post("/user/password", h.changePassword)
 			protected.Post("/auth/logout", h.logout)
 		})
 	})
