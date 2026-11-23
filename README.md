@@ -64,6 +64,9 @@ niveau `granted` ou `admin` (sinon `403`, `code=account_not_granted`).
 | `PATCH` | `/api/user`                |  ✓   | Met à jour `{first_name, last_name, avatar_url}` (vide : effacé). |
 | `POST`  | `/api/user/email`          |  ✓   | Demande de changement d'adresse (`{email, current_password}`) : lien de confirmation envoyé à la nouvelle adresse, qui ne remplace l'ancienne qu'après vérification (`202`). |
 | `POST`  | `/api/user/password`       |  ✓   | Change le mot de passe (`{current_password, new_password}` ; mot de passe actuel non requis pour un compte OIDC sans mot de passe) (`204`). |
+| `GET`   | `/api/admin/users`         | admin | Liste de tous les comptes (réservé au niveau `admin`, sinon `403`, `code=admin_required`). |
+| `PATCH` | `/api/admin/users/{id}`    | admin | Change le niveau d'un compte (`{perms}`). Un compte qui obtient l'accès (`granted`/`admin`) est prévenu par e-mail. Impossible sur son propre compte (`422`). |
+| `DELETE`| `/api/admin/users/{id}`    | admin | Supprime un compte (`204`). Impossible sur son propre compte (`422`). |
 | `GET`   | `/api/auth/oidc/config`    |  —   | `{enabled, name}` : connexion OIDC disponible ?                |
 | `GET`   | `/api/auth/oidc/login`     |  —   | Redirige vers le fournisseur OIDC.                            |
 | `GET`   | `/api/auth/oidc/callback`  |  —   | Retour du fournisseur ; redirige vers `/#oidc_token=…` ou `/?oidc_error=…`. |
@@ -100,11 +103,17 @@ Chaque compte a un niveau d'accès (`utilisateur.perms`, enum ordonné) :
 | `admin`      | Administrateur.                                      | application |
 
 Seuls les comptes `granted` et `admin` reçoivent un token. Le niveau est relu en base
-à chaque requête : rétrograder un compte lui retire l'accès immédiatement. Il n'y a
-pas encore d'interface d'administration ; la validation se fait en SQL :
+à chaque requête : rétrograder un compte lui retire l'accès immédiatement.
+
+Les administrateurs disposent d'un panneau **Utilisateurs** (icône dans la barre
+latérale) : liste des comptes (ceux en attente de validation en tête), changement
+de niveau, suppression. Un compte validé reçoit un e-mail l'invitant à se
+connecter. Un administrateur ne peut ni changer son propre niveau ni supprimer son
+propre compte. Le premier administrateur se désigne avec
+`scripts/set_user_perms.py set EMAIL admin`, ou en SQL :
 
 ```sql
-UPDATE utilisateur SET perms = 'granted' WHERE lower(email) = lower('alice@example.com');
+UPDATE utilisateur SET perms = 'admin' WHERE lower(email) = lower('alice@example.com');
 ```
 
 Les JWT HS256 sont signés avec `JWT_SECRET` et portent un identifiant unique

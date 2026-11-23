@@ -102,6 +102,29 @@ func Middleware(secret string, users UserLookup) func(http.Handler) http.Handler
 	}
 }
 
+// CodeAdminRequired est le code d'erreur renvoyé quand une route
+// d'administration est appelée par un compte non administrateur.
+const CodeAdminRequired = "admin_required"
+
+// RequireAdmin restreint une route aux comptes 'admin'. Il doit être placé
+// après Middleware (qui attache l'utilisateur, relu en base à chaque requête).
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok || !user.Perms.AtLeast(models.PermsAdmin) {
+			if ok {
+				logger(r).Warn("auth: admin required", "user_id", user.ID, "perms", user.Perms)
+			}
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"detail": "admin required",
+				"code":   CodeAdminRequired,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // logger renvoie le logger par défaut enrichi de l'identifiant de requête et du chemin.
 func logger(r *http.Request) *slog.Logger {
 	return slog.Default().With("request_id", middleware.GetReqID(r.Context()), "path", r.URL.Path)

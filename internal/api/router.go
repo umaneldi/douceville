@@ -44,6 +44,14 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 			protected.Post("/user/email", h.changeEmail)
 			protected.Post("/user/password", h.changePassword)
 			protected.Post("/auth/logout", h.logout)
+
+			// Administration des comptes (niveau 'admin').
+			protected.Route("/admin", func(admin chi.Router) {
+				admin.Use(auth.RequireAdmin)
+				admin.Get("/users", h.listUsers)
+				admin.Patch("/users/{id}", h.setUserPerms)
+				admin.Delete("/users/{id}", h.deleteUser)
+			})
 		})
 	})
 

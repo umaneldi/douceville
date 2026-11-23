@@ -111,3 +111,27 @@ func TestMiddleware_RevokedToken(t *testing.T) {
 		t.Errorf("status = %d, want 401", code)
 	}
 }
+
+func TestRequireAdmin(t *testing.T) {
+	ok := RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, tc := range []struct {
+		user *models.DvUser
+		want int
+	}{
+		{nil, http.StatusForbidden},
+		{&models.DvUser{ID: "g", Perms: models.PermsGranted}, http.StatusForbidden},
+		{&models.DvUser{ID: "a", Perms: models.PermsAdmin}, http.StatusOK},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+		if tc.user != nil {
+			req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, tc.user))
+		}
+		rr := httptest.NewRecorder()
+		ok.ServeHTTP(rr, req)
+		if rr.Code != tc.want {
+			t.Errorf("user %+v: status = %d, want %d", tc.user, rr.Code, tc.want)
+		}
+	}
+}

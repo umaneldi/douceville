@@ -79,6 +79,53 @@ func (s *PgStore) UpdateProfile(ctx context.Context, id string, p models.Profile
 		WHERE u.id = $1 RETURNING `+userCols, id, p.FirstName, p.LastName, p.AvatarURL))
 }
 
+// ListUsers implémente Store.ListUsers.
+func (s *PgStore) ListUsers(ctx context.Context) ([]models.DvUser, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+userCols+` FROM utilisateur u ORDER BY lower(u.email), u.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := []models.DvUser{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, *u)
+	}
+	return users, rows.Err()
+}
+
+// SetUserPerms implémente Store.SetUserPerms. Le niveau précédent est lu sous
+// verrou dans la même requête, pour qu'il corresponde bien à ce changement.
+func (s *PgStore) SetUserPerms(ctx context.Context, id string, perms models.Perms) (*models.DvUser, models.Perms, error) {
+	var u models.DvUser
+	var previous models.Perms
+	err := s.pool.QueryRow(ctx, `UPDATE utilisateur u SET perms = $2::user_perms
+		FROM (SELECT id, perms AS old FROM utilisateur WHERE id = $1 FOR UPDATE) o
+		WHERE u.id = o.id
+		RETURNING `+userCols+`, o.old::text`, id, string(perms)).Scan(
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms,
+		&u.HasPassword, &u.PendingEmail, &previous)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", nil
+		}
+		return nil, "", err
+	}
+	return &u, previous, nil
+}
+
+// DeleteUser implémente Store.DeleteUser.
+func (s *PgStore) DeleteUser(ctx context.Context, id string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM utilisateur WHERE id = $1`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // SetPassword implémente Store.SetPassword.
 func (s *PgStore) SetPassword(ctx context.Context, id, passwordHash string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE utilisateur SET password_hash = $2 WHERE id = $1`, id, passwordHash)

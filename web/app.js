@@ -230,6 +230,7 @@ async function renderAvatar(el, user, avatarURL) {
 function renderUser() {
   $("#user-label").textContent = displayName(currentUser);
   renderAvatar($("#user-avatar"), currentUser);
+  $("#admin-btn").hidden = !(currentUser && currentUser.perms === "admin");
 }
 
 async function refreshUser() {
@@ -355,6 +356,146 @@ settingsSubmit($("#password-form"), async () => {
   await refreshUser();
   return hadPassword ? "Mot de passe mis à jour." : "Mot de passe défini.";
 });
+
+// ---------------------------------------------------------------------------
+// Administration : gestion des utilisateurs (comptes 'admin')
+// ---------------------------------------------------------------------------
+const PERMS_LABELS = {
+  unverified: "Non vérifié",
+  verified: "En attente",
+  granted: "Autorisé",
+  admin: "Administrateur",
+};
+const PERMS_ORDER = ["unverified", "verified", "granted", "admin"];
+let adminUsers = []; // dernière liste de GET /admin/users
+
+function adminMsg(message, isError) {
+  const p = $("#admin-msg");
+  p.textContent = message;
+  p.classList.toggle("error", !!isError);
+  p.classList.toggle("info", !isError);
+  p.hidden = !message;
+}
+
+async function loadAdminUsers() {
+  adminMsg("");
+  $("#admin-count").textContent = "Chargement…";
+  $("#admin-users-list").replaceChildren();
+  try {
+    adminUsers = await api("/admin/users");
+    renderAdminUsers();
+  } catch (ex) {
+    $("#admin-count").textContent = "";
+    adminMsg(ex.message, true);
+  }
+}
+
+function renderAdminUsers() {
+  const q = $("#admin-search").value.trim().toLowerCase();
+  const pendingOnly = $("#admin-pending-only").checked;
+  const pendingCount = adminUsers.filter((u) => u.perms === "verified").length;
+  const shown = adminUsers
+    .filter((u) => !pendingOnly || u.perms === "verified")
+    .filter((u) => !q || `${displayName(u)} ${u.email || ""}`.toLowerCase().includes(q))
+    // Comptes en attente de validation d'abord, puis par e-mail.
+    .sort((a, b) =>
+      (b.perms === "verified") - (a.perms === "verified") ||
+      (a.email || "").localeCompare(b.email || "")
+    );
+
+  $("#admin-count").textContent =
+    `${adminUsers.length} compte${adminUsers.length > 1 ? "s" : ""}` +
+    (pendingCount ? `, dont ${pendingCount} en attente de validation` : "") +
+    (shown.length !== adminUsers.length ? ` — ${shown.length} affiché${shown.length > 1 ? "s" : ""}` : "");
+  $("#admin-users-list").replaceChildren(...shown.map(adminUserRow));
+}
+
+function adminUserRow(u) {
+  const isSelf = currentUser && u.id === currentUser.id;
+  const li = document.createElement("li");
+  li.className = "admin-user";
+  li.classList.toggle("pending", u.perms === "verified");
+
+  const avatar = document.createElement("span");
+  avatar.className = "avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  renderAvatar(avatar, u);
+
+  const who = document.createElement("div");
+  who.className = "admin-user-who";
+  const name = document.createElement("strong");
+  name.textContent = displayName(u) + (isSelf ? " (vous)" : "");
+  const email = document.createElement("span");
+  email.className = "admin-user-email";
+  email.textContent = u.email || "—";
+  who.append(name, email);
+  if (u.email && displayName(u) === u.email) email.hidden = true;
+
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", `Niveau d'accès de ${u.email || displayName(u)}`);
+  for (const p of PERMS_ORDER) select.add(new Option(PERMS_LABELS[p], p, false, p === u.perms));
+  select.disabled = isSelf;
+  if (isSelf) select.title = "Vous ne pouvez pas changer votre propre niveau.";
+  select.addEventListener("change", async () => {
+    const previous = u.perms;
+    select.disabled = true;
+    adminMsg("");
+    try {
+      const updated = await api(`/admin/users/${encodeURIComponent(u.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ perms: select.value }),
+      });
+      Object.assign(u, updated);
+      const approved =
+        PERMS_ORDER.indexOf(previous) < PERMS_ORDER.indexOf("granted") &&
+        PERMS_ORDER.indexOf(u.perms) >= PERMS_ORDER.indexOf("granted");
+      adminMsg(
+        `${u.email || displayName(u)} : ${PERMS_LABELS[previous]} → ${PERMS_LABELS[u.perms]}.` +
+          (approved ? " Un e-mail de validation lui a été envoyé." : "")
+      );
+      renderAdminUsers();
+    } catch (ex) {
+      select.value = previous;
+      select.disabled = false;
+      adminMsg(ex.message, true);
+    }
+  });
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "btn-ghost btn-danger";
+  del.textContent = "Supprimer";
+  del.hidden = isSelf;
+  del.addEventListener("click", async () => {
+    const label = u.email || displayName(u);
+    if (!confirm(`Supprimer définitivement le compte ${label} ?`)) return;
+    del.disabled = true;
+    adminMsg("");
+    try {
+      await api(`/admin/users/${encodeURIComponent(u.id)}`, { method: "DELETE" });
+      adminUsers = adminUsers.filter((x) => x.id !== u.id);
+      adminMsg(`Compte ${label} supprimé.`);
+      renderAdminUsers();
+    } catch (ex) {
+      del.disabled = false;
+      adminMsg(ex.message, true);
+    }
+  });
+
+  li.append(avatar, who, select, del);
+  return li;
+}
+
+$("#admin-btn").addEventListener("click", () => {
+  $("#admin-users").showModal();
+  loadAdminUsers();
+});
+$("#admin-users-close").addEventListener("click", () => $("#admin-users").close());
+$("#admin-users").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) e.currentTarget.close();
+});
+$("#admin-search").addEventListener("input", renderAdminUsers);
+$("#admin-pending-only").addEventListener("change", renderAdminUsers);
 
 function initMap() {
   map = L.map("map", { zoomControl: false }).setView([46.6, 2.5], 6); // France

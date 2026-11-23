@@ -38,6 +38,17 @@ func (p Perms) AtLeast(min Perms) bool {
 	return ok && r >= permsRank[min]
 }
 
+// Valid indique si p est un niveau d'accès connu.
+func (p Perms) Valid() bool {
+	_, ok := permsRank[p]
+	return ok
+}
+
+// PermsUpdate est le corps de PATCH /admin/users/{id}.
+type PermsUpdate struct {
+	Perms Perms `json:"perms"`
+}
+
 // DvUser représente un utilisateur authentifié (forme publique, sérialisée en JSON).
 type DvUser struct {
 	ID          string   `json:"id"`

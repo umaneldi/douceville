@@ -46,6 +46,53 @@ type mockStore struct {
 	// oidcUser et oidcErr sont renvoyés par FindOrCreateOIDCUser.
 	oidcUser *models.DvUser
 	oidcErr  error
+	// users est renvoyé par ListUsers ; permsPrev est le niveau précédent
+	// renvoyé par SetUserPerms. setPermsTo et deleted reçoivent le niveau passé
+	// à SetUserPerms et l'identifiant passé à DeleteUser (si non nil).
+	users      []models.DvUser
+	permsPrev  models.Perms
+	setPermsTo *models.Perms
+	deleted    *string
+}
+
+// knownUser renvoie le compte d'identifiant id parmi m.users.
+func (m mockStore) knownUser(id string) *models.DvUser {
+	for i := range m.users {
+		if m.users[i].ID == id {
+			u := m.users[i]
+			return &u
+		}
+	}
+	return nil
+}
+func (m mockStore) ListUsers(ctx context.Context) ([]models.DvUser, error) {
+	return m.users, m.err
+}
+func (m mockStore) SetUserPerms(ctx context.Context, id string, perms models.Perms) (*models.DvUser, models.Perms, error) {
+	if m.err != nil {
+		return nil, "", m.err
+	}
+	u := m.knownUser(id)
+	if u == nil {
+		return nil, "", nil
+	}
+	if m.setPermsTo != nil {
+		*m.setPermsTo = perms
+	}
+	u.Perms = perms
+	return u, m.permsPrev, nil
+}
+func (m mockStore) DeleteUser(ctx context.Context, id string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
+	}
+	if m.knownUser(id) == nil {
+		return false, nil
+	}
+	if m.deleted != nil {
+		*m.deleted = id
+	}
+	return true, nil
 }
 
 func (m mockStore) FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdentity, defaultPerms models.Perms) (*models.DvUser, error) {

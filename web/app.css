@@ -247,6 +247,29 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
   font-size: 0.85rem;
 }
 .btn-ghost:hover { background: var(--panel-2); }
+.btn-danger { color: var(--error); border-color: rgba(248, 113, 113, 0.4); }
+.btn-danger:hover { background: rgba(248, 113, 113, 0.12); }
+.btn-ghost:disabled { opacity: 0.55; cursor: progress; }
+
+/* Gestion des utilisateurs (administrateurs) */
+.admin-users { width: min(720px, calc(100vw - 2rem)); }
+.admin-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-bottom: 0.5rem; }
+.admin-filters input[type="text"] { flex: 1 1 220px; width: auto; }
+.admin-pending-only { display: flex; align-items: center; gap: 0.4rem; color: var(--muted); font-size: 0.85rem; cursor: pointer; }
+.admin-users-list { list-style: none; margin: 0; padding: 0; }
+.admin-user {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 150px auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.admin-user.pending { background: rgba(198, 244, 50, 0.06); border-radius: 8px; }
+.admin-user select { padding: 0.4rem 0.5rem; font-size: 0.85rem; }
+.admin-user-who { display: flex; flex-direction: column; min-width: 0; }
+.admin-user-who strong { font-weight: 600; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-user-email { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .layout {
   flex: 1;
@@ -740,6 +763,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .panel { overflow: visible; }
   .tab-pane[data-pane="overview"]:not([hidden]) { display: block; }
   .name-fields { flex-direction: column; }
+  .admin-user { grid-template-columns: auto minmax(0, 1fr); }
+  .admin-user select { grid-column: 1 / -1; }
+  .admin-user .btn-danger { grid-column: 1 / -1; justify-self: end; }
   /* Sous 16px, iOS zoome à la mise au point d'un champ. */
   input[type="text"], input[type="email"], input[type="password"],
   input[type="number"], select { font-size: 16px; }

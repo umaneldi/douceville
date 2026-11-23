@@ -70,3 +70,16 @@ func TestPermsAtLeast(t *testing.T) {
 		t.Error("unknown perms must not reach any level")
 	}
 }
+
+func TestPermsValid(t *testing.T) {
+	for _, p := range []Perms{PermsUnverified, PermsVerified, PermsGranted, PermsAdmin} {
+		if !p.Valid() {
+			t.Errorf("%q should be valid", p)
+		}
+	}
+	for _, p := range []Perms{"", "root", "Admin"} {
+		if p.Valid() {
+			t.Errorf("%q should not be valid", p)
+		}
+	}
+}

@@ -49,6 +49,14 @@ type Store interface {
 	// e-mail si le fournisseur atteste l'adresse (email_verified). Renvoie
 	// ErrEmailTaken si l'e-mail appartient à un autre compte et n'est pas attesté.
 	FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdentity, defaultPerms models.Perms) (*models.DvUser, error)
+	// ListUsers renvoie tous les comptes, triés par e-mail.
+	ListUsers(ctx context.Context) ([]models.DvUser, error)
+	// SetUserPerms change le niveau d'accès du compte et renvoie son profil et
+	// son niveau précédent, ou (nil, "", nil) si le compte n'existe pas.
+	SetUserPerms(ctx context.Context, id string, perms models.Perms) (user *models.DvUser, previous models.Perms, err error)
+	// DeleteUser supprime le compte (jetons de vérification et identités OIDC
+	// compris) ; renvoie false si le compte n'existe pas.
+	DeleteUser(ctx context.Context, id string) (bool, error)
 	// GetEtablissementByUAI renvoie un établissement et ses résultats, ou (nil, nil) si absent.
 	GetEtablissementByUAI(ctx context.Context, uai string) (*models.Etablissement, error)
 	// FindEtablissementsInZone renvoie les établissements contenus dans le polygone WKT,
