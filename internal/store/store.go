@@ -80,6 +80,34 @@ type Store interface {
 	// PointLevels renvoie, pour chaque point [lon, lat], l'indice du premier
 	// polygone WKT de levelWKTs qui le contient (-1 si aucun).
 	PointLevels(ctx context.Context, lonlats [][2]float64, levelWKTs []string) ([]int, error)
+
+	// GetBillingSettings renvoie les tarifs et paramètres de facturation.
+	GetBillingSettings(ctx context.Context) (models.BillingSettings, error)
+	// UpdateBillingSettings enregistre les tarifs (hors devise) et renvoie les
+	// paramètres à jour.
+	UpdateBillingSettings(ctx context.Context, b models.BillingSettings, adminID string) (models.BillingSettings, error)
+	// DebitCredit débite atomiquement cents du solde du compte et renvoie le
+	// nouveau solde ; ErrInsufficientCredit si le solde est insuffisant.
+	DebitCredit(ctx context.Context, userID string, cents int64, desc string) (int64, error)
+	// RefundCredit recrédite cents (requête payante échouée) et renvoie le solde.
+	RefundCredit(ctx context.Context, userID string, cents int64, desc string) (int64, error)
+	// AdjustCredit ajoute delta (signé) au solde par un administrateur ;
+	// ErrInsufficientCredit si le solde deviendrait négatif, ErrNotFound si le
+	// compte n'existe pas.
+	AdjustCredit(ctx context.Context, userID string, delta int64, adminID, reason string) (int64, error)
+	// ListCreditTransactions renvoie les derniers mouvements du compte.
+	ListCreditTransactions(ctx context.Context, userID string, limit int) ([]models.CreditTransaction, error)
+	// CreatePayment enregistre un paiement de rechargement.
+	CreatePayment(ctx context.Context, p models.Payment) error
+	// GetPayment renvoie un paiement, ou (nil, nil) s'il est inconnu.
+	GetPayment(ctx context.Context, id string) (*models.Payment, error)
+	// MarkPaymentPaid passe le paiement à 'paid' et crédite le compte ;
+	// credited=false s'il était inconnu ou déjà crédité (idempotent).
+	MarkPaymentPaid(ctx context.Context, id string) (credited bool, err error)
+	// UpdatePaymentStatus met à jour le statut d'un paiement non crédité.
+	UpdatePaymentStatus(ctx context.Context, id, status string) error
+	// ListPendingPayments renvoie les paiements récents non finalisés du compte.
+	ListPendingPayments(ctx context.Context, userID string) ([]models.Payment, error)
 }
 
 // ErrEmailTaken est renvoyée par CreateUser quand l'email existe déjà.

@@ -264,6 +264,53 @@ Colonnes créées par `migrations/001_utilisateur.sql`, `migrations/002_auth.sql
 | `permissions`   | `TEXT[]`   | NOT NULL, défaut `'{}'`        | Liste des permissions. |
 | `perms`         | `user_perms` | NOT NULL, défaut `'unverified'` | Niveau d'accès, enum ordonné `unverified` < `verified` < `granted` < `admin`. Seuls `granted` et `admin` accèdent à l'application. Les comptes antérieurs à la migration 004 sont passés à `granted`. |
 
+`balance_cents` (`BIGINT`, NOT NULL, défaut `0`, `CHECK >= 0`, `migrations/016_billing.sql`)
+est le solde de crédit prépayé, en centimes : somme des mouvements de `credit_transaction`,
+tenue à jour dans la même transaction.
+
+## Table `billing_settings`
+
+Tarifs de facturation, ligne unique (`id = TRUE`), modifiables par un administrateur
+(`migrations/016_billing.sql`). Montants en centimes.
+
+| Colonne                  | Type SQL      | Description |
+|--------------------------|---------------|-------------|
+| `price_per_origin_cents` | `BIGINT`      | Prix par point de départ de `POST /etablissements` (défaut 5). |
+| `isochrone_price_cents`  | `BIGINT`      | Prix de `GET /isochrone` (défaut 2). |
+| `welcome_credit_cents`   | `BIGINT`      | Crédit offert à la création d'un compte (défaut 100). |
+| `min_topup_cents`        | `BIGINT`      | Rechargement minimum (défaut 500, au moins 100). |
+| `currency`               | `TEXT`        | Devise (`EUR`). |
+| `updated_at`, `updated_by` | `TIMESTAMPTZ`, `TEXT` | Dernière modification (FK `utilisateur`, ON DELETE SET NULL). |
+
+## Table `credit_transaction`
+
+Journal des mouvements de crédit (`migrations/016_billing.sql`).
+
+| Colonne        | Type SQL      | Description |
+|----------------|---------------|-------------|
+| `id`           | `BIGSERIAL`   | **PK**. |
+| `user_id`      | `TEXT`        | FK `utilisateur(id)` ON DELETE CASCADE. |
+| `amount_cents` | `BIGINT`      | Montant signé (débit négatif). |
+| `kind`         | `TEXT`        | `topup`, `usage`, `refund`, `admin_adjust` ou `welcome`. |
+| `description`  | `TEXT`        | Libellé affiché (motif d'un ajustement). |
+| `reference`    | `TEXT`        | Identifiant du paiement pour un `topup`. |
+| `created_by`   | `TEXT`        | Administrateur auteur d'un ajustement. |
+| `created_at`   | `TIMESTAMPTZ` | Date du mouvement. Index `(user_id, created_at DESC)`. |
+
+## Table `payment`
+
+Paiements de rechargement auprès de Mollie (`migrations/016_billing.sql`). Le passage
+à `paid` et le crédit du compte ont lieu dans la même transaction, une seule fois.
+
+| Colonne        | Type SQL      | Description |
+|----------------|---------------|-------------|
+| `id`           | `TEXT`        | **PK**, identifiant Mollie (`tr_…`). |
+| `user_id`      | `TEXT`        | FK `utilisateur(id)` ON DELETE CASCADE. |
+| `amount_cents`, `currency` | `BIGINT`, `TEXT` | Montant demandé. |
+| `status`       | `TEXT`        | Statut Mollie (`open`, `pending`, `paid`, `failed`, `canceled`, `expired`…). |
+| `mode`         | `TEXT`        | `test` ou `live`. |
+| `created_at`, `paid_at` | `TIMESTAMPTZ` | Création et paiement. |
+
 ## Table `email_verification`
 
 Jetons de vérification d'adresse e-mail (`migrations/004_email_verification_logout.sql`).

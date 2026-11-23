@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/umaneldi/douceville/internal/api"
 	"github.com/umaneldi/douceville/internal/auth"
+	"github.com/umaneldi/douceville/internal/billing"
 	"github.com/umaneldi/douceville/internal/config"
 	"github.com/umaneldi/douceville/internal/geo"
 	"github.com/umaneldi/douceville/internal/mail"
@@ -101,6 +102,18 @@ func main() {
 		handlers.OIDC = o
 		slog.Info("OIDC login enabled", "issuer", cfg.OIDCIssuerURL, "redirect_url", cfg.OIDCRedirectURL,
 			"default_perms", cfg.OIDCDefaultPerms)
+	}
+
+	if cfg.BillingEnabled {
+		mollie := billing.NewMollieClient(cfg.MollieAPIKey, "", nil)
+		handlers.Billing = mollie
+		handlers.BillingWebhookURL = cfg.MollieWebhookURL
+		slog.Info("billing enabled (Mollie)", "mode", mollie.Mode(), "webhook_url", cfg.MollieWebhookURL)
+		if mollie.Mode() == "test" {
+			slog.Warn("billing is in TEST mode: payments are simulated, no real money is charged")
+		}
+	} else {
+		slog.Info("billing disabled (BILLING_ENABLED not set): requests are free")
 	}
 
 	router := api.NewRouter(cfg.JWTSecret, handlers, st)

@@ -175,6 +175,7 @@ function startApp(user) {
   if (!map) initMap();
   // Leaflet a besoin de recalculer sa taille une fois le conteneur visible.
   setTimeout(() => map.invalidateSize(), 0);
+  loadBilling();
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +359,173 @@ settingsSubmit($("#password-form"), async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Crédit prépayé : solde, tarifs, rechargement (Mollie)
+// ---------------------------------------------------------------------------
+let billing = null; // dernière réponse de GET /billing
+
+function fmtMoney(cents, currency) {
+  return new Intl.NumberFormat("fr-FR", {
+    style: "currency",
+    currency: currency || (billing && billing.currency) || "EUR",
+  }).format((cents || 0) / 100);
+}
+
+const TX_LABELS = {
+  topup: "Rechargement",
+  usage: "Requête",
+  refund: "Remboursement",
+  admin_adjust: "Ajustement",
+  welcome: "Bienvenue",
+};
+
+async function loadBilling() {
+  try {
+    billing = await api("/billing");
+  } catch (_) {
+    billing = null;
+  }
+  renderBilling();
+}
+
+// Solde mis à jour après une requête payante (en-tête X-Credit-Balance) ou
+// relu auprès du serveur.
+function setBalance(cents) {
+  if (!billing) return;
+  billing.balance_cents = cents;
+  renderBilling();
+}
+
+function renderBilling() {
+  const on = !!(billing && billing.enabled);
+  for (const pill of [$("#user-balance"), $("#rail-balance")]) {
+    pill.hidden = !on;
+    if (!on) continue;
+    pill.textContent = fmtMoney(billing.balance_cents);
+    pill.classList.toggle("low", !billing.free && billing.balance_cents < billing.price_per_origin_cents);
+    pill.title = billing.free
+      ? `Crédit : ${fmtMoney(billing.balance_cents)} (administrateur : requêtes gratuites)`
+      : `Crédit disponible : ${fmtMoney(billing.balance_cents)} — cliquer pour recharger`;
+    pill.setAttribute("aria-label", pill.title);
+  }
+
+  const form = $("#billing-form");
+  form.hidden = !on;
+  if (on) {
+    $("#billing-test-badge").hidden = billing.mode !== "test";
+    $("#billing-balance").textContent = billing.free
+      ? "illimité (administrateur)"
+      : fmtMoney(billing.balance_cents);
+    $("#billing-prices").textContent =
+      `Tarifs : ${fmtMoney(billing.price_per_origin_cents)} par point de départ d'une recherche` +
+      (billing.isochrone_price_cents ? `, ${fmtMoney(billing.isochrone_price_cents)} par isochrone.` : ".");
+    const amount = $("#topup-amount");
+    amount.min = (billing.min_topup_cents / 100).toFixed(2);
+    amount.max = (billing.max_topup_cents / 100).toFixed(2);
+    amount.placeholder = `Montant (min. ${fmtMoney(billing.min_topup_cents)})`;
+    form.querySelectorAll("[data-amount]").forEach((b) => {
+      const c = parseInt(b.dataset.amount, 10);
+      b.hidden = c < billing.min_topup_cents || c > billing.max_topup_cents;
+    });
+
+    const list = $("#billing-transactions");
+    list.replaceChildren(
+      ...billing.transactions.map((t) => {
+        const li = document.createElement("li");
+        const when = document.createElement("span");
+        when.className = "tx-date";
+        when.textContent = new Date(t.created_at).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+        const what = document.createElement("span");
+        what.className = "tx-what";
+        what.textContent = t.description || TX_LABELS[t.kind] || t.kind;
+        const amt = document.createElement("span");
+        amt.className = "tx-amount " + (t.amount_cents < 0 ? "neg" : "pos");
+        amt.textContent = (t.amount_cents > 0 ? "+" : "") + fmtMoney(t.amount_cents);
+        li.append(when, what, amt);
+        return li;
+      })
+    );
+    if (!billing.transactions.length) {
+      const li = document.createElement("li");
+      li.className = "hint";
+      li.textContent = "Aucun mouvement.";
+      list.append(li);
+    }
+  }
+  updateSearchCost();
+}
+
+// Coût estimé de la recherche, affiché sous le bouton « Rechercher ».
+function updateSearchCost() {
+  const el = $("#search-cost");
+  if (!el) return;
+  const on = !!(billing && billing.enabled);
+  el.hidden = !on;
+  if (!on) return;
+  if (billing.free) {
+    el.textContent = "Recherches gratuites (administrateur).";
+    el.classList.remove("err");
+    return;
+  }
+  const n = document.querySelectorAll("#origins .origin-row").length || 1;
+  const cost = n * billing.price_per_origin_cents;
+  el.textContent =
+    `Coût : ${n > 1 ? `${n} × ${fmtMoney(billing.price_per_origin_cents)} = ` : ""}${fmtMoney(cost)}` +
+    ` · solde ${fmtMoney(billing.balance_cents)}`;
+  el.classList.toggle("err", cost > billing.balance_cents);
+}
+
+// Ouvre les paramètres sur la section « Crédit », avec un message éventuel.
+function openBilling(message, isError) {
+  if (!$("#settings").open) $("#user-chip").click();
+  const form = $("#billing-form");
+  settingsMsg(form, message || "", isError);
+  form.scrollIntoView({ block: "start" });
+  if (!message) $("#topup-amount").focus();
+}
+
+$("#user-balance").addEventListener("click", () => openBilling());
+$("#rail-balance").addEventListener("click", () => openBilling());
+
+$("#billing-form").querySelectorAll("[data-amount]").forEach((b) =>
+  b.addEventListener("click", () => {
+    $("#topup-amount").value = (parseInt(b.dataset.amount, 10) / 100).toFixed(2);
+  })
+);
+
+settingsSubmit($("#billing-form"), async () => {
+  const cents = Math.round(parseFloat($("#topup-amount").value.replace(",", ".")) * 100);
+  if (!Number.isFinite(cents) || cents <= 0) throw new Error("Montant invalide.");
+  const data = await api("/billing/topup", {
+    method: "POST",
+    body: JSON.stringify({ amount_cents: cents }),
+  });
+  location.assign(data.checkout_url); // page de paiement Mollie
+  return "Redirection vers la page de paiement…";
+});
+
+// Retour de la page de paiement (/?billing_return=1) : relit les paiements en cours.
+async function handleBillingReturn() {
+  let msg = "Paiement en cours de traitement : votre solde sera crédité dès sa confirmation.";
+  let isError = false;
+  try {
+    const res = await api("/billing/sync", { method: "POST" });
+    const credited = res.payments.filter((p) => p.credited || p.status === "paid");
+    const failed = res.payments.filter((p) => ["failed", "canceled", "expired"].includes(p.status));
+    if (credited.length) {
+      msg = `Paiement confirmé : ${fmtMoney(credited.reduce((a, p) => a + p.amount_cents, 0))} crédité(s). Merci !`;
+    } else if (failed.length) {
+      msg = "Le paiement n'a pas abouti : aucun montant n'a été débité.";
+      isError = true;
+    }
+  } catch (ex) {
+    msg = ex.message;
+    isError = true;
+  }
+  await loadBilling();
+  openBilling(msg, isError);
+}
+
+// ---------------------------------------------------------------------------
 // Administration : gestion des utilisateurs (comptes 'admin')
 // ---------------------------------------------------------------------------
 const PERMS_LABELS = {
@@ -482,13 +650,79 @@ function adminUserRow(u) {
     }
   });
 
-  li.append(avatar, who, select, del);
+  const credit = document.createElement("button");
+  credit.type = "button";
+  credit.className = "btn-ghost admin-credit";
+  credit.textContent = fmtMoney(u.balance_cents);
+  credit.title = "Ajuster le crédit";
+  credit.addEventListener("click", async () => {
+    const label = u.email || displayName(u);
+    const raw = prompt(`Ajustement du crédit de ${label} (solde ${fmtMoney(u.balance_cents)}).\n` +
+      "Montant en euros, négatif pour retirer (ex. 5 ou -2,50) :");
+    if (raw === null || !raw.trim()) return;
+    const delta = Math.round(parseFloat(raw.replace(",", ".")) * 100);
+    if (!Number.isFinite(delta) || delta === 0) return adminMsg("Montant invalide.", true);
+    const reason = prompt("Motif (visible dans l'historique de l'utilisateur) :");
+    if (!reason || !reason.trim()) return adminMsg("Un motif est requis.", true);
+    credit.disabled = true;
+    adminMsg("");
+    try {
+      const res = await api(`/admin/users/${encodeURIComponent(u.id)}/credit`, {
+        method: "POST",
+        body: JSON.stringify({ delta_cents: delta, reason: reason.trim() }),
+      });
+      u.balance_cents = res.balance_cents;
+      adminMsg(`${label} : ${delta > 0 ? "+" : ""}${fmtMoney(delta)}, nouveau solde ${fmtMoney(u.balance_cents)}.`);
+      if (isSelf) loadBilling();
+      renderAdminUsers();
+    } catch (ex) {
+      credit.disabled = false;
+      adminMsg(ex.message, true);
+    }
+  });
+
+  const withCredit = !!(billing && billing.enabled);
+  li.classList.toggle("with-credit", withCredit);
+  li.append(avatar, who, ...(withCredit ? [credit] : []), select, del);
   return li;
 }
 
 $("#admin-btn").addEventListener("click", () => {
   $("#admin-users").showModal();
   loadAdminUsers();
+  loadPricing();
+});
+
+// Tarifs (administrateurs), saisis en euros et transmis en centimes.
+const PRICING_FIELDS = {
+  "#price-origin": "price_per_origin_cents",
+  "#price-isochrone": "isochrone_price_cents",
+  "#price-welcome": "welcome_credit_cents",
+  "#price-min-topup": "min_topup_cents",
+};
+
+async function loadPricing() {
+  const form = $("#admin-pricing-form");
+  settingsMsg(form, "");
+  form.hidden = !(billing && billing.enabled);
+  if (form.hidden) return;
+  $("#admin-test-badge").hidden = billing.mode !== "test";
+  try {
+    const s = await api("/admin/billing/settings");
+    for (const [sel, key] of Object.entries(PRICING_FIELDS)) $(sel).value = (s[key] / 100).toFixed(2);
+  } catch (ex) {
+    settingsMsg(form, ex.message, true);
+  }
+}
+
+settingsSubmit($("#admin-pricing-form"), async () => {
+  const body = {};
+  for (const [sel, key] of Object.entries(PRICING_FIELDS)) {
+    body[key] = Math.round(parseFloat($(sel).value) * 100);
+  }
+  await api("/admin/billing/settings", { method: "PUT", body: JSON.stringify(body) });
+  await loadBilling();
+  return "Tarifs enregistrés : ils s'appliquent dès maintenant.";
 });
 $("#admin-users-close").addEventListener("click", () => $("#admin-users").close());
 $("#admin-users").addEventListener("click", (e) => {
@@ -1113,6 +1347,7 @@ function refreshOrigins() {
     row.querySelector(".origin-remove").hidden = rows.length === 1;
   });
   $("#add-origin").hidden = rows.length >= MAX_ORIGINS;
+  updateSearchCost();
 }
 
 function addOrigin({ focus = true } = {}) {
@@ -1159,6 +1394,8 @@ $("#logout").addEventListener("click", async () => {
   if (logementLayer) renderLogements([]);
   updateLevelLegend([]);
   lastData = null;
+  billing = null;
+  renderBilling();
   renderInsights([]);
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
@@ -1205,8 +1442,17 @@ $("#search-form").addEventListener("submit", async (e) => {
   } catch (ex) {
     status.textContent = ex.message;
     status.classList.add("err");
+    if (ex.code === "insufficient_credit") {
+      const topup = document.createElement("button");
+      topup.type = "button";
+      topup.className = "btn-ghost status-action";
+      topup.textContent = "Recharger";
+      topup.addEventListener("click", () => openBilling());
+      status.append(" ", topup);
+    }
   } finally {
     btn.disabled = false;
+    if (billing && billing.enabled) loadBilling(); // débit ou remboursement
   }
 });
 
@@ -1879,6 +2125,9 @@ renderInsights([]);
   const oidcToken = new URLSearchParams(location.hash.slice(1)).get("oidc_token");
   const oidcError = new URLSearchParams(location.search).get("oidc_error");
   if (oidcToken || oidcError) history.replaceState(null, "", "/");
+  // Retour de la page de paiement Mollie : /?billing_return=1.
+  const billingReturn = new URLSearchParams(location.search).has("billing_return");
+  if (billingReturn) history.replaceState(null, "", "/");
   if (oidcToken) setToken(oidcToken);
 
   // Lien de vérification reçu par e-mail : /verify-email?token=...
@@ -1913,6 +2162,7 @@ renderInsights([]);
     try {
       const user = await api("/user");
       startApp(user);
+      if (billingReturn) handleBillingReturn();
       return;
     } catch (_) {
       setToken(null);

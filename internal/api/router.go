@@ -31,6 +31,7 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 		api.Get("/auth/oidc/config", h.oidcConfig)
 		api.Get("/auth/oidc/login", h.oidcLogin)
 		api.Get("/auth/oidc/callback", h.oidcCallback)
+		api.Post("/billing/webhook/mollie", h.mollieWebhook)
 
 		// Routes protégées par un token Bearer.
 		api.Group(func(protected chi.Router) {
@@ -44,6 +45,9 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 			protected.Post("/user/email", h.changeEmail)
 			protected.Post("/user/password", h.changePassword)
 			protected.Post("/auth/logout", h.logout)
+			protected.Get("/billing", h.getBilling)
+			protected.Post("/billing/topup", h.topup)
+			protected.Post("/billing/sync", h.syncPayments)
 
 			// Administration des comptes (niveau 'admin').
 			protected.Route("/admin", func(admin chi.Router) {
@@ -51,6 +55,10 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 				admin.Get("/users", h.listUsers)
 				admin.Patch("/users/{id}", h.setUserPerms)
 				admin.Delete("/users/{id}", h.deleteUser)
+				admin.Post("/users/{id}/credit", h.adjustCredit)
+				admin.Get("/users/{id}/transactions", h.listUserTransactions)
+				admin.Get("/billing/settings", h.getBillingSettings)
+				admin.Put("/billing/settings", h.updateBillingSettings)
 			})
 		})
 	})

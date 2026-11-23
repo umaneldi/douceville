@@ -64,6 +64,8 @@ type DvUser struct {
 	HasPassword bool `json:"has_password"`
 	// PendingEmail est la nouvelle adresse en attente de vérification, le cas échéant.
 	PendingEmail *string `json:"pending_email"`
+	// BalanceCents est le solde de crédit prépayé du compte, en centimes.
+	BalanceCents int64 `json:"balance_cents"`
 }
 
 // UserRecord est la représentation interne d'un utilisateur, incluant le hash

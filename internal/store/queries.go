@@ -34,12 +34,13 @@ func scanEtablissement(row pgx.Row) (*models.Etablissement, error) {
 const userCols = `u.id, u.email, u.first_name, u.last_name, u.avatar_url, u.permissions, u.perms::text,
 	u.password_hash IS NOT NULL,
 	(SELECT v.new_email FROM email_verification v
-	  WHERE v.user_id = u.id AND v.new_email IS NOT NULL AND v.expires_at > now() LIMIT 1)`
+	  WHERE v.user_id = u.id AND v.new_email IS NOT NULL AND v.expires_at > now() LIMIT 1),
+	u.balance_cents`
 
 func scanUser(row pgx.Row) (*models.DvUser, error) {
 	var u models.DvUser
 	err := row.Scan(&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms,
-		&u.HasPassword, &u.PendingEmail)
+		&u.HasPassword, &u.PendingEmail, &u.BalanceCents)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -57,12 +58,12 @@ func (s *PgStore) GetUser(ctx context.Context, id string) (*models.DvUser, error
 // GetUserRecordByID implémente Store.GetUserRecordByID.
 func (s *PgStore) GetUserRecordByID(ctx context.Context, id string) (*models.UserRecord, error) {
 	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions, perms::text,
-		password_hash IS NOT NULL, COALESCE(password_hash, '')
+		password_hash IS NOT NULL, COALESCE(password_hash, ''), balance_cents
 		FROM utilisateur WHERE id = $1`
 
 	var u models.UserRecord
 	err := s.pool.QueryRow(ctx, q, id).Scan(
-		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms, &u.HasPassword, &u.PasswordHash,
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms, &u.HasPassword, &u.PasswordHash, &u.BalanceCents,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -107,7 +108,7 @@ func (s *PgStore) SetUserPerms(ctx context.Context, id string, perms models.Perm
 		WHERE u.id = o.id
 		RETURNING `+userCols+`, o.old::text`, id, string(perms)).Scan(
 		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms,
-		&u.HasPassword, &u.PendingEmail, &previous)
+		&u.HasPassword, &u.PendingEmail, &u.BalanceCents, &previous)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, "", nil
@@ -155,12 +156,12 @@ func (s *PgStore) CreateEmailChange(ctx context.Context, userID, newEmail, token
 
 // GetUserByEmail implémente Store.GetUserByEmail (hash du mot de passe inclus).
 func (s *PgStore) GetUserByEmail(ctx context.Context, email string) (*models.UserRecord, error) {
-	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions, perms::text, COALESCE(password_hash, '')
+	const q = `SELECT id, email, first_name, last_name, avatar_url, permissions, perms::text, COALESCE(password_hash, ''), balance_cents
 		FROM utilisateur WHERE lower(email) = lower($1)`
 
 	var u models.UserRecord
 	err := s.pool.QueryRow(ctx, q, email).Scan(
-		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms, &u.PasswordHash,
+		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms, &u.PasswordHash, &u.BalanceCents,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -180,12 +181,18 @@ func (s *PgStore) CreateUser(ctx context.Context, email, passwordHash string, fi
 		return nil, err
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // sans effet après Commit
+
 	const q = `INSERT INTO utilisateur (id, email, first_name, last_name, password_hash, permissions)
 		VALUES ($1, $2, $3, $4, $5, '{}')
 		RETURNING id, email, first_name, last_name, avatar_url, permissions, perms::text`
 
 	var u models.DvUser
-	err = s.pool.QueryRow(ctx, q, id, email, firstName, lastName, passwordHash).Scan(
+	err = tx.QueryRow(ctx, q, id, email, firstName, lastName, passwordHash).Scan(
 		&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms,
 	)
 	if err != nil {
@@ -195,7 +202,10 @@ func (s *PgStore) CreateUser(ctx context.Context, email, passwordHash string, fi
 		}
 		return nil, err
 	}
-	return &u, nil
+	if u.BalanceCents, err = grantWelcomeCredit(ctx, tx, u.ID); err != nil {
+		return nil, err
+	}
+	return &u, tx.Commit(ctx)
 }
 
 // CreateEmailVerification implémente Store.CreateEmailVerification.
@@ -300,10 +310,10 @@ func (s *PgStore) IsTokenRevoked(ctx context.Context, jti string) (bool, error) 
 
 // FindOrCreateOIDCUser implémente Store.FindOrCreateOIDCUser.
 func (s *PgStore) FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdentity, defaultPerms models.Perms) (*models.DvUser, error) {
-	const cols = `u.id, u.email, u.first_name, u.last_name, u.avatar_url, u.permissions, u.perms::text`
+	const cols = `u.id, u.email, u.first_name, u.last_name, u.avatar_url, u.permissions, u.perms::text, u.balance_cents`
 	scan := func(row pgx.Row) (*models.DvUser, error) {
 		var u models.DvUser
-		if err := row.Scan(&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms); err != nil {
+		if err := row.Scan(&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.AvatarURL, &u.Permissions, &u.Perms, &u.BalanceCents); err != nil {
 			return nil, err
 		}
 		return &u, nil
@@ -372,6 +382,9 @@ func (s *PgStore) FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdenti
 		return nil, err
 	}
 	if err := linkIdentity(u.ID); err != nil {
+		return nil, err
+	}
+	if u.BalanceCents, err = grantWelcomeCredit(ctx, tx, u.ID); err != nil {
 		return nil, err
 	}
 	return u, tx.Commit(ctx)

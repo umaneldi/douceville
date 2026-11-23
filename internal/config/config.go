@@ -50,6 +50,13 @@ type Config struct {
 	OIDCRedirectURL string
 	// OIDCDefaultPerms est le niveau d'accès attribué aux comptes créés via OIDC.
 	OIDCDefaultPerms string
+
+	// Facturation prépayée (optionnelle) : activée si BillingEnabled.
+	BillingEnabled bool
+	// MollieAPIKey est la clé API Mollie : test_… (mode test) ou live_….
+	MollieAPIKey string
+	// MollieWebhookURL est l'URL notifiée par Mollie des changements de statut.
+	MollieWebhookURL string
 }
 
 // OIDCEnabled indique si la connexion OpenID Connect est configurée.
@@ -91,6 +98,12 @@ func Load() (Config, error) {
 		OIDCDefaultPerms:    strings.ToLower(env("OIDC_DEFAULT_PERMS", "verified")),
 	}
 	c.OIDCRedirectURL = env("OIDC_REDIRECT_URL", c.PublicURL+"/api/auth/oidc/callback")
+	c.MollieAPIKey = strings.TrimSpace(env("MOLLIE_API_KEY", ""))
+	c.MollieWebhookURL = env("MOLLIE_WEBHOOK_URL", c.PublicURL+"/api/billing/webhook/mollie")
+	switch strings.ToLower(env("BILLING_ENABLED", "false")) {
+	case "1", "true", "yes", "on":
+		c.BillingEnabled = true
+	}
 
 	if c.JWTSecret == "" {
 		return Config{}, fmt.Errorf("JWT_SECRET is required")
@@ -111,6 +124,10 @@ func Load() (Config, error) {
 		if !slices.Contains(c.OIDCScopes, "openid") {
 			c.OIDCScopes = append([]string{"openid"}, c.OIDCScopes...)
 		}
+	}
+
+	if c.BillingEnabled && !strings.HasPrefix(c.MollieAPIKey, "test_") && !strings.HasPrefix(c.MollieAPIKey, "live_") {
+		return Config{}, fmt.Errorf("MOLLIE_API_KEY (test_… or live_…) is required when BILLING_ENABLED is set")
 	}
 
 	return c, nil

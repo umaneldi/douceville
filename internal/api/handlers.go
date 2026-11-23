@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/umaneldi/douceville/internal/auth"
+	"github.com/umaneldi/douceville/internal/billing"
 	"github.com/umaneldi/douceville/internal/geo"
 	"github.com/umaneldi/douceville/internal/mail"
 	"github.com/umaneldi/douceville/internal/models"
@@ -56,6 +57,10 @@ type Handlers struct {
 	PublicURL string
 	// OIDC est le client OpenID Connect ; nil si la connexion OIDC est désactivée.
 	OIDC OIDCProvider
+	// Billing est le prestataire de paiement ; nil si la facturation est désactivée.
+	Billing billing.PaymentProvider
+	// BillingWebhookURL est l'URL de notification transmise au prestataire.
+	BillingWebhookURL string
 }
 
 // readEtablissement gère GET /etablissement/{uai}.
@@ -113,6 +118,20 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// Chaque point de départ coûte un appel OpenRouteService : le prix est
+	// débité d'avance et remboursé si la recherche échoue.
+	refund, ok := h.charge(w, r, fmt.Sprintf("Recherche (%d point(s) de départ)", len(origines)),
+		func(s models.BillingSettings) int64 { return s.PricePerOriginCents * int64(len(origines)) })
+	if !ok {
+		return
+	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			refund()
+		}
+	}()
+
 	// Géocodage et isochrone de chaque point de départ, en parallèle.
 	isos := make([]models.Isochrone, len(origines))
 	g, gctx := errgroup.WithContext(r.Context())
@@ -154,6 +173,7 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 	levels := zoneLevelWKTs(isos)
 	if len(levels) == 0 {
 		log.Info("etablissements searched in zone: no zone level", "count_origines", len(isos))
+		succeeded = true
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -166,6 +186,7 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 	}
 	if empty {
 		log.Info("etablissements searched in zone: empty intersection", "count_origines", len(isos))
+		succeeded = true
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -255,6 +276,7 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		"count_levels", len(resp.ZoneLevels),
 	)
 
+	succeeded = true
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -308,8 +330,13 @@ func (h *Handlers) isochrone(w http.ResponseWriter, r *http.Request) {
 	}
 	transp := q.Get("transp")
 
+	refund, ok := h.charge(w, r, "Isochrone", func(s models.BillingSettings) int64 { return s.IsochronePriceCents })
+	if !ok {
+		return
+	}
 	iso, err := h.Isochron.CalcIsochrone(r.Context(), [2]float64{lon, lat}, dist, 0, transp)
 	if err != nil {
+		refund()
 		log.Error("isochrone computation failed", "lat", lat, "lon", lon, "dist", dist, "transp", transp, "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

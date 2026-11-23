@@ -73,6 +73,14 @@ niveau `granted` ou `admin` (sinon `403`, `code=account_not_granted`).
 | `GET`   | `/api/etablissement/{uai}` |  ✓   | Détail d'un établissement par son UAI.                        |
 | `POST`  | `/api/etablissements`      |  ✓   | Établissements dans la zone atteignable depuis une adresse.   |
 | `GET`   | `/api/isochrone`           |  ✓   | Isochrone depuis des coordonnées (`lat`, `lon`, `dist`, `transp`). |
+| `GET`   | `/api/billing`             |  ✓   | Facturation : `{enabled, mode, balance_cents, free, currency, price_per_origin_cents, isochrone_price_cents, min_topup_cents, max_topup_cents, transactions}`. |
+| `POST`  | `/api/billing/topup`       |  ✓   | Crée un paiement Mollie (`{amount_cents}`) ; renvoie `{checkout_url, payment_id}`. |
+| `POST`  | `/api/billing/sync`        |  ✓   | Relit auprès de Mollie les paiements en cours du compte (retour de la page de paiement). |
+| `POST`  | `/api/billing/webhook/mollie` | — | Notification Mollie (`id=tr_…`) ; le statut est relu auprès de l'API Mollie. |
+| `GET`   | `/api/admin/billing/settings` | admin | Tarifs et paramètres de facturation. |
+| `PUT`   | `/api/admin/billing/settings` | admin | Modifie `{price_per_origin_cents, isochrone_price_cents, welcome_credit_cents, min_topup_cents}`. |
+| `POST`  | `/api/admin/users/{id}/credit` | admin | Ajuste le solde d'un compte (`{delta_cents, reason}`, solde jamais négatif). |
+| `GET`   | `/api/admin/users/{id}/transactions` | admin | Derniers mouvements de crédit d'un compte. |
 
 Exemple de corps pour `POST /api/etablissements` (`dist` est un **temps en secondes**) :
 
@@ -134,6 +142,37 @@ l'ID token puis émet **son propre JWT**, comme pour la connexion par mot de pas
   connexion est refusée.
 - Les identités sont stockées dans la table `oidc_identity` (issuer, subject).
 
+### Facturation (crédit prépayé, Mollie)
+
+Si `BILLING_ENABLED=true`, chaque requête payante est débitée du **solde prépayé**
+du compte (`utilisateur.balance_cents`), que l'utilisateur recharge par
+[Mollie](https://www.mollie.com) (carte, SEPA…) depuis *Paramètres du compte → Crédit*.
+
+- `POST /api/etablissements` coûte *prix par point de départ × nombre de points de
+  départ* (chaque point est un appel OpenRouteService) ; `GET /api/isochrone` a son
+  propre prix. L'autocomplétion d'adresse est gratuite.
+- Le prix est débité **avant** les appels externes, de façon atomique (le solde ne
+  peut pas devenir négatif) ; si la requête échoue, il est remboursé. Solde
+  insuffisant : `402`, `code=insufficient_credit`.
+- Les administrateurs ne sont jamais facturés. Ils règlent les tarifs, le crédit de
+  bienvenue des nouveaux comptes et le rechargement minimum (panneau
+  *Utilisateurs → Tarifs*), et peuvent ajuster le solde d'un compte (avec un motif).
+- Chaque mouvement est journalisé (`credit_transaction`) et visible par l'utilisateur.
+
+**Mode test.** Le mode dépend uniquement de la clé : `MOLLIE_API_KEY=test_…` (tableau
+de bord Mollie → *Developers → API keys*) simule les paiements : sur la page de
+paiement de test, on choisit le résultat (*Paid*, *Failed*, *Canceled*…) sans
+payer. Une clé `live_…` encaisse réellement. Le mode test est signalé dans
+l'interface (badge « MODE TEST ») et dans les journaux.
+
+Mollie notifie `MOLLIE_WEBHOOK_URL` (par défaut `${PUBLIC_URL}/api/billing/webhook/mollie`),
+qui doit être joignable depuis Internet. En local (`localhost`), aucune webhook
+n'est transmise : au retour de la page de paiement (`/?billing_return=1`), le
+frontend appelle `/api/billing/sync`, qui relit le statut auprès de Mollie. Pour
+tester la webhook en local, exposer le serveur (`cloudflared tunnel --url
+http://localhost:3566` ou `ngrok http 3566`) et définir `PUBLIC_URL` en conséquence.
+Un paiement n'est crédité qu'une fois, même si la notification est rejouée.
+
 Un utilisateur connecté modifie son compte en cliquant sur son avatar (affiché
 depuis `avatar_url`, sinon son Gravatar, sinon ses initiales). Un changement
 d'adresse e-mail est **en attente** jusqu'au clic sur le lien envoyé à la nouvelle
@@ -173,6 +212,9 @@ lues par le backend :
 | `OIDC_SCOPES`          | `openid email profile` | Scopes demandés (séparés par des espaces). |
 | `OIDC_REDIRECT_URL`    | `${PUBLIC_URL}/api/auth/oidc/callback` | URL de retour déclarée chez le fournisseur. |
 | `OIDC_DEFAULT_PERMS`   | `verified`    | Niveau des comptes créés via OIDC (`granted` : accès immédiat). |
+| `BILLING_ENABLED`      | `false`       | Active la facturation prépayée (sinon tout est gratuit). |
+| `MOLLIE_API_KEY`       | — (requis si `BILLING_ENABLED`) | Clé Mollie : `test_…` (paiements simulés) ou `live_…`. |
+| `MOLLIE_WEBHOOK_URL`   | `${PUBLIC_URL}/api/billing/webhook/mollie` | URL notifiée par Mollie (omise si locale). |
 
 ## Lancer le service
 

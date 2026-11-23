@@ -53,6 +53,8 @@ type mockStore struct {
 	permsPrev  models.Perms
 	setPermsTo *models.Perms
 	deleted    *string
+	// bill porte l'état de facturation simulé (nil : tarifs nuls, aucun mouvement).
+	bill *fakeBill
 }
 
 // knownUser renvoie le compte d'identifiant id parmi m.users.
@@ -192,10 +194,13 @@ func (m mockStore) FindLogementsSociauxInZone(ctx context.Context, wkt string) (
 	return m.logements, m.err
 }
 
-type mockIso struct{ iso models.Isochrone }
+type mockIso struct {
+	iso models.Isochrone
+	err error
+}
 
 func (m mockIso) CalcIsochrone(ctx context.Context, lonlat [2]float64, dist, interval float64, transp string) (models.Isochrone, error) {
-	return m.iso, nil
+	return m.iso, m.err
 }
 
 type mockGeo struct{ res geo.BANResult }

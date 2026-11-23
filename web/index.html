@@ -61,6 +61,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 10v-1a6 6 0 0 1 6-6h2a6 6 0 0 1 6 6v1M16 3.5a4 4 0 0 1 0 7.5M19 14.5a6 6 0 0 1 3 5.5v1"/></svg>
       </button>
       <div class="spacer"></div>
+      <button id="rail-balance" type="button" class="balance-pill rail-balance" title="Crédit disponible — recharger" hidden></button>
       <button id="logout" class="rail-btn" title="Déconnexion" aria-label="Déconnexion">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/></svg>
       </button>
@@ -69,10 +70,13 @@
     <div class="main">
       <header class="topbar">
         <span class="brand-sm">Douceville <span class="version">{{VERSION}}</span></span>
-        <button id="user-chip" type="button" class="user-chip" aria-haspopup="dialog" title="Paramètres du compte">
-          <span id="user-avatar" class="avatar" aria-hidden="true"></span>
-          <span id="user-label" class="user-label"></span>
-        </button>
+        <div class="topbar-right">
+          <button id="user-balance" type="button" class="balance-pill" title="Crédit disponible — recharger" hidden></button>
+          <button id="user-chip" type="button" class="user-chip" aria-haspopup="dialog" title="Paramètres du compte">
+            <span id="user-avatar" class="avatar" aria-hidden="true"></span>
+            <span id="user-label" class="user-label"></span>
+          </button>
+        </div>
       </header>
 
       <div class="layout">
@@ -117,6 +121,7 @@
               </div>
             </fieldset>
 
+            <p id="search-cost" class="hint search-cost" hidden></p>
             <button id="search-btn" type="submit" class="btn-primary">Rechercher</button>
             <p id="search-status" class="status"></p>
           </form>
@@ -210,6 +215,30 @@
       <p class="settings-msg" role="status" hidden></p>
       <button type="submit" class="btn-primary">Mettre à jour le mot de passe</button>
     </form>
+
+    <form id="billing-form" class="settings-section" hidden>
+      <h3>Crédit <span id="billing-test-badge" class="test-badge" title="Paiements simulés : aucun débit réel" hidden>MODE TEST</span></h3>
+      <p class="hint">Solde : <strong id="billing-balance"></strong></p>
+      <p id="billing-prices" class="hint"></p>
+      <div id="billing-topup">
+        <div class="topup-presets">
+          <button type="button" class="btn-ghost" data-amount="500">5 €</button>
+          <button type="button" class="btn-ghost" data-amount="1000">10 €</button>
+          <button type="button" class="btn-ghost" data-amount="2000">20 €</button>
+          <button type="button" class="btn-ghost" data-amount="5000">50 €</button>
+        </div>
+        <div class="field topup-amount">
+          <input id="topup-amount" type="number" min="5" step="0.01" placeholder="Montant (€)" aria-label="Montant du rechargement en euros" required />
+        </div>
+        <p class="hint">Paiement sécurisé par Mollie (carte, virement SEPA, etc.).</p>
+      </div>
+      <p class="settings-msg" role="status" hidden></p>
+      <button type="submit" class="btn-primary" id="topup-btn">Recharger</button>
+      <details class="billing-history">
+        <summary>Historique</summary>
+        <ul id="billing-transactions" class="billing-transactions"></ul>
+      </details>
+    </form>
   </dialog>
 
   <!-- Gestion des utilisateurs (administrateurs) -->
@@ -218,6 +247,17 @@
       <h2 id="admin-users-title">Utilisateurs</h2>
       <button type="button" id="admin-users-close" class="settings-close" aria-label="Fermer">×</button>
     </div>
+    <form id="admin-pricing-form" class="settings-section" hidden>
+      <h3>Tarifs <span id="admin-test-badge" class="test-badge" hidden>MODE TEST</span></h3>
+      <div class="pricing-grid">
+        <label>Prix par point de départ (€) <input id="price-origin" type="number" min="0" max="100" step="0.01" required /></label>
+        <label>Prix d'une isochrone (€) <input id="price-isochrone" type="number" min="0" max="100" step="0.01" required /></label>
+        <label>Crédit de bienvenue (€) <input id="price-welcome" type="number" min="0" max="100" step="0.01" required /></label>
+        <label>Rechargement minimum (€) <input id="price-min-topup" type="number" min="1" max="1000" step="0.01" required /></label>
+      </div>
+      <p class="settings-msg" role="status" hidden></p>
+      <button type="submit" class="btn-primary">Enregistrer les tarifs</button>
+    </form>
     <div class="settings-section">
       <div class="admin-filters">
         <input id="admin-search" type="text" placeholder="Rechercher (nom ou e-mail)" autocomplete="off" />

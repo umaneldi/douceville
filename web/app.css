@@ -270,6 +270,60 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .admin-user-who { display: flex; flex-direction: column; min-width: 0; }
 .admin-user-who strong { font-weight: 600; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-user-email { color: var(--muted); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-user.with-credit { grid-template-columns: auto minmax(0, 1fr) auto 150px auto; }
+.admin-credit { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Crédit prépayé */
+.topbar-right { display: flex; align-items: center; gap: 0.5rem; }
+.balance-pill {
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.balance-pill:hover, .balance-pill:focus-visible { border-color: var(--accent); }
+.balance-pill.low { color: var(--error); border-color: rgba(248, 113, 113, 0.4); }
+/* Sur la barre latérale (bureau), le solde est déjà dans l'en-tête. */
+.rail-balance:not([hidden]) { display: none; }
+.test-badge {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(250, 204, 21, 0.15);
+  color: #facc15;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+.topup-presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+.billing-history { margin-top: 0.9rem; font-size: 0.85rem; }
+.billing-history summary { cursor: pointer; color: var(--muted); }
+.billing-transactions { list-style: none; margin: 0.5rem 0 0; padding: 0; max-height: 240px; overflow-y: auto; }
+.billing-transactions li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  padding: 0.3rem 0;
+  border-top: 1px solid var(--border);
+}
+.tx-date { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tx-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-amount { font-variant-numeric: tabular-nums; }
+.tx-amount.pos { color: var(--accent); }
+.tx-amount.neg { color: var(--muted); }
+.search-cost { margin: 0.5rem 0; }
+.search-cost.err { color: var(--error); }
+.status-action { margin-left: 0.4rem; padding: 0.15rem 0.5rem; }
+.pricing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem 1rem; margin-bottom: 0.6rem; }
+.pricing-grid label { display: flex; flex-direction: column; gap: 0.25rem; color: var(--muted); font-size: 0.82rem; }
 
 .layout {
   flex: 1;
@@ -751,6 +805,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   }
   .rail-logo { margin: 0 0.6rem 0 0; }
   .topbar { display: none; }
+  .rail-balance:not([hidden]) { display: inline-block; margin-right: 0.4rem; }
   .main { overflow: visible; }
   .layout {
     grid-template-columns: minmax(0, 1fr);
@@ -766,6 +821,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .admin-user { grid-template-columns: auto minmax(0, 1fr); }
   .admin-user select { grid-column: 1 / -1; }
   .admin-user .btn-danger { grid-column: 1 / -1; justify-self: end; }
+  .admin-user.with-credit { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .pricing-grid { grid-template-columns: minmax(0, 1fr); }
   /* Sous 16px, iOS zoome à la mise au point d'un champ. */
   input[type="text"], input[type="email"], input[type="password"],
   input[type="number"], select { font-size: 16px; }
