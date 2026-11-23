@@ -176,6 +176,117 @@ function startApp(user) {
   // Leaflet a besoin de recalculer sa taille une fois le conteneur visible.
   setTimeout(() => map.invalidateSize(), 0);
   loadBilling();
+
+  // Premier démarrage : état de la page repris de l'URL (favori, lien partagé)
+  // et recherche relancée s'il y a au moins une adresse de départ.
+  if (!urlReady) {
+    const run = applyQuery(new URLSearchParams(location.search));
+    urlReady = true;
+    syncUrl();
+    if (run) $("#search-form").requestSubmit();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// État de la page dans l'URL : points de départ, filtres, couches et onglet,
+// pour qu'un favori ou un lien partagé restaure la page (et relance la
+// recherche). Ex. : /?depart=15,voiture,12 rue X, Paris&depart=30,velo,Gare
+// &nature=Collège&secteur=public&taux=20-80&couche=prix&logements=1
+// &onglet=list
+// ---------------------------------------------------------------------------
+const TRANSP_CODES = { "driving-car": "voiture", "cycling-regular": "velo", "foot-walking": "pied" };
+const TRANSP_BY_CODE = Object.fromEntries(Object.entries(TRANSP_CODES).map(([k, v]) => [v, k]));
+const RETURN_QUERY_KEY = "douceville_return_query"; // état conservé pendant SSO / paiement
+let urlReady = false; // false tant que l'état de l'URL n'a pas été appliqué
+
+function pageQuery() {
+  const q = new URLSearchParams();
+  for (const o of collectOrigins()) {
+    q.append("depart", `${o.dist / 60},${TRANSP_CODES[o.transp] || o.transp},${o.adresse}`);
+  }
+  for (const v of checkedValues("nature")) q.append("nature", v);
+  for (const v of checkedValues("secteur")) q.append("secteur", v);
+  const { min, max } = rateBounds();
+  if (min > 0 || max < 100) q.set("taux", `${min}-${max}`);
+  if (map) {
+    const couche = map.hasLayer(communeLayer) ? "securite"
+      : map.hasLayer(immoLayer) ? "prix"
+      : map.hasLayer(fiscLayer) ? "fiscalite"
+      : "aucune";
+    if (couche !== "securite") q.set("couche", couche);
+    if (map.hasLayer(logementLayer)) q.set("logements", "1");
+  }
+  const tab = $(".tabs .tab.active");
+  if (tab && tab.dataset.tab !== "overview") q.set("onglet", tab.dataset.tab);
+  return q;
+}
+
+// Reflète l'état courant dans l'URL (sans entrée d'historique).
+function syncUrl() {
+  if (!urlReady) return;
+  // Virgules laissées en clair (valides dans une requête) : URL plus lisible.
+  const qs = pageQuery().toString().replace(/%2C/gi, ",");
+  history.replaceState(null, "", qs ? `/?${qs}` : "/");
+}
+
+// Applique l'état décrit par params ; renvoie true si une recherche peut être
+// lancée (au moins une adresse de départ).
+function applyQuery(params) {
+  // Points de départ : « minutes,transport,adresse » (l'adresse peut contenir des virgules).
+  const departs = params.getAll("depart").slice(0, MAX_ORIGINS).map((d) => {
+    const [min, transp, ...addr] = d.split(",");
+    return { min: parseInt(min, 10), transp: TRANSP_BY_CODE[transp] || transp, adresse: addr.join(",").trim() };
+  });
+  if (departs.length) {
+    document.querySelectorAll("#origins .origin-row").forEach((row) => row.remove());
+    for (const d of departs) {
+      addOrigin({ focus: false });
+      const row = $("#origins .origin-row:last-child");
+      row.querySelector(".origin-address input").value = d.adresse;
+      const range = row.querySelector('input[type="range"]');
+      if (Number.isFinite(d.min)) {
+        range.value = Math.min(60, Math.max(5, Math.round(d.min / 5) * 5));
+        row.querySelector(".origin-time-val").textContent = range.value;
+      }
+      const select = row.querySelector("select");
+      if ([...select.options].some((o) => o.value === d.transp)) select.value = d.transp;
+    }
+    refreshOrigins();
+  }
+
+  for (const name of ["nature", "secteur"]) {
+    if (!params.has(name)) continue;
+    const values = params.getAll(name);
+    document.querySelectorAll(`input[name="${name}"]`).forEach((cb) => (cb.checked = values.includes(cb.value)));
+  }
+
+  const taux = /^(\d+)-(\d+)$/.exec(params.get("taux") || "");
+  if (taux) {
+    setRate("min", 0);
+    setRate("max", 100);
+    setRate("min", parseInt(taux[1], 10));
+    setRate("max", parseInt(taux[2], 10));
+    syncRateUI();
+  }
+
+  const couche = params.get("couche");
+  const choros = { securite: communeLayer, prix: immoLayer, fiscalite: fiscLayer, aucune: null };
+  if (couche in choros) {
+    for (const l of [communeLayer, immoLayer, fiscLayer]) if (l !== choros[couche]) map.removeLayer(l);
+    if (choros[couche]) map.addLayer(choros[couche]);
+  }
+  if (params.get("logements") === "1") map.addLayer(logementLayer);
+
+  const tab = document.querySelector(`.tabs .tab[data-tab="${CSS.escape(params.get("onglet") || "")}"]`);
+  if (tab) tab.click();
+
+  return departs.some((d) => d.adresse);
+}
+
+// Avant une redirection qui revient sur « / » (SSO, paiement) : l'état est
+// mis de côté, puis restauré au retour (voir boot).
+function saveReturnQuery() {
+  if (location.search) sessionStorage.setItem(RETURN_QUERY_KEY, location.search);
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +610,7 @@ settingsSubmit($("#billing-form"), async () => {
     method: "POST",
     body: JSON.stringify({ amount_cents: cents }),
   });
+  saveReturnQuery();
   location.assign(data.checkout_url); // page de paiement Mollie
   return "Redirection vers la page de paiement…";
 });
@@ -794,6 +906,8 @@ function initMap() {
       e.stopPropagation();
     }),
   );
+  // Clic sur une choroplèthe : fiche détaillée du lieu.
+  for (const l of [communeLayer, immoLayer, fiscLayer]) l.on("click", (e) => openPlaceCard(e.latlng));
   securityLegend().addTo(map);
   levelLegend = levelLegendControl().addTo(map);
   immoLegend().addTo(map);
@@ -813,8 +927,12 @@ function initMap() {
     // Différé : pendant le clic, le contrôle des couches ne se met pas à jour.
     const choros = [communeLayer, immoLayer, fiscLayer];
     if (added && choros.includes(e.layer)) {
-      setTimeout(() => choros.forEach((l) => l !== e.layer && map.removeLayer(l)), 0);
+      setTimeout(() => {
+        choros.forEach((l) => l !== e.layer && map.removeLayer(l));
+        syncUrl();
+      }, 0);
     }
+    syncUrl();
   });
   // Niveau de détail : communes de loin, quartiers IRIS de près.
   map.on("zoomend", () => {
@@ -1327,6 +1445,122 @@ function renderFiscalite(communes) {
 }
 
 // ---------------------------------------------------------------------------
+// Fiche d'un lieu : clic sur une choroplèthe → popup regroupant prix au m²,
+// sécurité, fiscalité et temps de trajet depuis chaque point de départ.
+// ---------------------------------------------------------------------------
+let searchOrigins = []; // points de départ de la dernière recherche
+
+// Point (lon, lat) dans un anneau [[lon, lat], ...] (lancer de rayon).
+function pointInRing(lon, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > lat !== yj > lat && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Point dans un polygone GeoJSON (anneau extérieur puis trous).
+function pointInPolygon(lon, lat, rings) {
+  if (!rings.length || !pointInRing(lon, lat, rings[0])) return false;
+  return !rings.slice(1).some((hole) => pointInRing(lon, lat, hole));
+}
+
+function pointInGeometry(lon, lat, geom) {
+  if (!geom) return false;
+  if (geom.type === "Polygon") return pointInPolygon(lon, lat, geom.coordinates);
+  if (geom.type === "MultiPolygon") return geom.coordinates.some((p) => pointInPolygon(lon, lat, p));
+  return false;
+}
+
+// Plus petit temps de trajet (secondes) de l'isochrone iso contenant le point,
+// ou null s'il est hors de l'isochrone.
+function isoTimeAt(iso, lon, lat) {
+  const levels = iso.levels && iso.levels.length ? iso.levels : [{ dist: iso.dist, geometry: iso.geometry }];
+  let best = null;
+  for (const lv of levels) {
+    if (!Array.isArray(lv.geometry) || lv.geometry.length < 3) continue;
+    if (pointInRing(lon, lat, lv.geometry) && (best == null || lv.dist < best)) best = lv.dist;
+  }
+  return best;
+}
+
+function placeSection(title, body) {
+  return `<div class="place-section"><div class="place-section-title">${title}</div>${body}</div>`;
+}
+
+function placeCardHtml(lon, lat) {
+  const communes = lastData.communes || [];
+  const commune = communes.find((c) => pointInGeometry(lon, lat, c.contour));
+  const immo = immoData || {};
+  let html = `<div class="popup-title">${commune ? esc(commune.nom) : "Hors des communes de la zone"}</div>`;
+
+  // Prix au m² : médiane de la commune et, si disponible, du quartier IRIS.
+  const y0 = immo.date_min ? immo.date_min.slice(0, 4) : "";
+  const y1 = immo.date_max ? immo.date_max.slice(0, 4) : "";
+  const periode = y0 ? ` <span class="muted">(${y0 === y1 ? y0 : `${y0}–${y1}`})</span>` : "";
+  let prix = "";
+  if (commune) {
+    const pc = (immo.communes || []).find((c) => c.code_commune === commune.code_commune);
+    prix += `<div>Commune — ${prixLine(pc && pc.prix)}</div>`;
+  }
+  const quartier = (immo.quartiers || []).find((q) => pointInGeometry(lon, lat, q.contour));
+  if (quartier) prix += `<div>Quartier ${esc(quartier.nom)} — ${prixLine(quartier.prix)}</div>`;
+  html += placeSection(`Prix au m²${periode}`, prix || `<span class="muted">pas de données</span>`);
+
+  if (commune) {
+    // Sécurité
+    const secu =
+      commune.score == null
+        ? `<span class="muted">pas de données diffusées</span>`
+        : `Score : <strong>${commune.score}/100</strong>` +
+          `<div class="muted">plus sûre que ${commune.score} % des communes — ` +
+          `${commune.annee}, ${commune.nb_indicateurs}/15 indicateurs diffusés</div>`;
+    html += placeSection("Sécurité", secu);
+
+    // Fiscalité
+    const f = commune.fiscalite;
+    const fisc = !f
+      ? `<span class="muted">pas de données</span>`
+      : `TFB + TEOM : <strong>${fmtTaux(f.taux)}</strong>` +
+        `<div class="muted">TFB ${fmtTaux(f.taux_tfb)}, TEOM ${
+          f.taux_teom == null ? "pas de TEOM" : fmtTaux(f.taux_teom)
+        } — exercice ${f.annee}</div>`;
+    html += placeSection("Fiscalité locale", fisc);
+  }
+
+  // Temps de trajet depuis chaque point de départ.
+  const isos = Array.isArray(lastData.isochrones) && lastData.isochrones.length
+    ? lastData.isochrones
+    : lastData.isochrone ? [lastData.isochrone] : [];
+  if (isos.length) {
+    const rows = isos
+      .map((iso, i) => {
+        const t = isoTimeAt(iso, lon, lat);
+        const o = searchOrigins[i];
+        const label = `Départ ${i + 1}${o && o.adresse ? ` <span class="muted">(${esc(o.adresse)})</span>` : ""}`;
+        const val = t == null
+          ? `<span class="muted">&gt; ${Math.round(iso.dist / 60)} min</span>`
+          : `<strong>${levelLabel(t)}</strong>`;
+        return `<li><span class="place-dot" style="background:${originColor(i)}"></span>` +
+          `<span class="place-origin">${label}</span><span>${val}</span></li>`;
+      })
+      .join("");
+    html += placeSection("Temps de trajet", `<ul class="place-times">${rows}</ul>`);
+  }
+  return html;
+}
+
+function openPlaceCard(latlng) {
+  if (!lastData) return;
+  L.popup({ maxWidth: 340, className: "place-popup" })
+    .setLatLng(latlng)
+    .setContent(placeCardHtml(latlng.lng, latlng.lat))
+    .openOn(map);
+}
+
+// ---------------------------------------------------------------------------
 // Points de départ : la zone de recherche est l'intersection de leurs
 // isochrones. Le premier utilise l'adresse de la barre de recherche.
 // ---------------------------------------------------------------------------
@@ -1348,6 +1582,7 @@ function refreshOrigins() {
   });
   $("#add-origin").hidden = rows.length >= MAX_ORIGINS;
   updateSearchCost();
+  syncUrl();
 }
 
 function addOrigin({ focus = true } = {}) {
@@ -1438,6 +1673,7 @@ $("#search-form").addEventListener("submit", async (e) => {
       method: "POST",
       body: JSON.stringify(body),
     });
+    searchOrigins = origines;
     render(data);
   } catch (ex) {
     status.textContent = ex.message;
@@ -1507,6 +1743,7 @@ function setupAddressAutocomplete(input, list) {
     input.value = s.label;
     typed = s.label;
     close();
+    syncUrl();
     const end = input.value.length;
     input.setSelectionRange(end, end);
   }
@@ -1648,6 +1885,9 @@ function setupAddressAutocomplete(input, list) {
 
 addOrigin({ focus: false });
 
+// Saisie dans le formulaire (adresses, temps, transport, cases, taux) : URL à jour.
+for (const type of ["input", "change"]) $("#search-form").addEventListener(type, () => syncUrl());
+
 function render(data) {
   isoLayer.clearLayers();
   markerLayer.clearLayers();
@@ -1785,11 +2025,12 @@ function rateBounds() {
   };
 }
 
-// Plage complète (0–100) : aucun filtrage. Sinon, les établissements sans
-// résultats d'examen sont masqués.
+// Plage complète (0–100) : aucun filtrage. Les établissements sans résultats
+// d'examen ne sont pas concernés par le filtre et restent affichés.
 function passesRateFilter(etab) {
   const { min, max } = rateBounds();
   if (min <= 0 && max >= 100) return true;
+  if (!etab.resultats || etab.resultats.length === 0) return true;
   const rate = successRate(etab);
   return rate != null && rate >= min && rate <= max;
 }
@@ -1816,6 +2057,7 @@ function setRate(which, value) {
 function onRateChange() {
   syncRateUI();
   renderMarkers();
+  syncUrl();
 }
 
 for (const which of ["min", "max"]) {
@@ -1927,6 +2169,19 @@ function logementPopupHtml(p) {
 // Panneau de droite : onglets, répartition par nature, taux, liste
 // ---------------------------------------------------------------------------
 let markerByEtab = new Map();
+let insightEtabs = []; // établissements affichés (après filtre de taux)
+let rateSel = new Set(); // tranches (0–9) sélectionnées dans l'histogramme des taux
+
+// Tranche de 10 % du taux de réussite d'un établissement, ou null sans taux.
+function rateBin(e) {
+  const r = successRate(e);
+  return r == null ? null : Math.min(9, Math.floor(r / 10));
+}
+
+// Établissement retenu par la sélection de l'histogramme (tous si aucune).
+function inRateSel(e) {
+  return !rateSel.size || rateSel.has(rateBin(e));
+}
 
 // Sur téléphone, la carte, les filtres et la liste sont empilés : on ramène
 // la carte à l'écran quand une action la met à jour.
@@ -1945,6 +2200,7 @@ document.querySelectorAll(".tabs .tab").forEach((tab) =>
     document.querySelectorAll(".tab-pane").forEach((pane) => {
       pane.hidden = pane.dataset.pane !== tab.dataset.tab;
     });
+    syncUrl();
   }),
 );
 
@@ -1967,14 +2223,60 @@ const EMPTY_HINT = `<p class="empty">Lancez une recherche pour afficher les stat
 function renderInsights(etabs) {
   renderNatureChart(etabs);
   renderRateChart(etabs);
-  const rated = etabs
+  insightEtabs = etabs;
+  rateSel = new Set(); // nouvel ensemble d'établissements : sélection effacée
+  applyRateSelection();
+}
+
+// Applique la sélection de l'histogramme des taux (façon Power BI) : barres,
+// meilleurs taux (restreints à la sélection), liste et marqueurs mis en avant.
+function applyRateSelection() {
+  const active = rateSel.size > 0;
+  document.querySelectorAll("#rate-chart .bar-slot").forEach((slot) => {
+    const on = rateSel.has(Number(slot.dataset.bin));
+    slot.classList.toggle("selected", on);
+    slot.classList.toggle("dimmed", active && !on);
+    slot.setAttribute("aria-pressed", on);
+  });
+  const clear = $("#rate-chart .bars-clear");
+  if (clear) clear.hidden = !active;
+
+  const rated = insightEtabs
+    .filter(inRateSel)
     .map((e) => ({ e, r: successRate(e) }))
     .filter((x) => x.r != null)
     .sort((a, b) => b.r - a.r)
     .slice(0, 5);
   renderEtabList($("#etab-top"), rated.map((x) => x.e), true);
-  renderEtabList($("#etab-list"), etabs, false);
+  renderEtabList($("#etab-list"), insightEtabs, false, active);
+
+  for (const [e, m] of markerByEtab) {
+    const on = inRateSel(e);
+    m.setOpacity(on ? 1 : 0.25);
+    m.setZIndexOffset(active && on ? 1000 : 0);
+  }
 }
+
+// Clic sur une barre : sélection simple ; Ctrl/⌘ + clic : ajout/retrait.
+$("#rate-chart").addEventListener("click", (ev) => {
+  if (ev.target.closest(".bars-clear")) {
+    rateSel.clear();
+    applyRateSelection();
+    return;
+  }
+  const slot = ev.target.closest(".bar-slot");
+  if (!slot) return;
+  const bin = Number(slot.dataset.bin);
+  if (ev.ctrlKey || ev.metaKey) {
+    if (rateSel.has(bin)) rateSel.delete(bin);
+    else rateSel.add(bin);
+  } else if (rateSel.size === 1 && rateSel.has(bin)) {
+    rateSel.clear();
+  } else {
+    rateSel = new Set([bin]);
+  }
+  applyRateSelection();
+});
 
 function renderNatureChart(etabs) {
   const el = $("#nature-chart");
@@ -2044,14 +2346,16 @@ function renderRateChart(etabs) {
   const bars = bins
     .map((n, i) => {
       const h = n ? Math.max(2, (100 * n) / max) : 0;
+      const label = `${i * 10}–${i * 10 + 10} % : ${n} établissement(s)`;
       return (
-        `<div class="bar-slot" title="${i * 10}–${i * 10 + 10} % : ${n} établissement(s)">` +
-        `<div class="bar" style="height:${h}%"></div></div>`
+        `<button type="button" class="bar-slot" data-bin="${i}" title="${label}" aria-label="${label}" aria-pressed="false">` +
+        `<span class="bar" style="height:${h}%"></span></button>`
       );
     })
     .join("");
   el.innerHTML =
-    `<div class="bars-head"><span>Établissements par tranche de taux</span><span>max ${max}</span></div>` +
+    `<div class="bars-head"><span>Établissements par tranche de taux</span>` +
+    `<span><button type="button" class="bars-clear" hidden>Effacer la sélection</button> max ${max}</span></div>` +
     `<div class="bars">${bars}</div>` +
     `<div class="bars-axis"><span>0 %</span><span>50 %</span><span>100 %</span></div>` +
     (none ? `<p class="chart-note">${none} sans résultats d'examen</p>` : "");
@@ -2064,7 +2368,9 @@ function secteurClass(secteur) {
   return "badge-public";
 }
 
-function renderEtabList(ul, etabs, withRate) {
+// highlight : marque les établissements retenus / écartés par la sélection
+// de l'histogramme des taux.
+function renderEtabList(ul, etabs, withRate, highlight = false) {
   if (!etabs.length) {
     ul.innerHTML = `<li class="empty">${lastData ? "Aucun établissement." : "Aucune recherche."}</li>`;
     return;
@@ -2073,6 +2379,7 @@ function renderEtabList(ul, etabs, withRate) {
   for (const e of etabs) {
     const li = document.createElement("li");
     li.className = "etab-item";
+    if (highlight) li.classList.add(inRateSel(e) ? "selected" : "dimmed");
     li.tabIndex = 0;
     const rate = successRate(e);
     const sub = [e.nature, e.commune].filter(Boolean).join(" · ");
@@ -2178,6 +2485,7 @@ async function handleVerifyLink(verifyToken) {
       if (!cfg || !cfg.enabled) return;
       $("#oidc-login").textContent = `Se connecter avec ${cfg.name || "SSO"}`;
       $("#oidc-block").hidden = false;
+      $("#oidc-login").addEventListener("click", saveReturnQuery);
     })
     .catch(() => {});
 
@@ -2190,6 +2498,12 @@ async function handleVerifyLink(verifyToken) {
   const billingReturn = new URLSearchParams(location.search).has("billing_return");
   if (billingReturn) history.replaceState(null, "", "/");
   if (oidcToken) setToken(oidcToken);
+  // Retour de SSO / paiement sur « / » : état de la page mis de côté au départ.
+  const savedQuery = sessionStorage.getItem(RETURN_QUERY_KEY);
+  sessionStorage.removeItem(RETURN_QUERY_KEY);
+  if (savedQuery && (oidcToken || oidcError || billingReturn) && !location.search) {
+    history.replaceState(null, "", `/${savedQuery}`);
+  }
 
   // Lien de vérification reçu par e-mail : /verify-email?token=...
   if (location.pathname === "/verify-email") {
