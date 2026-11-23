@@ -157,7 +157,7 @@ lues par le backend :
 | `SMTP_USERNAME`        | — (vide)      | Identifiant SMTP (pas d'authentification si vide). |
 | `SMTP_PASSWORD`        | — (vide)      | Mot de passe SMTP.                                 |
 | `SMTP_FROM`            | — (requis si `SMTP_HOST`) | Expéditeur, ex. `Douceville <no-reply@domaine.tld>`. |
-| `OIDC_ISSUER_URL`      | — (vide)      | URL de l'émetteur OIDC. Vide : connexion OIDC désactivée. |
+| `OIDC_ISSUER_URL`      | — (vide)      | URL de l'émetteur OIDC, à l'identique du champ `issuer` de `.well-known/openid-configuration` (slash final compris). Vide : connexion OIDC désactivée. |
 | `OIDC_CLIENT_ID`       | — (requis si OIDC) | Identifiant du client OIDC.                 |
 | `OIDC_CLIENT_SECRET`   | — (vide)      | Secret du client (vide pour un client public, PKCE). |
 | `OIDC_PROVIDER_NAME`   | `SSO`         | Libellé du bouton « Se connecter avec … ».        |

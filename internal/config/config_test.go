@@ -26,7 +26,7 @@ func TestLoadOIDC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.OIDCIssuerURL != "https://idp.example/realms/r" ||
+	if c.OIDCIssuerURL != "https://idp.example/realms/r/" ||
 		c.OIDCRedirectURL != "https://dv.example/api/auth/oidc/callback" ||
 		c.OIDCDefaultPerms != "verified" || c.OIDCProviderName != "SSO" ||
 		!slices.Equal(c.OIDCScopes, []string{"openid", "email", "profile"}) {

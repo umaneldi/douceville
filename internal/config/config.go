@@ -83,7 +83,7 @@ func Load() (Config, error) {
 		SMTPUsername:        env("SMTP_USERNAME", ""),
 		SMTPPassword:        env("SMTP_PASSWORD", ""),
 		SMTPFrom:            env("SMTP_FROM", ""),
-		OIDCIssuerURL:       strings.TrimRight(env("OIDC_ISSUER_URL", ""), "/"),
+		OIDCIssuerURL:       strings.TrimSpace(env("OIDC_ISSUER_URL", "")),
 		OIDCClientID:        env("OIDC_CLIENT_ID", ""),
 		OIDCClientSecret:    env("OIDC_CLIENT_SECRET", ""),
 		OIDCProviderName:    env("OIDC_PROVIDER_NAME", "SSO"),
