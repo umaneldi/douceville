@@ -230,8 +230,9 @@ func (s *PgStore) CreateEmailVerification(ctx context.Context, userID, tokenHash
 
 // VerifyEmail implémente Store.VerifyEmail. Le jeton est supprimé dans tous les
 // cas (usage unique) ; s'il n'a pas expiré :
-//   - jeton d'inscription : un compte 'unverified' passe à 'verified' (un niveau
-//     supérieur n'est jamais rétrogradé) ;
+//   - jeton d'inscription : le compte passe à 'granted' (accès direct, sans
+//     validation d'un administrateur ; un niveau supérieur n'est jamais
+//     rétrogradé) ;
 //   - jeton de changement d'adresse : l'e-mail du compte devient new_email.
 func (s *PgStore) VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, bool, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -279,13 +280,33 @@ func (s *PgStore) VerifyEmail(ctx context.Context, tokenHash string) (*models.Dv
 			return nil, false, ErrEmailTaken
 		}
 	} else {
-		u, err = scanUser(tx.QueryRow(ctx, `UPDATE utilisateur u SET perms = GREATEST(u.perms, 'verified'::user_perms)
+		u, err = scanUser(tx.QueryRow(ctx, `UPDATE utilisateur u SET perms = GREATEST(u.perms, 'granted'::user_perms)
 			WHERE u.id = $1 RETURNING `+userCols, userID))
 	}
 	if err != nil || u == nil {
 		return nil, false, err
 	}
 	return u, newEmail != nil, tx.Commit(ctx)
+}
+
+// PeekEmailVerification implémente Store.PeekEmailVerification.
+func (s *PgStore) PeekEmailVerification(ctx context.Context, tokenHash string) (string, string, bool, error) {
+	var userID string
+	var email *string
+	err := s.pool.QueryRow(ctx, `SELECT v.user_id, COALESCE(v.new_email, u.email)
+		FROM email_verification v JOIN utilisateur u ON u.id = v.user_id
+		WHERE v.token_hash = $1 AND v.expires_at > now()`, tokenHash).Scan(&userID, &email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	e := ""
+	if email != nil {
+		e = *email
+	}
+	return userID, e, true, nil
 }
 
 // RevokeToken implémente Store.RevokeToken. Les révocations expirées sont
@@ -353,8 +374,9 @@ func (s *PgStore) FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdenti
 			if err := linkIdentity(existing); err != nil {
 				return nil, err
 			}
-			// Le fournisseur atteste l'adresse : un compte non vérifié devient vérifié.
-			u, err := scan(tx.QueryRow(ctx, `UPDATE utilisateur u SET perms = GREATEST(u.perms, 'verified'::user_perms)
+			// Le fournisseur atteste l'adresse : le compte obtient l'accès, comme
+			// après la vérification de l'e-mail.
+			u, err := scan(tx.QueryRow(ctx, `UPDATE utilisateur u SET perms = GREATEST(u.perms, 'granted'::user_perms)
 				WHERE u.id = $1 RETURNING `+cols, existing))
 			if err != nil {
 				return nil, err

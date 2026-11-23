@@ -2102,6 +2102,67 @@ function renderEtabList(ul, etabs, withRate) {
 renderInsights([]);
 
 // ---------------------------------------------------------------------------
+// Lien de vérification d'e-mail
+// ---------------------------------------------------------------------------
+const VERIFY_FAILED_MSG =
+  "Ce lien de vérification est invalide ou a expiré. Connectez-vous pour en recevoir un nouveau.";
+
+// Traite un lien /verify-email. Si un autre utilisateur est connecté dans ce
+// navigateur, demande s'il faut le déconnecter avant d'activer le compte visé ;
+// en cas de refus, le jeton n'est pas consommé (le lien reste utilisable).
+// Renvoie "done" (application démarrée), "pending" (compte en attente),
+// "failed" (lien invalide) ou "cancelled" (activation refusée).
+async function handleVerifyLink(verifyToken) {
+  const body = JSON.stringify({ token: verifyToken });
+  if (token) {
+    let current = null;
+    try {
+      current = await api("/user");
+    } catch (_) {
+      setToken(null);
+    }
+    if (current) {
+      let target;
+      try {
+        target = await api("/auth/verify/info", { method: "POST", body });
+      } catch (_) {
+        return "failed";
+      }
+      if (target.user_id !== current.id) {
+        const who = current.email || current.login || "un autre utilisateur";
+        const ok = confirm(
+          `Vous êtes connecté en tant que ${who}.\n\n` +
+            `Se déconnecter pour activer le compte ${target.email || ""} ?`
+        );
+        if (!ok) return "cancelled";
+        try {
+          await api("/auth/logout", { method: "POST" });
+        } catch (_) {
+          /* token déjà invalide ou serveur injoignable */
+        }
+        setToken(null);
+      }
+    }
+  }
+
+  let data;
+  try {
+    data = await api("/auth/verify", { method: "POST", body });
+  } catch (_) {
+    return "failed";
+  }
+  if (!data.token) return "pending";
+  // Compte autorisé : connexion directe.
+  setToken(data.token);
+  startApp(data.user);
+  if (data.email_changed) {
+    $("#user-chip").click();
+    settingsMsg($("#email-form"), `Adresse e-mail confirmée : ${data.user.email}.`);
+  }
+  return "done";
+}
+
+// ---------------------------------------------------------------------------
 // Démarrage : session existante ?
 // ---------------------------------------------------------------------------
 (async function boot() {
@@ -2136,25 +2197,10 @@ renderInsights([]);
     // Retire le jeton de l'URL (historique, partage d'écran…).
     history.replaceState(null, "", "/");
     if (verifyToken) {
-      try {
-        const data = await api("/auth/verify", {
-          method: "POST",
-          body: JSON.stringify({ token: verifyToken }),
-        });
-        if (data.token) {
-          // Compte déjà autorisé : connexion directe.
-          setToken(data.token);
-          startApp(data.user);
-          if (data.email_changed) {
-            $("#user-chip").click();
-            settingsMsg($("#email-form"), `Adresse e-mail confirmée : ${data.user.email}.`);
-          }
-          return;
-        }
-        verifiedPending = true;
-      } catch (_) {
-        verifyFailed = true;
-      }
+      const outcome = await handleVerifyLink(verifyToken);
+      if (outcome === "done") return;
+      if (outcome === "pending") verifiedPending = true;
+      else if (outcome === "failed") verifyFailed = true;
     }
   }
 
@@ -2163,6 +2209,7 @@ renderInsights([]);
       const user = await api("/user");
       startApp(user);
       if (billingReturn) handleBillingReturn();
+      if (verifyFailed) alert(VERIFY_FAILED_MSG);
       return;
     } catch (_) {
       setToken(null);
@@ -2180,9 +2227,6 @@ renderInsights([]);
   } else if (verifiedPending) {
     showInfo("Adresse e-mail vérifiée, merci ! " + PENDING_MSG, false);
   } else if (verifyFailed) {
-    showInfo(
-      "Ce lien de vérification est invalide ou a expiré. Connectez-vous pour en recevoir un nouveau.",
-      false
-    );
+    showInfo(VERIFY_FAILED_MSG, false);
   }
 })();

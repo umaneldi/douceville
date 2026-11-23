@@ -24,8 +24,12 @@ type Store interface {
 	// CreateEmailVerification enregistre un jeton de vérification (hashé) pour
 	// l'utilisateur, en remplaçant les jetons précédents.
 	CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
+	// PeekEmailVerification renvoie, sans le consommer, le compte visé par un
+	// jeton de vérification valide et l'adresse confirmée (nouvelle adresse pour
+	// un changement d'e-mail) ; ok=false si le jeton est inconnu ou expiré.
+	PeekEmailVerification(ctx context.Context, tokenHash string) (userID, email string, ok bool, err error)
 	// VerifyEmail consomme le jeton. Un jeton d'inscription fait passer le compte
-	// de 'unverified' à 'verified' ; un jeton de changement d'adresse remplace
+	// à 'granted' (accès direct) ; un jeton de changement d'adresse remplace
 	// l'e-mail du compte (emailChanged=true, ErrEmailTaken si l'adresse a été prise
 	// entre-temps). Renvoie (nil, false, nil) si le jeton est inconnu, déjà utilisé
 	// ou expiré.

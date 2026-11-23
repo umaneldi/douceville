@@ -167,6 +167,30 @@ func TestVerifyEmail_AlreadyGranted(t *testing.T) {
 	}
 }
 
+func TestVerifyInfo(t *testing.T) {
+	email := "bob@example.com"
+	h := &Handlers{Store: mockStore{verified: &models.DvUser{ID: "u2", Email: &email}}, JWTSecret: testSecret}
+	rr := httptest.NewRecorder()
+	h.verifyInfo(rr, httptest.NewRequest(http.MethodPost, "/api/auth/verify/info", strings.NewReader(`{"token":"abc"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["user_id"] != "u2" || got["email"] != email {
+		t.Errorf("got %v, want user_id=u2 email=%s", got, email)
+	}
+
+	h = &Handlers{Store: mockStore{}, JWTSecret: testSecret}
+	rr = httptest.NewRecorder()
+	h.verifyInfo(rr, httptest.NewRequest(http.MethodPost, "/api/auth/verify/info", strings.NewReader(`{"token":"abc"}`)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid token: status = %d, want 400", rr.Code)
+	}
+}
+
 func TestVerifyEmail_InvalidToken(t *testing.T) {
 	h := &Handlers{Store: mockStore{verified: nil}, JWTSecret: testSecret}
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/verify", strings.NewReader(`{"token":"abc"}`))

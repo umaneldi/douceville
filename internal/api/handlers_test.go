@@ -129,6 +129,16 @@ func isoWithLevels(dists ...float64) models.Isochrone {
 func (m mockStore) CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
 	return m.err
 }
+func (m mockStore) PeekEmailVerification(ctx context.Context, tokenHash string) (string, string, bool, error) {
+	if m.verified == nil || m.err != nil {
+		return "", "", false, m.err
+	}
+	email := ""
+	if m.verified.Email != nil {
+		email = *m.verified.Email
+	}
+	return m.verified.ID, email, true, nil
+}
 func (m mockStore) VerifyEmail(ctx context.Context, tokenHash string) (*models.DvUser, bool, error) {
 	return m.verified, m.emailChanged, m.err
 }

@@ -27,6 +27,7 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 		api.Post("/auth/register", h.register)
 		api.Post("/auth/login", h.login)
 		api.Post("/auth/verify", h.verifyEmail)
+		api.Post("/auth/verify/info", h.verifyInfo)
 		api.Post("/auth/resend-verification", h.resendVerification)
 		api.Get("/auth/oidc/config", h.oidcConfig)
 		api.Get("/auth/oidc/login", h.oidcLogin)

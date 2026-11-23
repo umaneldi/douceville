@@ -125,10 +125,35 @@ func (h *Handlers) resendVerification(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// verifyInfo gère POST /auth/verify/info : renvoie, sans consommer le jeton, le
+// compte visé par un lien de vérification. Le client s'en sert pour demander à
+// un autre utilisateur connecté s'il faut le déconnecter avant l'activation.
+// L'adresse renvoyée est celle à laquelle le lien a été envoyé.
+func (h *Handlers) verifyInfo(w http.ResponseWriter, r *http.Request) {
+	log := logger(r.Context())
+
+	var body models.TokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Token == "" {
+		writeError(w, http.StatusBadRequest, "a verification token is required")
+		return
+	}
+	userID, email, ok, err := h.Store.PeekEmailVerification(r.Context(), auth.HashVerificationToken(body.Token))
+	if err != nil {
+		log.Error("verify info: lookup failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "could not look up verification link")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid or expired verification link")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user_id": userID, "email": email})
+}
+
 // verifyEmail gère POST /auth/verify : consomme le jeton reçu par e-mail et
-// fait passer le compte à 'verified'. Un token n'est émis que si le compte a déjà
-// accès (niveau 'granted' ou plus) ; sinon le compte attend la validation d'un
-// administrateur.
+// donne l'accès au compte ('granted'), puis émet un token (connexion directe).
+// Si le compte n'a malgré tout pas accès, il attend la validation d'un
+// administrateur et aucun token n'est émis.
 func (h *Handlers) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	log := logger(r.Context())
 

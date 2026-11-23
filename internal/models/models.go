@@ -16,7 +16,10 @@ type Perms string
 const (
 	// PermsUnverified : compte créé, adresse e-mail non vérifiée.
 	PermsUnverified Perms = "unverified"
-	// PermsVerified : adresse vérifiée, en attente de validation par un administrateur.
+	// PermsVerified : en attente de validation par un administrateur. La
+	// vérification de l'e-mail donne désormais directement 'granted' ; ce niveau
+	// sert aux comptes existants, aux comptes OIDC (OIDC_DEFAULT_PERMS) et aux
+	// choix des administrateurs.
 	PermsVerified Perms = "verified"
 	// PermsGranted : accès à l'application.
 	PermsGranted Perms = "granted"
