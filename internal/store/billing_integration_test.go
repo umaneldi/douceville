@@ -3,32 +3,22 @@ package store
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/umaneldi/douceville/internal/models"
 )
 
 // TestBillingIntegration exerce les requêtes de facturation sur une base
-// PostGIS jetable : DV_TEST_DSN=postgres://…/base_vide go test ./internal/store/
-// (ignoré si la variable n'est pas définie ; la base doit être vide).
+// PostGIS jetable (voir newTestStore).
 func TestBillingIntegration(t *testing.T) {
-	dsn := os.Getenv("DV_TEST_DSN")
-	if dsn == "" {
-		t.Skip("DV_TEST_DSN not set")
-	}
+	s, _ := newTestStore(t)
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	s := New(pool)
-	for range 2 { // migrations rejouables
-		if err := s.Migrate(ctx); err != nil {
-			t.Fatal(err)
-		}
+
+	// Tarifs par défaut posés par la migration 016.
+	def, err := s.GetBillingSettings(ctx)
+	if err != nil || def.PricePerOriginCents != 5 || def.IsochronePriceCents != 2 || def.WelcomeCreditCents != 100 ||
+		def.MinTopupCents != 500 || def.Currency != "EUR" {
+		t.Fatalf("default settings = %+v, %v", def, err)
 	}
 
 	u, err := s.CreateUser(ctx, "x@test.invalid", "hash", nil, nil)

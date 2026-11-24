@@ -8,7 +8,11 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **onze tables physiques** : `etablissement`, `resultat`, `commune`, `quartier`, `immobilier`, `logement_social`, `securite`, `fiscalite`, `utilisateur`, `email_verification` et `revoked_token`, toutes créées par les migrations Go, ainsi qu'une **vue matérialisée** `securite_score`. Les tables `commune` et `securite` sont créées vides et chargées par `scripts/import_communes_csv.py` et `scripts/import_securite_parquet.py` ; les contours des communes (`commune.contour`) sont chargés par `scripts/import_contours_communes.py` et les quartiers IRIS (`quartier`) par `scripts/import_contours_iris.py` ; la table `immobilier` (ventes DVF géolocalisées, rattachées à un IRIS) est chargée par `scripts/import_immobilier_dvf.py`, la table `logement_social` (logements des bailleurs sociaux RPLS, rattachés à un IRIS) par `scripts/import_logement_social.py` et la table `fiscalite` (taux d'imposition locale par commune) par `scripts/import_fiscalite_parquet.py`. Les tables `etablissement` et `resultat` sont créées **vides** : il n'existe plus d'ETL dans ce dépôt, les données sont chargées par un moyen externe (dump restauré, chargeur externe). La table `utilisateur` porte désormais l'**authentification native** du backend (voir plus bas).
+La base contient **quinze tables physiques** et une **vue matérialisée** (`securite_score`), toutes créées par les migrations Go :
+
+- **Données géographiques et scolaires** (créées vides, chargées par les scripts `scripts/import_*.py`, enchaînés par `import.sh`) : `commune` (`import_communes_csv.py`, contours par `import_contours_communes.py`), `quartier` (IRIS, `import_contours_iris.py`), `etablissement` (`import_etablissements_parquet.py`), `resultat` (`import_resultats_parquet.py`), `securite` (`import_securite_parquet.py`), `fiscalite` (`import_fiscalite_parquet.py`), `immobilier` (ventes DVF, `import_immobilier_dvf.py`) et `logement_social` (RPLS, `import_logement_social.py`).
+- **Comptes et authentification** (gérées par le backend) : `utilisateur`, `email_verification`, `revoked_token` et `oidc_identity`.
+- **Facturation** (gérées par le backend) : `billing_settings`, `credit_transaction` et `payment`.
 
 ## Diagramme relationnel
 
@@ -322,6 +326,19 @@ remplace les jetons précédents de l'utilisateur.
 | `token_hash` | `TEXT`        | **PK**                              | SHA-256 (hex) du jeton envoyé par e-mail. |
 | `user_id`    | `TEXT`        | NOT NULL, FK `utilisateur(id)` ON DELETE CASCADE | Utilisateur à vérifier. |
 | `expires_at` | `TIMESTAMPTZ` | NOT NULL                            | Expiration du lien (24 h). |
+| `new_email`  | `TEXT`        | NULL                                | Nouvelle adresse pour un jeton de **changement d'e-mail** (`migrations/015_email_change.sql`) ; NULL pour un jeton d'inscription. L'adresse du compte n'est remplacée qu'à la vérification. |
+
+## Table `oidc_identity`
+
+Identités OpenID Connect rattachées à un compte (`migrations/014_oidc_identity.sql`).
+Un compte peut avoir plusieurs identités ; un compte créé via OIDC n'a pas de mot de
+passe (`utilisateur.password_hash` NULL).
+
+| Colonne   | Type SQL | Contraintes | Description |
+|-----------|----------|-------------|-------------|
+| `issuer`  | `TEXT`   | **PK** (`issuer`, `subject`) | Émetteur OIDC (claim `iss`). |
+| `subject` | `TEXT`   | **PK** (`issuer`, `subject`) | Identifiant chez le fournisseur (claim `sub`). |
+| `user_id` | `TEXT`   | NOT NULL, FK `utilisateur(id)` ON DELETE CASCADE, indexé | Compte Douceville. |
 
 ## Table `revoked_token`
 
@@ -348,6 +365,6 @@ Structures Go d'échange API (`internal/models/models.go`), sans table associée
 ## Références dans le code
 
 - Migrations SQL : `internal/store/migrations/*.sql` (runner : `internal/store/migrate.go`).
-- Accès base : `internal/store/queries.go` ; modèles : `internal/models/models.go`.
+- Accès base : `internal/store/queries.go`, `internal/store/billing.go` ; modèles : `internal/models/models.go`, `internal/models/billing.go`.
 - Auth : `internal/auth/` (JWT `jwt.go`, mots de passe `password.go`, middleware `middleware.go`).
-- Infrastructure PostGIS : `docker-compose.yml`, `docker-compose.dev.yml`.
+- Infrastructure PostGIS : `docker-compose.yml` (service `geotestdb`).
