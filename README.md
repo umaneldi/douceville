@@ -1,3 +1,12 @@
+[![CI](https://github.com/umaneldi/douceville/actions/workflows/docker-image.yml/badge.svg)](https://github.com/umaneldi/douceville/actions/workflows/docker-image.yml)
+[![Version Go](https://img.shields.io/github/go-mod/go-version/umaneldi/douceville?logo=go)](go.mod)
+[![Go Report Card](https://goreportcard.com/badge/github.com/umaneldi/douceville)](https://goreportcard.com/report/github.com/umaneldi/douceville)
+[![Couverture](https://img.shields.io/badge/couverture-~86%25-brightgreen)](#développement)
+[![Dernière version](https://img.shields.io/github/v/tag/umaneldi/douceville?label=version&sort=semver)](https://github.com/umaneldi/douceville/tags)
+[![Image Docker](https://img.shields.io/badge/image-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/umaneldi/douceville/pkgs/container/douceville)
+[![PostGIS](https://img.shields.io/badge/PostGIS-18--3.7-336791?logo=postgresql&logoColor=white)](https://postgis.net/)
+[![Leaflet](https://img.shields.io/badge/carte-Leaflet-199900?logo=leaflet&logoColor=white)](https://leafletjs.com/)
+
 # Douceville
 
 Douceville aide à choisir où habiter. À partir d'un ou plusieurs **points de
@@ -18,17 +27,29 @@ l'URL : un favori ou un lien partagé restaure la recherche.
 
 ## Sommaire
 
-- [Architecture](#architecture)
-- [Organisation du dépôt](#organisation-du-dépôt)
-- [Démarrage rapide](#démarrage-rapide)
-- [Chargement des données](#chargement-des-données)
-- [Configuration](#configuration)
-- [API](#api)
-- [Comptes et authentification](#comptes-et-authentification)
-- [Facturation (crédit prépayé, Mollie)](#facturation-crédit-prépayé-mollie)
-- [Développement](#développement)
-- [Déploiement](#déploiement)
-- [Sources de données](#sources-de-données)
+- [Douceville](#douceville)
+  - [Sommaire](#sommaire)
+  - [Architecture](#architecture)
+    - [Déroulement d'une recherche (`POST /api/etablissements`)](#déroulement-dune-recherche-post-apietablissements)
+  - [Organisation du dépôt](#organisation-du-dépôt)
+  - [Démarrage rapide](#démarrage-rapide)
+    - [Option A — Docker](#option-a--docker)
+    - [Option B — Depuis les sources (Go 1.26+)](#option-b--depuis-les-sources-go-126)
+    - [Première utilisation](#première-utilisation)
+  - [Chargement des données](#chargement-des-données)
+  - [Configuration](#configuration)
+  - [API](#api)
+    - [Authentification](#authentification)
+    - [Compte](#compte)
+    - [Recherche](#recherche)
+    - [Facturation](#facturation)
+    - [Administration](#administration)
+  - [Comptes et authentification](#comptes-et-authentification)
+    - [Connexion OpenID Connect (optionnelle)](#connexion-openid-connect-optionnelle)
+  - [Facturation (crédit prépayé, Mollie)](#facturation-crédit-prépayé-mollie)
+  - [Développement](#développement)
+  - [Déploiement](#déploiement)
+  - [Sources de données](#sources-de-données)
 
 ## Architecture
 
