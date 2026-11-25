@@ -1,6 +1,5 @@
 [![CI](https://github.com/umaneldi/douceville/actions/workflows/docker-image.yml/badge.svg)](https://github.com/umaneldi/douceville/actions/workflows/docker-image.yml)
 [![Version Go](https://img.shields.io/github/go-mod/go-version/umaneldi/douceville?logo=go)](go.mod)
-[![Go Report Card](https://goreportcard.com/badge/github.com/umaneldi/douceville)](https://goreportcard.com/report/github.com/umaneldi/douceville)
 [![Couverture](https://img.shields.io/badge/couverture-~86%25-brightgreen)](#développement)
 [![Dernière version](https://img.shields.io/github/v/tag/umaneldi/douceville?label=version&sort=semver)](https://github.com/umaneldi/douceville/tags)
 [![Image Docker](https://img.shields.io/badge/image-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/umaneldi/douceville/pkgs/container/douceville)
