@@ -26,10 +26,21 @@ montre ce qu'elle contient :
 - les **logements sociaux** (répertoire RPLS).
 
 Un clic sur un quartier IRIS ouvre sa fiche : prix au m², sécurité, fiscalité et
-**distance à l'établissement le plus proche de chaque nature** recherchée.
+**distance à l'établissement le plus proche de chaque nature** recherchée. Les
+**itinéraires** du quartier vers chacun de ces établissements (mode de
+transport du critère de la nature) sont tracés sur la carte, avec leur durée,
+tant que la fiche est ouverte.
 
-L'état de la page (centre, critères, filtres, couches, onglet) est reflété dans
-l'URL : un favori ou un lien partagé restaure la recherche.
+Le panneau de droite résume la zone : répartition des établissements par
+nature, histogramme des taux de réussite (sélection de tranches mise en avant
+sur la carte et dans la liste), et histogrammes de la **sécurité** et de la
+**fiscalité** des communes et du **prix au m²** des quartiers IRIS, affichés
+même sans filtre (tranches hors du filtre actif atténuées).
+
+L'état de la page (centre, critères, filtres, couches, onglet, tranches de taux
+sélectionnées) est reflété dans l'URL : un favori ou un lien partagé restaure
+la recherche. Exemple :
+`/?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100&prix=0-4000&securite=50&fiscalite=45&couche=prix&logements=1&onglet=list&taux=8,9`.
 
 ## Sommaire
 
@@ -292,6 +303,7 @@ exigent un header `Authorization: Bearer <token>` **et** un compte de niveau
 | ------- | ----- | :--: | ----------- |
 | `POST` | `/api/etablissements` | ✓ | Recherche par établissements (payante : isochrones calculées). |
 | `POST` | `/api/quartiers/{iris}/proximite` | ✓ | Fiche d'un quartier IRIS et établissement le plus proche par critère (gratuite). |
+| `POST` | `/api/itineraire` | ✓ | Itinéraire OpenRouteService entre deux positions (gratuit). |
 | `GET` | `/api/etablissement/{uai}` | ✓ | Détail d'un établissement et de ses résultats. |
 | `GET` | `/api/isochrone` | ✓ | Isochrone depuis des coordonnées (`lat`, `lon`, `dist`, `transp`) (payante). |
 | `GET` | `/api/address/suggest?q=…` | ✓ | Autocomplétion d'adresse (5 suggestions, à partir de 3 caractères ; gratuite). |
@@ -333,7 +345,14 @@ critères ; `dist` et `transp` ignorés) et renvoie le prix au m² de l'IRIS et 
 sa commune, la sécurité et la fiscalité de la commune, et `proches` : pour
 chaque critère, l'établissement le plus proche qui le satisfait (sans limite de
 rayon), avec sa distance **à vol d'oiseau** en mètres (`distance_m`, `null` si
-aucun) depuis un point intérieur du quartier. IRIS inconnu : `404`.
+aucun) et sa position (`lon`, `lat`) depuis un point intérieur du quartier,
+lui aussi renvoyé (`lon`, `lat`). IRIS inconnu : `404`.
+
+`POST /api/itineraire` reçoit `{"depart": [lon, lat], "arrivee": [lon, lat],
+"transp": "foot-walking"}` (`transp` obligatoire : `driving-car`,
+`cycling-regular` ou `foot-walking`) et renvoie `{geometry, distance_m,
+duree_s}` (tracé `[[lon, lat], …]`, mètres, secondes). Paramètres invalides :
+`422` ; erreur d'OpenRouteService : `502`.
 
 Les structures sont décrites dans [`internal/models`](internal/models/README.md).
 
@@ -426,8 +445,8 @@ par [Mollie](https://www.mollie.com) depuis *Paramètres du compte → Crédit*.
 - `POST /api/etablissements` coûte *prix par isochrone × nombre d'isochrones
   calculées* (réglage `price_per_origin_cents`) : les isochrones déjà en cache
   sont gratuites, une recherche entièrement en cache ne coûte rien. `GET
-  /api/isochrone` a son propre prix. La fiche d'un quartier et l'autocomplétion
-  d'adresse sont gratuites.
+  /api/isochrone` a son propre prix. La fiche d'un quartier, ses itinéraires et
+  l'autocomplétion d'adresse sont gratuits.
 - Le prix est débité **avant** les appels externes, de façon atomique (le solde
   ne peut pas devenir négatif) ; si la requête échoue, il est remboursé. Solde
   insuffisant : `402`, `code=insufficient_credit`.

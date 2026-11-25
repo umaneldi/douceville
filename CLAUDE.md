@@ -72,7 +72,7 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
 - **Commentaires** : chaque symbole exporté a un commentaire de doc en français
   commençant par son nom (`// Store définit…`).
 - **Dépendances injectées par interfaces** : les handlers (`api.Handlers`)
-  dépendent d'interfaces (`store.Store`, `Isochroner`, `Geocoder`,
+  dépendent d'interfaces (`store.Store`, `Isochroner`, `RoutePlanner`, `Geocoder`,
   `AddressSuggester`, `OIDCProvider`, `billing.PaymentProvider`, `mail.Sender`)
   pour être testables sans base ni réseau. Une nouvelle dépendance externe suit
   le même schéma.
@@ -140,7 +140,7 @@ de bug sans test n'est pas terminée.
   (listes vides, valeurs nulles, doublons, idempotence).
 - **Où tester** :
   - handlers (`internal/api`) : à travers le routeur avec `call` / `callAs`,
-    les doublures `mockStore`, `fakeBill`, `fakeProvider`, `mockIso`,
+    les doublures `mockStore`, `fakeBill`, `fakeProvider`, `mockIso`, `mockRoute`,
     `mockGeo`, `mockSuggest`, `fakeMailer` ; `failingStore`
     (`failures_test.go`) fait échouer une méthode précise du `Store` ;
   - requêtes SQL (`internal/store`) : tests d'intégration sur une vraie base

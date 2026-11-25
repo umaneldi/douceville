@@ -9,8 +9,8 @@ autres (`auth`, `billing`, `geo`, `mail`, `store`).
 | Fichier | Contenu |
 | ------- | ------- |
 | `router.go` | `NewRouter` : montage des routes chi (publiques, protégées par `auth.Middleware`, admin par `auth.RequireAdmin`), service de l'application monopage (`spaHandler`, injection de la version dans `index.html`), helpers `writeJSON` / `writeError`. |
-| `handlers.go` | Struct `Handlers` (dépendances, dont `IsoCacheTTL` / `IsoCacheMax`) et interfaces `Isochroner`, `Geocoder`, `AddressSuggester`, `OIDCProvider` ; détail d'un établissement, isochrone, profil, autocomplétion d'adresse. |
-| `search.go` | Recherche par établissements (`POST /etablissements`) : validation des critères par nature et des filtres de zone, sources, cache et calcul des isochrones (`computeIsochrones`), intersection, filtres, contenu de la zone (`fillZone`) ; fiche d'un quartier (`POST /quartiers/{iris}/proximite`). |
+| `handlers.go` | Struct `Handlers` (dépendances, dont `IsoCacheTTL` / `IsoCacheMax`) et interfaces `Isochroner`, `RoutePlanner`, `Geocoder`, `AddressSuggester`, `OIDCProvider` ; détail d'un établissement, isochrone, profil, autocomplétion d'adresse. |
+| `search.go` | Recherche par établissements (`POST /etablissements`) : validation des critères par nature et des filtres de zone, sources, cache et calcul des isochrones (`computeIsochrones`), intersection, filtres, contenu de la zone (`fillZone`) ; fiche d'un quartier (`POST /quartiers/{iris}/proximite`) ; itinéraire (`POST /itineraire`). |
 | `auth_handlers.go` | Inscription, vérification d'e-mail, renvoi du lien, connexion, déconnexion, flux OIDC (config, redirection, callback). |
 | `user_handlers.go` | Profil (`PATCH /user`), changement d'e-mail et de mot de passe. |
 | `admin_handlers.go` | Gestion des comptes : liste, changement de niveau (avec e-mail d'approbation), suppression. |
@@ -42,6 +42,9 @@ autres (`auth`, `billing`, `geo`, `mail`, `store`).
 - **Fiche d'un quartier** (`quartierProximite`) : code IRIS validé
   (`irisPattern`), critères validés sans temps ni mode, `Store.QuartierProximite`
   (`404` si l'IRIS est inconnu). Non facturée.
+- **Itinéraire** (`itineraire`) : `transp` parmi `models.Transports`, positions
+  `[lon, lat]` valides (`validLonLat`), sinon `422` ;
+  `RoutePlanner.CalcItineraire` (`502` en cas d'échec). Non facturé.
 - **Facturation** : `charge` débite atomiquement *avant* les appels externes et
   renvoie une fonction `refund` à appeler si la requête échoue ; le nouveau
   solde est renvoyé dans l'en-tête `X-Credit-Balance`. Sans facturation, ou
@@ -74,8 +77,8 @@ dans les fichiers de test :
 
 | Fichier | Contenu |
 | ------- | ------- |
-| `handlers_test.go` | `mockStore` (implémentation complète de `store.Store`, avec `isoCache`, cache d'isochrones en mémoire), `mockIso` (journal des appels `isoCall`), `mockGeo`, `mockSuggest` ; détail d'un établissement, isochrone, autocomplétion. |
-| `search_test.go` | Helpers `source`, `primaire`, `searchHandlers`, `decodeSearch` ; école primaire source de deux critères ; recherche par établissements (critères par nature, cache, facturation des seules isochrones calculées, validation, droits, erreurs des dépendances, zones vides, filtres) et fiche d'un quartier. |
+| `handlers_test.go` | `mockStore` (implémentation complète de `store.Store`, avec `isoCache`, cache d'isochrones en mémoire), `mockIso` (journal des appels `isoCall`), `mockRoute` (journal des appels `routeCall`), `mockGeo`, `mockSuggest` ; détail d'un établissement, isochrone, autocomplétion. |
+| `search_test.go` | Helpers `source`, `primaire`, `searchHandlers`, `decodeSearch` ; école primaire source de deux critères ; recherche par établissements (critères par nature, cache, facturation des seules isochrones calculées, validation, droits, erreurs des dépendances, zones vides, filtres), fiche d'un quartier et itinéraire (nominal, validation, droits, `502`). |
 | `user_handlers_test.go` | Helpers `alice` (compte de test), `call` (requête authentifiée à travers le routeur), `decodeMap` ; profil, e-mail, mot de passe. |
 | `auth_handlers_test.go` | `fakeMailer` ; inscription, connexion, vérification, déconnexion. |
 | `oidc_handlers_test.go` | Flux OIDC avec un `OIDCProvider` factice (`stubOIDC`). |

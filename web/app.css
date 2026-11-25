@@ -488,6 +488,10 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .bar-slot:hover .bar { filter: brightness(1.15); }
 /* Sélection façon Power BI : tranches retenues mises en avant, autres atténuées. */
 .bar-slot.dimmed .bar { opacity: 0.3; }
+/* Histogrammes de la zone : non cliquables. */
+.bar-slot.static { cursor: default; }
+.bar-slot.static:hover .bar { filter: none; }
+.section-title .muted { color: var(--muted); font-weight: 400; }
 .bar-slot.selected .bar { box-shadow: 0 0 0 2px var(--accent-ink), 0 0 0 3px var(--accent); }
 .bars-clear {
   padding: 0;

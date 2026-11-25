@@ -74,9 +74,11 @@ func main() {
 	}
 
 	ban := geo.NewBANClient(cfg.ADDOKHost, nil)
+	ors := geo.NewORSClient(cfg.OpenRouteServiceKey, nil)
 	handlers := &api.Handlers{
 		Store:     st,
-		Isochron:  geo.NewORSClient(cfg.OpenRouteServiceKey, nil),
+		Isochron:  ors,
+		Routes:    ors,
 		Geocoder:  ban,
 		Suggester: ban,
 		JWTSecret: cfg.JWTSecret,

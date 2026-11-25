@@ -40,6 +40,7 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 			protected.Get("/etablissement/{uai}", h.readEtablissement)
 			protected.Post("/etablissements", h.etablissementsInZone)
 			protected.Post("/quartiers/{iris}/proximite", h.quartierProximite)
+			protected.Post("/itineraire", h.itineraire)
 			protected.Get("/isochrone", h.isochrone)
 			protected.Get("/address/suggest", h.addressSuggest)
 			protected.Get("/user", h.getUser)

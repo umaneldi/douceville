@@ -378,17 +378,19 @@ func (s *PgStore) QuartierProximite(ctx context.Context, iris string, criteres [
 		out.Fiscalite = &f
 	}
 
+	out.Lon, out.Lat = lon, lat
 	out.Proches = []models.Proche{}
 	if len(criteres) == 0 {
 		return &out, nil
 	}
 	q := `WITH ` + criteresCTE(3) + `,
 		p AS (SELECT ST_MakePoint($1, $2) AS g)
-		SELECT c.nature, n.dist, n.uai, n.nom, n.commune, n.secteur, n.taux
+		SELECT c.nature, n.dist, n.uai, n.nom, n.commune, n.secteur, n.taux, n.lon, n.lat
 		FROM c CROSS JOIN p
 		LEFT JOIN LATERAL (
 			SELECT x.* FROM (
 				SELECT e."UAI" AS uai, e.nom, e.commune, e.secteur, t.taux,
+					ST_X(e.position) AS lon, ST_Y(e.position) AS lat,
 					ST_Distance(ST_SetSRID(e.position, 4326)::geography, ST_SetSRID(p.g, 4326)::geography) AS dist
 				FROM etablissement e
 				LEFT JOIN LATERAL (SELECT et.taux FROM etablissement_taux et WHERE et.uai = e."UAI") t ON TRUE
@@ -405,7 +407,7 @@ func (s *PgStore) QuartierProximite(ctx context.Context, iris string, criteres [
 	defer rows.Close()
 	for rows.Next() {
 		var p models.Proche
-		if err := rows.Scan(&p.Nature, &p.DistanceM, &p.UAI, &p.Nom, &p.Commune, &p.Secteur, &p.Taux); err != nil {
+		if err := rows.Scan(&p.Nature, &p.DistanceM, &p.UAI, &p.Nom, &p.Commune, &p.Secteur, &p.Taux, &p.Lon, &p.Lat); err != nil {
 			return nil, err
 		}
 		out.Proches = append(out.Proches, p)

@@ -295,6 +295,17 @@ func TestQuartierProximiteIntegration(t *testing.T) {
 	if len(q.Proches) != 2 {
 		t.Fatalf("proches = %+v", q.Proches)
 	}
+	// Point de départ des distances : intérieur au carré [2, 3] x [48, 49].
+	if q.Lon < 2 || q.Lon > 3 || q.Lat < 48 || q.Lat > 49 {
+		t.Errorf("point du quartier = (%v, %v), want inside [2, 3] x [48, 49]", q.Lon, q.Lat)
+	}
+	// Position des établissements (pour l'itinéraire).
+	if p := q.Proches[0]; p.Lon == nil || p.Lat == nil || *p.Lon != 2.5 || *p.Lat != 48.5 {
+		t.Errorf("position lycée A = %v, %v, want 2.5, 48.5", p.Lon, p.Lat)
+	}
+	if p := q.Proches[1]; p.Lon == nil || p.Lat == nil || *p.Lon != 2.9 || *p.Lat != 48.9 {
+		t.Errorf("position collège B = %v, %v, want 2.9, 48.9", p.Lon, p.Lat)
+	}
 	// Le point intérieur du carré est proche de son centre (2.5, 48.5), où est A.
 	if p := q.Proches[0]; p.Nature != "Lycée" || p.UAI == nil || *p.UAI != "A" || p.DistanceM == nil ||
 		*p.DistanceM > 60000 || p.Taux == nil || p.Secteur == nil || *p.Secteur != "public" {
@@ -317,7 +328,7 @@ func TestQuartierProximiteIntegration(t *testing.T) {
 	if p := q.Proches[0]; p.UAI == nil || *p.UAI != "C" || *p.DistanceM < 1e6 {
 		t.Errorf("lycée >= 90 %% = %+v, want C (far away)", p)
 	}
-	if p := q.Proches[1]; p.Nature != "Collège" || p.DistanceM != nil || p.UAI != nil {
+	if p := q.Proches[1]; p.Nature != "Collège" || p.DistanceM != nil || p.UAI != nil || p.Lon != nil || p.Lat != nil {
 		t.Errorf("collège public = %+v, want no match", p)
 	}
 

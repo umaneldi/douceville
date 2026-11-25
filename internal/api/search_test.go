@@ -523,3 +523,74 @@ func TestCompareKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestItineraire(t *testing.T) {
+	st := alice(t, true)
+	var calls []routeCall
+	h := &Handlers{Store: st, Routes: mockRoute{calls: &calls}}
+
+	rr := callAs(t, h, st, http.MethodPost, "/api/itineraire",
+		`{"depart":[1.44,43.6],"arrivee":[1.46,43.62],"transp":"foot-walking"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", rr.Code, rr.Body.String())
+	}
+	var got models.Itineraire
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil || len(got.Geometry) != 2 ||
+		got.DistanceM != 1500 || got.DureeS != 300 {
+		t.Errorf("body = %s (%v)", rr.Body.String(), err)
+	}
+	want := routeCall{[2]float64{1.44, 43.6}, [2]float64{1.46, 43.62}, "foot-walking"}
+	if len(calls) != 1 || calls[0] != want {
+		t.Errorf("calls = %+v, want [%+v]", calls, want)
+	}
+
+	calls = nil
+	for name, tc := range map[string]struct {
+		body string
+		want int
+	}{
+		"JSON invalide":      {`{`, 400},
+		"transport absent":   {`{"depart":[1,43],"arrivee":[1.1,43.1]}`, 422},
+		"transport inconnu":  {`{"depart":[1,43],"arrivee":[1.1,43.1],"transp":"bateau"}`, 422},
+		"longitude invalide": {`{"depart":[181,43],"arrivee":[1.1,43.1],"transp":"driving-car"}`, 422},
+		"latitude invalide":  {`{"depart":[1,43],"arrivee":[1.1,-91],"transp":"driving-car"}`, 422},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if rr := callAs(t, h, st, http.MethodPost, "/api/itineraire", tc.body); rr.Code != tc.want {
+				t.Errorf("status = %d, want %d (%s)", rr.Code, tc.want, rr.Body.String())
+			}
+		})
+	}
+	if len(calls) != 0 {
+		t.Errorf("no ORS call expected on invalid input, got %d", len(calls))
+	}
+
+	// Erreur d'OpenRouteService : 502.
+	h.Routes = mockRoute{err: errors.New("ORS down")}
+	if rr := callAs(t, h, st, http.MethodPost, "/api/itineraire",
+		`{"depart":[1.44,43.6],"arrivee":[1.46,43.62],"transp":"driving-car"}`); rr.Code != http.StatusBadGateway {
+		t.Errorf("ORS error: status = %d, want 502", rr.Code)
+	}
+}
+
+func TestItineraire_Access(t *testing.T) {
+	st := alice(t, true)
+	h := &Handlers{Store: st, Routes: mockRoute{}}
+	body := `{"depart":[1.44,43.6],"arrivee":[1.46,43.62],"transp":"driving-car"}`
+	for token, want := range map[string]int{"": http.StatusForbidden, "Bearer invalid": http.StatusUnauthorized} {
+		req := httptest.NewRequest(http.MethodPost, "/api/itineraire", strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", token)
+		}
+		rr := httptest.NewRecorder()
+		NewRouter(testSecret, h, st).ServeHTTP(rr, req)
+		if rr.Code != want {
+			t.Errorf("token %q: status = %d, want %d", token, rr.Code, want)
+		}
+	}
+	// Compte non validé : 403.
+	st.user.Perms = models.PermsVerified
+	if rr := callAs(t, h, st, http.MethodPost, "/api/itineraire", body); rr.Code != http.StatusForbidden {
+		t.Errorf("verified: status = %d, want 403", rr.Code)
+	}
+}

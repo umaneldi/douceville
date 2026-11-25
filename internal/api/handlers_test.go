@@ -298,6 +298,29 @@ func (m mockIso) CalcIsochrones(ctx context.Context, lonlats [][2]float64, dist 
 	return out, nil
 }
 
+// mockRoute simule les itinéraires OpenRouteService : renvoie un segment
+// direct de from à to ; calls (si non nil) reçoit chaque appel.
+type mockRoute struct {
+	err   error
+	calls *[]routeCall
+}
+
+// routeCall est un appel à CalcItineraire.
+type routeCall struct {
+	from, to [2]float64
+	transp   string
+}
+
+func (m mockRoute) CalcItineraire(ctx context.Context, from, to [2]float64, transp string) (models.Itineraire, error) {
+	if m.calls != nil {
+		*m.calls = append(*m.calls, routeCall{from, to, transp})
+	}
+	if m.err != nil {
+		return models.Itineraire{}, m.err
+	}
+	return models.Itineraire{Geometry: [][2]float64{from, to}, DistanceM: 1500, DureeS: 300}, nil
+}
+
 type mockGeo struct {
 	res geo.BANResult
 	err error

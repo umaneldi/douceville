@@ -17,6 +17,10 @@ import (
 // répond désormais 410 Gone, l'API est servie par api.heigit.org.
 const orsBaseURL = "https://api.heigit.org/openrouteservice/v2/isochrones/"
 
+// orsDirectionsURL est le point d'accès des itinéraires (suivi du profil et
+// de « /geojson »).
+const orsDirectionsURL = "https://api.heigit.org/openrouteservice/v2/directions/"
+
 // ORSClient interroge l'API OpenRouteService.
 type ORSClient struct {
 	apiKey string
@@ -122,13 +126,58 @@ func (c *ORSClient) CalcIsochrones(ctx context.Context, lonlats [][2]float64, di
 
 // post envoie une requête d'isochrones pour le profil transp et décode la réponse.
 func (c *ORSClient) post(ctx context.Context, transp string, payload map[string]any) (orsResponse, error) {
+	var parsed orsResponse
+	err := c.do(ctx, orsBaseURL+transp, payload, &parsed)
+	return parsed, err
+}
+
+// orsDirections est la réponse GeoJSON d'une requête d'itinéraire.
+type orsDirections struct {
+	Features []struct {
+		Properties struct {
+			Summary struct {
+				Distance float64 `json:"distance"`
+				Duration float64 `json:"duration"`
+			} `json:"summary"`
+		} `json:"properties"`
+		Geometry struct {
+			Coordinates [][2]float64 `json:"coordinates"`
+		} `json:"geometry"`
+	} `json:"features"`
+}
+
+// CalcItineraire calcule l'itinéraire de from à to ([lon, lat]) pour un
+// profil de transport (driving-car par défaut).
+func (c *ORSClient) CalcItineraire(ctx context.Context, from, to [2]float64, transp string) (models.Itineraire, error) {
+	if transp == "" {
+		transp = "driving-car"
+	}
+	var parsed orsDirections
+	if err := c.do(ctx, orsDirectionsURL+transp+"/geojson", map[string]any{
+		"coordinates": [][2]float64{from, to},
+	}, &parsed); err != nil {
+		return models.Itineraire{}, err
+	}
+	if len(parsed.Features) == 0 || len(parsed.Features[0].Geometry.Coordinates) == 0 {
+		return models.Itineraire{}, fmt.Errorf("openrouteservice returned no route")
+	}
+	f := parsed.Features[0]
+	return models.Itineraire{
+		Geometry:  f.Geometry.Coordinates,
+		DistanceM: f.Properties.Summary.Distance,
+		DureeS:    f.Properties.Summary.Duration,
+	}, nil
+}
+
+// do envoie payload en JSON à url et décode la réponse dans out.
+func (c *ORSClient) do(ctx context.Context, url string, payload map[string]any, out any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return orsResponse{}, err
+		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, orsBaseURL+transp, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return orsResponse{}, err
+		return err
 	}
 	req.Header.Set("Authorization", c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -137,17 +186,13 @@ func (c *ORSClient) post(ctx context.Context, transp string, payload map[string]
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return orsResponse{}, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return orsResponse{}, fmt.Errorf("openrouteservice returned status %d", resp.StatusCode)
+		return fmt.Errorf("openrouteservice returned status %d", resp.StatusCode)
 	}
-	var parsed orsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return orsResponse{}, err
-	}
-	return parsed, nil
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // PolygonWKT construit la représentation WKT POLYGON((...)) de l'anneau de

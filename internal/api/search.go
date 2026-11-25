@@ -456,3 +456,41 @@ func (h *Handlers) quartierProximite(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, q)
 }
+
+// validLonLat indique si p ([lon, lat]) est une position WGS84 valide.
+func validLonLat(p [2]float64) bool {
+	return p[0] >= -180 && p[0] <= 180 && p[1] >= -90 && p[1] <= 90
+}
+
+// itineraire gère POST /itineraire : trajet routier entre deux positions
+// (fiche d'un quartier vers ses établissements les plus proches ; non facturé).
+func (h *Handlers) itineraire(w http.ResponseWriter, r *http.Request) {
+	log := logger(r.Context())
+
+	var body models.ItineraireRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		log.Warn("itineraire: invalid JSON body", "error", err)
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	var verr error
+	switch {
+	case !slices.Contains(models.Transports, body.Transp):
+		verr = fmt.Errorf("transp must be one of %v", models.Transports)
+	case !validLonLat(body.Depart) || !validLonLat(body.Arrivee):
+		verr = errors.New("depart and arrivee must be valid [lon, lat] positions")
+	}
+	if verr != nil {
+		log.Warn("itineraire: invalid parameters", "error", verr)
+		writeError(w, http.StatusUnprocessableEntity, verr.Error())
+		return
+	}
+
+	it, err := h.Routes.CalcItineraire(r.Context(), body.Depart, body.Arrivee, body.Transp)
+	if err != nil {
+		log.Error("itineraire: openrouteservice failed", "error", err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}

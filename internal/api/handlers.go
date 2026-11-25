@@ -25,6 +25,13 @@ type Isochroner interface {
 	CalcIsochrones(ctx context.Context, lonlats [][2]float64, dist float64, transp string) ([]models.Isochrone, error)
 }
 
+// RoutePlanner calcule des itinéraires routiers (implémenté par geo.ORSClient).
+type RoutePlanner interface {
+	// CalcItineraire calcule l'itinéraire de from à to ([lon, lat]) pour un
+	// profil de transport OpenRouteService.
+	CalcItineraire(ctx context.Context, from, to [2]float64, transp string) (models.Itineraire, error)
+}
+
 // Geocoder résout une adresse en coordonnées (implémenté par geo.BANClient).
 type Geocoder interface {
 	Geocode(ctx context.Context, query string) (geo.BANResult, error)
@@ -48,8 +55,10 @@ type OIDCProvider interface {
 
 // Handlers porte les dépendances des endpoints.
 type Handlers struct {
-	Store     store.Store
-	Isochron  Isochroner
+	Store    store.Store
+	Isochron Isochroner
+	// Routes calcule les itinéraires de la fiche d'un quartier.
+	Routes    RoutePlanner
 	Geocoder  Geocoder
 	Suggester AddressSuggester
 	JWTSecret string

@@ -10,7 +10,7 @@ documenté dans [`schema.md`](../../schema.md).
 | ------- | ------- |
 | `store.go` | Interface `Store` (toutes les opérations utilisées par l'API), implémentation `PgStore` (`New(pool)`), erreur `ErrEmailTaken`. |
 | `queries.go` | Comptes (création, profil, niveaux, suppression), vérification d'e-mail et changement d'adresse, révocation de tokens, identités OIDC ; requêtes spatiales de la zone (communes, prix immobiliers, logements sociaux, union/intersection des isochrones). |
-| `search.go` | Recherche par établissements : sources par critère (`SelectSourceEtablissements`), établissements de la zone selon les critères (`FindEtablissementsInZone`), filtres de zone (`FilterZone`), cache d'isochrones (`GetCachedIsochrones`, `PutCachedIsochrones`), fiche d'un quartier (`QuartierProximite`). |
+| `search.go` | Recherche par établissements : sources par critère (`SelectSourceEtablissements`), établissements de la zone selon les critères (`FindEtablissementsInZone`), filtres de zone (`FilterZone`), cache d'isochrones (`GetCachedIsochrones`, `PutCachedIsochrones`), fiche d'un quartier (`QuartierProximite` : point intérieur du quartier et, par critère, établissement le plus proche avec sa position). |
 | `billing.go` | Tarifs, débit / remboursement / ajustement du crédit, journal des mouvements, paiements. Erreurs `ErrInsufficientCredit`, `ErrNotFound`. |
 | `migrate.go` | `Migrate` (applique les migrations embarquées) et `CanMigrate` (le rôle connecté peut-il modifier le schéma ?). |
 | `migrations/NNN_*.sql` | Scripts SQL idempotents, appliqués dans l'ordre lexical. |

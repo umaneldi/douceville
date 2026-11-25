@@ -233,3 +233,75 @@ func TestPolygonWKT(t *testing.T) {
 		t.Errorf("empty ring = %q", got)
 	}
 }
+
+func TestCalcItineraire(t *testing.T) {
+	var got struct {
+		host, path, auth string
+		body             map[string][][2]float64
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.host, got.path, got.auth = r.Header.Get("X-Original-Host"), r.URL.Path, r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &got.body)
+		_, _ = w.Write([]byte(`{"features":[{"properties":{"summary":{"distance":1234.5,"duration":678.9}},
+			"geometry":{"coordinates":[[1.44,43.6],[1.45,43.61],[1.46,43.62]]}}]}`))
+	}))
+	defer srv.Close()
+
+	from, to := [2]float64{1.44, 43.6}, [2]float64{1.46, 43.62}
+	it, err := NewORSClient("ors-key", redirect(srv)).CalcItineraire(context.Background(), from, to, "foot-walking")
+	if err != nil {
+		t.Fatalf("CalcItineraire: %v", err)
+	}
+	if got.host != "api.heigit.org" || got.path != "/openrouteservice/v2/directions/foot-walking/geojson" {
+		t.Errorf("url = %s%s, want api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson", got.host, got.path)
+	}
+	if got.auth != "ors-key" {
+		t.Errorf("Authorization = %q, want ors-key", got.auth)
+	}
+	if c := got.body["coordinates"]; len(c) != 2 || c[0] != from || c[1] != to {
+		t.Errorf("coordinates = %v, want [%v %v]", c, from, to)
+	}
+	if len(it.Geometry) != 3 || it.Geometry[2] != to || it.DistanceM != 1234.5 || it.DureeS != 678.9 {
+		t.Errorf("itineraire = %+v", it)
+	}
+
+	// Profil par défaut.
+	if _, err := NewORSClient("k", redirect(srv)).CalcItineraire(context.Background(), from, to, ""); err != nil {
+		t.Fatalf("CalcItineraire (default): %v", err)
+	}
+	if got.path != "/openrouteservice/v2/directions/driving-car/geojson" {
+		t.Errorf("default path = %s, want driving-car", got.path)
+	}
+}
+
+func TestCalcItineraire_Errors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		"http error":     {http.StatusNotFound, `{}`},
+		"bad json":       {http.StatusOK, `{`},
+		"no feature":     {http.StatusOK, `{"features":[]}`},
+		"empty geometry": {http.StatusOK, `{"features":[{"geometry":{"coordinates":[]}}]}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			if _, err := NewORSClient("k", redirect(srv)).CalcItineraire(context.Background(), [2]float64{}, [2]float64{1, 1}, ""); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+
+	// Serveur injoignable.
+	srv := httptest.NewServer(http.NotFoundHandler())
+	client := redirect(srv)
+	srv.Close()
+	if _, err := NewORSClient("k", client).CalcItineraire(context.Background(), [2]float64{}, [2]float64{1, 1}, ""); err == nil {
+		t.Error("unreachable server: expected an error")
+	}
+}

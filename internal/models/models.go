@@ -317,6 +317,9 @@ type Proche struct {
 	Commune   *string  `json:"commune"`
 	Secteur   *string  `json:"secteur"`
 	Taux      *float64 `json:"taux"`
+	// Lon et Lat sont la position de l'établissement (WGS84).
+	Lon *float64 `json:"lon"`
+	Lat *float64 `json:"lat"`
 }
 
 // SecuriteCommune est le score de sécurité d'une commune (dernière année de
@@ -340,6 +343,26 @@ type QuartierProximite struct {
 	Securite    *SecuriteCommune `json:"securite"`
 	Fiscalite   *Fiscalite       `json:"fiscalite"`
 	Proches     []Proche         `json:"proches"`
+	// Lon et Lat sont le point intérieur du quartier (ST_PointOnSurface)
+	// depuis lequel les distances sont mesurées.
+	Lon float64 `json:"lon"`
+	Lat float64 `json:"lat"`
+}
+
+// ItineraireRequest est le corps de POST /itineraire : départ et arrivée
+// [lon, lat] et profil de transport OpenRouteService (voir Transports).
+type ItineraireRequest struct {
+	Depart  [2]float64 `json:"depart"`
+	Arrivee [2]float64 `json:"arrivee"`
+	Transp  string     `json:"transp"`
+}
+
+// Itineraire est un trajet routier : tracé [lon, lat], longueur en mètres et
+// durée en secondes.
+type Itineraire struct {
+	Geometry  [][2]float64 `json:"geometry"`
+	DistanceM float64      `json:"distance_m"`
+	DureeS    float64      `json:"duree_s"`
 }
 
 // CommuneSecurite est une commune touchée par l'isochrone, avec son score de

@@ -1,14 +1,14 @@
 # Paquet `geo`
 
 Clients des services de géolocalisation externes : **OpenRouteService** pour
-les isochrones et **addok / Base Adresse Nationale** pour le géocodage et
+les isochrones et les itinéraires, et **addok / Base Adresse Nationale** pour le géocodage et
 l'autocomplétion d'adresses. Plus quelques utilitaires de conversion en WKT.
 
 ## Fichiers
 
 | Fichier | Contenu |
 | ------- | ------- |
-| `ors.go` | `ORSClient.CalcIsochrone` : isochrones emboîtées autour d'un point `[lon, lat]` pour un temps maximal et un pas donnés (`GET /api/isochrone`). `ORSClient.CalcIsochrones` : isochrone d'un seul temps pour chaque position d'une liste, par requêtes de `orsMaxLocations` (5) positions, résultats remis dans l'ordre grâce à `group_index` (recherche par établissements). Profils `driving-car` par défaut, `cycling-regular`, `foot-walking`. `PolygonWKT` / `RingWKT` : anneau → `POLYGON((…))`. |
+| `ors.go` | `ORSClient.CalcIsochrone` : isochrones emboîtées autour d'un point `[lon, lat]` pour un temps maximal et un pas donnés (`GET /api/isochrone`). `ORSClient.CalcIsochrones` : isochrone d'un seul temps pour chaque position d'une liste, par requêtes de `orsMaxLocations` (5) positions, résultats remis dans l'ordre grâce à `group_index` (recherche par établissements). `ORSClient.CalcItineraire` : itinéraire entre deux positions (`POST …/v2/directions/{profil}/geojson`) → tracé, distance (m) et durée (s). Profils `driving-car` par défaut, `cycling-regular`, `foot-walking`. `PolygonWKT` / `RingWKT` : anneau → `POLYGON((…))`. |
 | `ban.go` | `BANClient` : `Geocode` (adresse → coordonnées) et `Suggest` (autocomplétion). Cible `http://<ADDOK_HOST>:7878`, ou l'API publique `https://data.geopf.fr/geocodage` si l'hôte est vide. |
 
 ## Dépendances
@@ -38,4 +38,5 @@ d'un nom d'hôte (addok) sont redirigées vers le serveur de test par le helper
 les erreurs (statut HTTP, JSON invalide, réponse vide, serveur injoignable),
 le découpage en lots de `CalcIsochrones` (7 positions → 2 requêtes, réponse
 dans le désordre, géométrie manquante, `group_index` invalide) et la
-conversion WKT.
+conversion WKT, ainsi que `CalcItineraire` (URL, corps, clé, décodage,
+profil par défaut, erreurs).

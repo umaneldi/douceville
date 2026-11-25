@@ -11,7 +11,7 @@ const PENDING_MSG =
   "Vous pourrez vous connecter dès qu'il aura été approuvé.";
 let currentUser = null; // profil de l'utilisateur connecté (GET /user)
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
-let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer, logementLayer, logementRenderer;
+let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer, logementLayer, logementRenderer, routeLayer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
 
 const $ = (sel) => document.querySelector(sel);
@@ -193,12 +193,16 @@ function startApp(user) {
 // page (et relance la recherche). Ex. :
 // /?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100
 // &critere=Collège,10,pied,public,0-100&prix=0-4000&securite=50&fiscalite=45
-// &couche=prix&logements=1&onglet=list
+// &couche=prix&logements=1&onglet=list&taux=8,9
+// (taux : tranches de 10 % sélectionnées dans l'histogramme des taux de réussite)
 // ---------------------------------------------------------------------------
 const TRANSP_CODES = { "driving-car": "voiture", "cycling-regular": "velo", "foot-walking": "pied" };
 const TRANSP_BY_CODE = Object.fromEntries(Object.entries(TRANSP_CODES).map(([k, v]) => [v, k]));
 const RETURN_QUERY_KEY = "douceville_return_query"; // état conservé pendant SSO / paiement
 let urlReady = false; // false tant que l'état de l'URL n'a pas été appliqué
+// Sélection de l'histogramme des taux lue dans l'URL, appliquée aux résultats
+// de la première recherche (null : aucune).
+let pendingRateSel = null;
 
 function pageQuery() {
   const q = new URLSearchParams();
@@ -225,6 +229,10 @@ function pageQuery() {
   }
   const tab = $(".tabs .tab.active");
   if (tab && tab.dataset.tab !== "overview") q.set("onglet", tab.dataset.tab);
+  // Sélection de l'histogramme des taux (en attente tant que la recherche
+  // relancée depuis l'URL n'a pas répondu).
+  const sel = pendingRateSel || rateSel;
+  if (sel.size) q.set("taux", [...sel].sort((a, b) => a - b).join(","));
   return q;
 }
 
@@ -282,6 +290,9 @@ function applyQuery(params) {
 
   const tab = document.querySelector(`.tabs .tab[data-tab="${CSS.escape(params.get("onglet") || "")}"]`);
   if (tab) tab.click();
+
+  const taux = (params.get("taux") || "").split(",").filter((x) => /^\d$/.test(x)).map(Number);
+  pendingRateSel = taux.length ? new Set(taux) : null;
 
   updateSearchCost();
   return !!$("#centre").value.trim() && collectCriteres().length > 0;
@@ -891,6 +902,8 @@ function initMap() {
   logementRenderer = L.canvas({ pane: "logements" });
   logementLayer = L.layerGroup(); // désactivée par défaut
   isoLayer = L.layerGroup().addTo(map);
+  // Itinéraires de la fiche d'un quartier : au-dessus de la zone.
+  routeLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   const layers = L.control.layers(
     null,
@@ -1438,7 +1451,9 @@ function renderFiscalite(communes) {
 // d'oiseau) à l'établissement le plus proche de chaque nature recherchée.
 // ---------------------------------------------------------------------------
 let lastCriteres = []; // critères de la dernière recherche
+let lastFiltres = {}; // filtres de zone de la dernière recherche
 let placeSeq = 0; // ignore les réponses de fiches obsolètes
+const routeCache = new Map(); // "lon,lat|lon,lat|transp" → promesse de /itineraire
 
 // Point (lon, lat) dans un anneau [[lon, lat], ...] (lancer de rayon).
 function pointInRing(lon, lat, ring) {
@@ -1475,9 +1490,28 @@ function fmtDistance(m) {
   return `${km.toLocaleString("fr-FR", { maximumFractionDigits: km < 10 ? 1 : 0 })} km`;
 }
 
+// Durée lisible : « 8 min », « 1 h 05 ».
+function fmtDuree(s) {
+  const min = Math.max(1, Math.round(s / 60));
+  if (min < 60) return `${min} min`;
+  return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}`;
+}
+
+const TRANSP_LABELS = { "driving-car": "en voiture", "cycling-regular": "à vélo", "foot-walking": "à pied" };
+
+// Ligne « itinéraire » d'un établissement proche : undefined (en cours),
+// null (indisponible) ou {duree_s, distance_m, transp}.
+function itineraireLine(it) {
+  if (it === undefined) return `<div class="muted place-proche">Itinéraire…</div>`;
+  if (it === null) return `<div class="muted place-proche">Itinéraire indisponible</div>`;
+  return `<div class="place-proche">Itinéraire ${TRANSP_LABELS[it.transp] || ""} : ` +
+    `<strong>${fmtDuree(it.duree_s)}</strong> <span class="muted">(${fmtDistance(it.distance_m)})</span></div>`;
+}
+
 // Section « Établissements les plus proches » : contenu provisoire tant que
-// la réponse du serveur n'est pas arrivée.
-function prochesSection(proches) {
+// la réponse du serveur n'est pas arrivée ; itineraires : nature → itinéraire
+// (voir itineraireLine), absent si l'établissement n'a pas de position.
+function prochesSection(proches, itineraires = new Map()) {
   let body;
   if (proches === undefined) {
     body = `<span class="muted">Chargement…</span>`;
@@ -1494,7 +1528,8 @@ function prochesSection(proches) {
           : `<strong>${fmtDistance(p.distance_m)}</strong>`;
         const detail = p.nom
           ? `<div class="muted place-proche">${esc(p.nom)}${p.commune ? `, ${esc(p.commune)}` : ""}` +
-            `${p.taux != null ? ` — ${fmtTaux(p.taux)}` : ""}</div>`
+            `${p.taux != null ? ` — ${fmtTaux(p.taux)}` : ""}</div>` +
+            (itineraires.has(p.nature) || p.lon != null ? itineraireLine(itineraires.get(p.nature)) : "")
           : "";
         return `<li><span class="place-dot" style="background:${natureGroup(p.nature).color}"></span>` +
           `<span class="place-origin">${label}${detail}</span><span>${val}</span></li>`;
@@ -1504,7 +1539,7 @@ function prochesSection(proches) {
   return placeSection(`Établissements les plus proches <span class="muted">(à vol d'oiseau)</span>`, body);
 }
 
-function placeCardHtml(lon, lat, quartier, proches) {
+function placeCardHtml(lon, lat, quartier, proches, itineraires) {
   const communes = lastData.communes || [];
   const commune = communes.find((c) => pointInGeometry(lon, lat, c.contour));
   const immo = immoData || {};
@@ -1543,12 +1578,14 @@ function placeCardHtml(lon, lat, quartier, proches) {
     html += placeSection("Fiscalité locale", fisc);
   }
 
-  if (quartier) html += prochesSection(proches);
+  if (quartier) html += prochesSection(proches, itineraires);
   return html;
 }
 
 // Ouvre la fiche du lieu cliqué ; pour un quartier IRIS, les distances aux
-// établissements sont demandées au serveur (non facturé) puis ajoutées.
+// établissements sont demandées au serveur (non facturé), puis l'itinéraire
+// du point du quartier vers chacun (mode de transport de son critère) est
+// tracé sur la carte jusqu'à la fermeture de la fiche.
 function openPlaceCard(latlng) {
   if (!lastData) return;
   const { lng: lon, lat } = latlng;
@@ -1556,19 +1593,84 @@ function openPlaceCard(latlng) {
   const popup = L.popup({ maxWidth: 340, className: "place-popup" })
     .setLatLng(latlng)
     .setContent(placeCardHtml(lon, lat, quartier, undefined))
-    .openOn(map);
+    .openOn(map); // ferme la fiche précédente (et efface ses itinéraires)
+  // Quartier désélectionné (fiche fermée ou remplacée) : itinéraires effacés.
+  popup.on("remove", () => routeLayer.clearLayers());
   if (!quartier) return;
 
   const seq = ++placeSeq;
+  const current = () => seq === placeSeq && popup.isOpen();
   api(`/quartiers/${encodeURIComponent(quartier.iris)}/proximite`, {
     method: "POST",
     body: JSON.stringify({ criteres: lastCriteres }),
   })
-    .then((fiche) => fiche.proches)
     .catch(() => null)
-    .then((proches) => {
-      if (seq === placeSeq && popup.isOpen()) popup.setContent(placeCardHtml(lon, lat, quartier, proches));
+    .then((fiche) => {
+      if (!current()) return;
+      const proches = fiche ? fiche.proches : null;
+      const itineraires = new Map();
+      const refresh = () => {
+        if (current()) popup.setContent(placeCardHtml(lon, lat, quartier, proches, itineraires));
+      };
+      refresh();
+      if (!fiche) return;
+      drawQuartierRoutes(fiche, itineraires, current, refresh);
     });
+}
+
+// Itinéraire (mis en cache) de from à to ([lon, lat]) pour un profil.
+function fetchRoute(from, to, transp) {
+  const key = `${from}|${to}|${transp}`;
+  if (!routeCache.has(key)) {
+    const req = api("/itineraire", {
+      method: "POST",
+      body: JSON.stringify({ depart: from, arrivee: to, transp }),
+    });
+    req.catch(() => routeCache.delete(key)); // échec : nouvel essai au prochain clic
+    routeCache.set(key, req);
+  }
+  return routeCache.get(key);
+}
+
+// Trace les itinéraires du point du quartier (fiche /proximite) vers chaque
+// établissement proche ; itineraires (nature → résultat) est complété au fil
+// des réponses, puis refresh met la fiche à jour. current() est faux dès que
+// la fiche a été fermée ou remplacée.
+function drawQuartierRoutes(fiche, itineraires, current, refresh) {
+  const from = [fiche.lon, fiche.lat];
+  const proches = (fiche.proches || []).filter((p) => p.lon != null && p.lat != null);
+  if (!proches.length) return;
+  L.circleMarker([fiche.lat, fiche.lon], {
+    radius: 6,
+    color: "#fff",
+    weight: 2,
+    fillColor: "#111827",
+    fillOpacity: 1,
+    interactive: false,
+  }).addTo(routeLayer);
+  for (const p of proches) {
+    const critere = lastCriteres.find((c) => c.nature === p.nature);
+    const transp = critere ? critere.transp : "driving-car";
+    itineraires.set(p.nature, undefined);
+    fetchRoute(from, [p.lon, p.lat], transp)
+      .then((it) => ({ ...it, transp }))
+      .catch(() => null)
+      .then((it) => {
+        if (!current()) return;
+        itineraires.set(p.nature, it);
+        if (it && it.geometry && it.geometry.length) {
+          // Non interactif : un clic sur le tracé ne doit pas fermer la fiche.
+          L.polyline(it.geometry.map(([x, y]) => [y, x]), {
+            color: natureGroup(p.nature).color,
+            weight: 4,
+            opacity: 0.85,
+            interactive: false,
+          }).addTo(routeLayer);
+        }
+        refresh();
+      });
+  }
+  refresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -1687,6 +1789,8 @@ $("#logout").addEventListener("click", async () => {
     /* token déjà invalide ou serveur injoignable */
   }
   setToken(null);
+  if (map) map.closePopup();
+  if (routeLayer) routeLayer.clearLayers();
   if (isoLayer) isoLayer.clearLayers();
   if (markerLayer) markerLayer.clearLayers();
   if (communeLayer) renderCommunes([]);
@@ -1698,6 +1802,7 @@ $("#logout").addEventListener("click", async () => {
   billing = null;
   renderBilling();
   renderInsights([]);
+  renderZoneCharts();
   $("#results-summary").hidden = true;
   $("#search-status").textContent = "";
   $("#password").value = "";
@@ -1738,6 +1843,7 @@ $("#search-form").addEventListener("submit", async (e) => {
       body: JSON.stringify(body),
     });
     lastCriteres = criteres;
+    lastFiltres = filtres;
     immoFiltre = { min: filtres.prix_m2_min, max: filtres.prix_m2_max };
     render(data);
   } catch (ex) {
@@ -1960,6 +2066,8 @@ for (const type of ["input", "change"]) {
 }
 
 function render(data) {
+  map.closePopup(); // fiche d'un quartier de la recherche précédente
+  routeLayer.clearLayers();
   isoLayer.clearLayers();
   markerLayer.clearLayers();
   renderCommunes(data.communes);
@@ -2036,6 +2144,7 @@ function render(data) {
 
   lastData = data;
   renderMarkers();
+  renderZoneCharts();
 
   // Zone vide : explication.
   const status = $("#search-status");
@@ -2069,7 +2178,7 @@ function sourceNature(src) {
 function sourcePopupHtml(src) {
   return popupHtml(src) +
     `<div class="popup-meta">Établissement source (critère ${natureLabel(sourceNature(src))}) : isochrone de ${Math.round(src.dist / 60)} min ` +
-    `${{ "driving-car": "en voiture", "cycling-regular": "à vélo", "foot-walking": "à pied" }[src.transp] || esc(src.transp)}.</div>`;
+    `${TRANSP_LABELS[src.transp] || esc(src.transp)}.</div>`;
 }
 
 // (Re)dessine les marqueurs des établissements de la zone ; renvoie leurs
@@ -2251,7 +2360,13 @@ function renderInsights(etabs) {
   renderNatureChart(etabs);
   renderRateChart(etabs);
   insightEtabs = etabs;
-  rateSel = new Set(); // nouvel ensemble d'établissements : sélection effacée
+  // Nouvel ensemble d'établissements : sélection effacée, sauf celle lue
+  // dans l'URL, appliquée aux premiers résultats.
+  rateSel = new Set();
+  if (etabs.length && pendingRateSel) {
+    rateSel = pendingRateSel;
+    pendingRateSel = null;
+  }
   applyRateSelection();
 }
 
@@ -2282,6 +2397,7 @@ function applyRateSelection() {
     m.setOpacity(on ? 1 : 0.25);
     m.setZIndexOffset(active && on ? 1000 : 0);
   }
+  syncUrl();
 }
 
 // Clic sur une barre : sélection simple ; Ctrl/⌘ + clic : ajout/retrait.
@@ -2388,6 +2504,110 @@ function renderRateChart(etabs) {
     (none ? `<p class="chart-note">${none} sans résultats d'examen</p>` : "");
 }
 
+// ---------------------------------------------------------------------------
+// Histogrammes de la zone : sécurité et fiscalité des communes, prix au m²
+// des quartiers IRIS (affichés même sans filtre ; les tranches hors du filtre
+// de la dernière recherche sont atténuées).
+// ---------------------------------------------------------------------------
+// Plus petit pas de steps donnant au plus ~10 tranches sur l'étendue.
+function niceStep(range, steps) {
+  return steps.find((st) => range / st <= 10) || steps[steps.length - 1];
+}
+
+// values : valeurs (null : sans donnée) ; opts : {lo, hi} bornes fixes
+// (sinon tirées des valeurs), steps (pas candidats), fmt (libellé d'une
+// borne), unit (entités comptées), color, outside(a, b) (tranche [a, b[
+// hors filtre), filtre (libellé du filtre actif ou "").
+function renderHistogram(el, values, opts) {
+  if (!lastData) {
+    el.innerHTML = EMPTY_HINT;
+    return;
+  }
+  const known = values.filter((v) => v != null);
+  const none = values.length - known.length;
+  if (!known.length) {
+    el.innerHTML = `<p class="empty">Aucune donnée pour les ${opts.unit} de la zone.</p>`;
+    return;
+  }
+  let { lo, hi } = opts;
+  let step = opts.step;
+  if (lo == null) {
+    const min = Math.min(...known);
+    const max = Math.max(...known);
+    step = niceStep(Math.max(max - min, opts.steps[0]), opts.steps);
+    lo = Math.floor(min / step) * step;
+    hi = Math.max(lo + step, Math.floor(max / step) * step + step);
+  }
+  const n = Math.round((hi - lo) / step);
+  const bins = new Array(n).fill(0);
+  for (const v of known) bins[Math.min(n - 1, Math.max(0, Math.floor((v - lo) / step)))]++;
+  const max = Math.max(...bins);
+  const bars = bins
+    .map((count, i) => {
+      const a = lo + i * step;
+      const b = a + step;
+      const h = count ? Math.max(2, (100 * count) / max) : 0;
+      const label = `${opts.fmt(a)} – ${opts.fmt(b)} : ${count} ${opts.unit}`;
+      const dim = opts.outside && opts.outside(a, b) ? " dimmed" : "";
+      return (
+        `<span class="bar-slot static${dim}" title="${label}" aria-label="${label}">` +
+        `<span class="bar" style="height:${h}%;background:${opts.color}"></span></span>`
+      );
+    })
+    .join("");
+  const notes = [];
+  if (opts.filtre) notes.push(`Filtre : ${opts.filtre} (tranches hors filtre atténuées)`);
+  if (none) notes.push(`${none} ${opts.unit} sans donnée`);
+  el.innerHTML =
+    `<div class="bars-head"><span>${known.length} ${opts.unit}</span><span>max ${max}</span></div>` +
+    `<div class="bars" role="img" aria-label="Histogramme : ${known.length} ${opts.unit}">${bars}</div>` +
+    `<div class="bars-axis"><span>${opts.fmt(lo)}</span><span>${opts.fmt(hi)}</span></div>` +
+    notes.map((t) => `<p class="chart-note">${t}</p>`).join("");
+}
+
+// Histogrammes de sécurité, fiscalité et prix de la dernière recherche.
+function renderZoneCharts() {
+  const communes = (lastData && lastData.communes) || [];
+  const f = lastFiltres || {};
+  const fmtEur = (v) => `${v.toLocaleString("fr-FR")} €`;
+
+  renderHistogram($("#secu-chart"), communes.map((c) => c.score ?? null), {
+    lo: 0,
+    hi: 100,
+    step: 10,
+    fmt: (v) => String(v),
+    unit: "commune(s)",
+    color: SECURITY_CLASSES[1].color,
+    outside: f.securite_min != null ? (a, b) => b <= f.securite_min : null,
+    filtre: f.securite_min != null ? `score ≥ ${f.securite_min}` : "",
+  });
+
+  renderHistogram($("#fisc-chart"), communes.map((c) => (c.fiscalite ? c.fiscalite.taux : null)), {
+    steps: [0.5, 1, 2, 5, 10],
+    fmt: fmtTaux,
+    unit: "commune(s)",
+    color: FISC_COLORS[3],
+    outside: f.fiscalite_max != null ? (a) => a > f.fiscalite_max : null,
+    filtre: f.fiscalite_max != null ? `≤ ${fmtTaux(f.fiscalite_max)}` : "",
+  });
+
+  const quartiers = (immoData && immoData.quartiers) || [];
+  const pmin = f.prix_m2_min;
+  const pmax = f.prix_m2_max;
+  const prixFiltre = pmin != null || pmax != null;
+  renderHistogram($("#prix-chart"), quartiers.map((q) => (q.prix ? q.prix.prix_m2 : null)), {
+    steps: [100, 250, 500, 1000, 2000, 5000, 10000],
+    fmt: fmtEur,
+    unit: "quartier(s)",
+    color: IMMO_COLORS[3],
+    outside: prixFiltre ? (a, b) => (pmin != null && b <= pmin) || (pmax != null && a > pmax) : null,
+    filtre: !prixFiltre ? ""
+      : pmin != null && pmax != null ? `${fmtEur(pmin)} – ${fmtEur(pmax)} /m²`
+      : pmin != null ? `≥ ${fmtEur(pmin)} /m²`
+      : `≤ ${fmtEur(pmax)} /m²`,
+  });
+}
+
 function secteurClass(secteur) {
   const s = String(secteur || "").toLowerCase();
   if (s.includes("hors")) return "badge-hc";
@@ -2433,6 +2653,7 @@ function renderEtabList(ul, etabs, withRate, highlight = false) {
 }
 
 renderInsights([]);
+renderZoneCharts();
 
 // ---------------------------------------------------------------------------
 // Lien de vérification d'e-mail
