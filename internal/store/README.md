@@ -9,7 +9,8 @@ documenté dans [`schema.md`](../../schema.md).
 | Fichier | Contenu |
 | ------- | ------- |
 | `store.go` | Interface `Store` (toutes les opérations utilisées par l'API), implémentation `PgStore` (`New(pool)`), erreur `ErrEmailTaken`. |
-| `queries.go` | Comptes (création, profil, niveaux, suppression), vérification d'e-mail et changement d'adresse, révocation de tokens, identités OIDC ; requêtes spatiales de la recherche (établissements, communes, prix immobiliers, logements sociaux, intersection des zones, niveau des points). |
+| `queries.go` | Comptes (création, profil, niveaux, suppression), vérification d'e-mail et changement d'adresse, révocation de tokens, identités OIDC ; requêtes spatiales de la zone (communes, prix immobiliers, logements sociaux, union/intersection des isochrones). |
+| `search.go` | Recherche par établissements : sources par critère (`SelectSourceEtablissements`), établissements de la zone selon les critères (`FindEtablissementsInZone`), filtres de zone (`FilterZone`), cache d'isochrones (`GetCachedIsochrones`, `PutCachedIsochrones`), fiche d'un quartier (`QuartierProximite`). |
 | `billing.go` | Tarifs, débit / remboursement / ajustement du crédit, journal des mouvements, paiements. Erreurs `ErrInsufficientCredit`, `ErrNotFound`. |
 | `migrate.go` | `Migrate` (applique les migrations embarquées) et `CanMigrate` (le rôle connecté peut-il modifier le schéma ?). |
 | `migrations/NNN_*.sql` | Scripts SQL idempotents, appliqués dans l'ordre lexical. |
@@ -20,7 +21,7 @@ documenté dans [`schema.md`](../../schema.md).
   démarrage**, sans table de suivi : chaque script doit donc être idempotent
   (`CREATE … IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `DO $$ … $$` gardés).
 - Une évolution du schéma = **un nouveau fichier** numéroté
-  (`017_…sql`) ; ne jamais modifier une migration déjà publiée.
+  (`019_…sql`) ; ne jamais modifier une migration déjà publiée.
 - Si le rôle PostgreSQL est en lecture seule (réplica, ou rôle créé par
   `scripts/create_readonly_user.py`), `CanMigrate` renvoie `false` et le
   serveur démarre sans migrer.
@@ -31,8 +32,27 @@ documenté dans [`schema.md`](../../schema.md).
 - **SRID** : `etablissement.position` et `logement_social.position` sont en
   SRID 0, alors que `commune.contour` et `quartier.contour` sont en 4326 ; les
   WKT de zone (sans SRID) sont adaptés en conséquence dans chaque requête.
-- `IntersectZones` rend les polygones valides (`ST_MakeValid`) et ne garde que
-  les parties surfaciques de l'intersection.
+- `IntersectUnions` rend les polygones valides (`ST_MakeValid`), les unit au
+  sein de chaque groupe (`ST_Union`), intersecte les unions et ne garde que
+  les parties surfaciques du résultat ; `FilterZone` renvoie un résultat
+  de même forme.
+- **Critères** : ils sont passés en tableaux parallèles (`criteresArgs`) et
+  dépliés par `unnest` dans la CTE `c` (`criteresCTE`) ; les secteurs d'un
+  critère sont joints par `|`. La condition commune est `critereMatch` : une
+  école primaire (`models.NaturePrimaire`, voir migration 019) satisfait les
+  critères des natures `models.NaturesPrimaire` (maternelle, élémentaire) ;
+  `SelectSourceEtablissements` renseigne donc `Source.Critere` (nature du
+  critère qui a retenu la source), qui peut différer de `Nature`.
+- **Taux de réussite** : vue `etablissement_taux` (migration 017), même
+  définition que `successRate()` dans `web/app.js`. Dans
+  `SelectSourceEtablissements`, les candidats du disque puis leur taux sont
+  **matérialisés** (CTE `MATERIALIZED`) : sinon le planificateur parcourt
+  l'agrégat de la vue pour chaque candidat (plusieurs secondes sur la base
+  complète au lieu d'environ 100 ms).
+- **Distances** : rayon et distances sont géodésiques
+  (`ST_SetSRID(position, 4326)::geography`) ; une boîte englobante en degrés
+  (`ST_MakeEnvelope`) ou un tri KNN planaire (`<->`, 5 voisins départagés en
+  géodésique) sert l'index GiST en SRID 0.
 - **Crédit** : tout mouvement de solde passe par `applyCredit` dans une
   transaction, qui met à jour `utilisateur.balance_cents` et journalise dans
   `credit_transaction` ; le solde ne peut jamais devenir négatif (contrainte
@@ -42,7 +62,7 @@ documenté dans [`schema.md`](../../schema.md).
 - Les identifiants de compte sont des UUID v4 générés côté application
   (`newUUID`) ; les e-mails sont comparés sans tenir compte de la casse.
 - Toute méthode ajoutée à l'interface `Store` doit aussi l'être aux doublures
-  de test de `internal/api` (`mockStore`, `fakeBill`).
+  de test de `internal/api` (`mockStore`, `fakeBill`, `failingStore`).
 
 ## Dépendances
 
@@ -65,12 +85,15 @@ DV_TEST_DSN=postgres://test:test@127.0.0.1:55432/test go test -cover ./internal/
 - `mustExec` charge des données de préparation ; `seedZone`
   (`zone_integration_test.go`) charge un petit jeu de données spatial (communes,
   IRIS, ventes DVF, sécurité, fiscalité, établissements, résultats, logements
-  sociaux) autour du carré `testZone`.
+  sociaux) autour du carré `testZone` ; `lycees` (`search_integration_test.go`)
+  y ajoute des lycées de taux et de distances variés autour de (2.5, 48.5).
 
 | Fichier | Couvre |
 | ------- | ------ |
 | `users_integration_test.go` | Comptes, vérification et changement d'e-mail, révocation de tokens, identités OIDC, `CanMigrate` (rôle en lecture seule), `newUUID`. |
-| `zone_integration_test.go` | Établissements (filtres, résultats), communes (score, fiscalité), prix immobiliers, logements sociaux, `IntersectZones`, `PointLevels`. |
+| `zone_integration_test.go` | Établissements de la zone (critères par nature, taux, résultats), communes (score, fiscalité), prix immobiliers, logements sociaux, `IntersectUnions` (union par groupe, intersection entre groupes). |
+| `search_integration_test.go` | Vue `etablissement_taux`, `SelectSourceEtablissements` (classement, rayon, critères par nature), `FilterZone` (chaque filtre, valeurs inconnues, prix de la commune à défaut de l'IRIS), cache d'isochrones (TTL, éviction LRU, remplacement), `QuartierProximite`. |
+| `primaire_integration_test.go` | Helper `ecoles` (maternelle, élémentaire et écoles « primaire » autour de (2.5, 48.5)) ; migration 019 (reclassement, idempotence), écoles primaires retenues par les critères maternelle et élémentaire (sources, zone, fiche d'un quartier), secteur appliqué, autres natures non concernées. |
 | `billing_integration_test.go` | Tarifs, débit / remboursement / ajustement, paiements idempotents, journal. |
 
 Toute nouvelle requête ou migration doit être exercée par un de ces tests.

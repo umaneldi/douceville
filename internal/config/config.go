@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Config regroupe tous les paramètres runtime du backend.
@@ -57,6 +59,12 @@ type Config struct {
 	MollieAPIKey string
 	// MollieWebhookURL est l'URL notifiée par Mollie des changements de statut.
 	MollieWebhookURL string
+
+	// IsochroneCacheTTL est la durée de validité d'une isochrone en cache
+	// (ISOCHRONE_CACHE_DAYS jours) ; au-delà, elle est recalculée.
+	IsochroneCacheTTL time.Duration
+	// IsochroneCacheMax est le nombre maximal d'isochrones en cache.
+	IsochroneCacheMax int
 }
 
 // OIDCEnabled indique si la connexion OpenID Connect est configurée.
@@ -105,6 +113,15 @@ func Load() (Config, error) {
 		c.BillingEnabled = true
 	}
 
+	days, err := positiveInt("ISOCHRONE_CACHE_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	c.IsochroneCacheTTL = time.Duration(days) * 24 * time.Hour
+	if c.IsochroneCacheMax, err = positiveInt("ISOCHRONE_CACHE_MAX", 20000); err != nil {
+		return Config{}, err
+	}
+
 	if c.JWTSecret == "" {
 		return Config{}, fmt.Errorf("JWT_SECRET is required")
 	}
@@ -131,6 +148,19 @@ func Load() (Config, error) {
 	}
 
 	return c, nil
+}
+
+// positiveInt lit un entier strictement positif (def si la variable est absente).
+func positiveInt(key string, def int) (int, error) {
+	v := env(key, "")
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer (got %q)", key, v)
+	}
+	return n, nil
 }
 
 func env(key, def string) string {

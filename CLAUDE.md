@@ -101,9 +101,28 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   impose de recompiler le binaire. L'état de la page est reflété dans l'URL
   (`syncUrl` / `applyQuery` dans `app.js`) : un nouveau filtre ou une nouvelle
   couche doit y être ajouté.
-- **Couplages à surveiller** : les poids des indicateurs de sécurité sont
-  dupliqués entre `internal/store/migrations/009_securite_score.sql` et
-  `SECURITY_INDICATORS` dans `web/app.js`.
+- **Couplages à surveiller** :
+  - les poids des indicateurs de sécurité sont dupliqués entre
+    `internal/store/migrations/009_securite_score.sql` et `SECURITY_INDICATORS`
+    dans `web/app.js` ;
+  - la définition du taux de réussite (Σadmis / Σprésents) est dupliquée entre
+    la vue `etablissement_taux` (`migrations/017_etablissement_taux.sql`) et
+    `successRate()` dans `web/app.js` ;
+  - les natures, secteurs et modes de transport acceptés (`models.Natures`,
+    `Secteurs`, `Transports`) doivent correspondre à `CRITERE_NATURES`,
+    `SECTEURS` et au gabarit `critere-tpl` du frontend ; la limite de sources
+    par nature (`sourcesParNature` dans `internal/api/search.go`) à
+    `SOURCES_PAR_NATURE` dans `web/app.js` ;
+  - la nature `Primaire` (nom contenant « primaire ») est attribuée à la fois
+    par `scripts/import_etablissements_parquet.py` et par
+    `migrations/019_etablissement_primaire.sql` ; les natures de critère
+    qu'elle satisfait (`models.NaturesPrimaire`) sont utilisées par
+    `critereMatch` (`internal/store/search.go`), et sa couleur est dans
+    `NATURE_GROUPS` (`web/app.js`).
+- **Piège frontend** : `web/app.js` est un script classique exécuté de haut en
+  bas ; un appel de niveau supérieur ne doit pas utiliser une variable
+  `let`/`const` déclarée plus bas (erreur « Cannot access … before
+  initialization » qui interrompt tout le script).
 - **Secrets** : ne jamais committer `.env` ni de clé (Mollie, ORS, OIDC…) ;
   `sample.env` ne contient que des valeurs d'exemple.
 
@@ -135,7 +154,7 @@ de bug sans test n'est pas terminée.
   externe passe par une interface ou un serveur `httptest`. Seuls les tests
   `internal/store` utilisent une base, et sont ignorés sans `DV_TEST_DSN`.
 - **Couverture** : ne pas la faire baisser. Repères actuels (avec
-  `DV_TEST_DSN`) : ~86 % au total, ≥ 80 % pour chaque paquet de `internal/`.
+  `DV_TEST_DSN`) : ~87 % au total, ≥ 80 % pour chaque paquet de `internal/`.
   Vérifier avec `go tool cover -func` que le code ajouté est couvert.
 - Les tests suivent les conventions du dépôt : commentaires en français,
   messages d'échec explicites (`got … want …`), helpers marqués `t.Helper()`.

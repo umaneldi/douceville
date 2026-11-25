@@ -5,6 +5,7 @@ package models
 
 import (
 	"encoding/json"
+	"math"
 	"time"
 )
 
@@ -161,21 +162,22 @@ type Etablissement struct {
 	Ouverture   *time.Time      `json:"ouverture"`
 	Nature      string          `json:"nature"`
 	Resultats   []Resultat      `json:"resultats"`
-	// Niveau est le plus petit niveau de temps (en secondes) de la zone de
-	// recherche contenant l'établissement (null hors recherche par zone).
-	Niveau *float64 `json:"niveau,omitempty"`
+	// Taux est le taux de réussite aux examens en % (Σadmis / Σprésents, vue
+	// etablissement_taux) ; null sans résultats ou hors recherche.
+	Taux *float64 `json:"taux,omitempty"`
 }
 
 // Isochrone décrit une zone d'accessibilité calculée par OpenRouteService.
 // geometry est l'anneau du polygone du temps maximal (dist), chaque point
 // étant [lon, lat] ; levels contient les isochrones emboîtées (par temps
-// croissant, la dernière étant celle de dist).
+// croissant, la dernière étant celle de dist), absentes pour une isochrone de
+// recherche (un seul temps).
 type Isochrone struct {
 	LonLat   [2]float64   `json:"lonlat"`
 	Dist     float64      `json:"dist"`
 	Transp   string       `json:"transp"`
 	Geometry [][2]float64 `json:"geometry"`
-	Levels   []IsoLevel   `json:"levels"`
+	Levels   []IsoLevel   `json:"levels,omitempty"`
 }
 
 // IsoLevel est une isochrone emboîtée : temps de trajet (secondes) et anneau.
@@ -184,36 +186,160 @@ type IsoLevel struct {
 	Geometry [][2]float64 `json:"geometry"`
 }
 
-// ZoneLevel est un niveau de la zone de recherche : intersection des
-// isochrones de tous les points de départ pour un temps de trajet (secondes),
-// en GeoJSON.
-type ZoneLevel struct {
-	Dist     float64         `json:"dist"`
-	Geometry json.RawMessage `json:"geometry"`
-}
+// Natures sont les natures d'établissement acceptées par les critères de
+// recherche (valeurs de etablissement.nature).
+var Natures = []string{"Maternelle", "Elementaire", "Collège", "Lycée"}
 
-// QueryParameters est le corps de POST /etablissements.
-// year et stat_min sont acceptés mais ignorés (parité avec le Python).
-type QueryParameters struct {
-	Year    *int     `json:"year"`
-	Nature  []string `json:"nature"`
+// NaturePrimaire est la nature des écoles primaires (maternelle et
+// élémentaire réunies) : elle n'est pas un critère de recherche, mais un
+// établissement de cette nature satisfait les critères des natures de
+// NaturesPrimaire.
+const NaturePrimaire = "Primaire"
+
+// NaturesPrimaire sont les natures de critère que satisfait une école
+// primaire.
+var NaturesPrimaire = []string{"Maternelle", "Elementaire"}
+
+// Secteurs sont les secteurs d'établissement acceptés par les critères.
+var Secteurs = []string{"public", "privé", "hors contrat"}
+
+// Transports sont les profils OpenRouteService acceptés.
+var Transports = []string{"driving-car", "cycling-regular", "foot-walking"}
+
+// CritereNature décrit, pour une nature d'établissement, les établissements
+// retenus et leur isochrone : secteurs (vide : tous), plage de taux de
+// réussite en % (les établissements sans résultats ne sont pas filtrés),
+// temps de trajet Dist (secondes) et mode de transport Transp.
+type CritereNature struct {
+	Nature  string   `json:"nature"`
 	Secteur []string `json:"secteur"`
-	StatMin *int     `json:"stat_min"`
-	Adresse string   `json:"adresse"`
+	TauxMin float64  `json:"taux_min"`
+	TauxMax float64  `json:"taux_max"`
 	Dist    float64  `json:"dist"`
 	Transp  string   `json:"transp"`
-	// Origines sont les points de départ de la recherche : la zone est
-	// l'intersection de leurs isochrones. Si vide, Adresse/Dist/Transp
-	// forment l'unique point de départ.
-	Origines []Origine `json:"origines"`
 }
 
-// Origine est un point de départ : une adresse, un temps de trajet (en
-// secondes) et un mode de transport.
-type Origine struct {
-	Adresse string  `json:"adresse"`
-	Dist    float64 `json:"dist"`
-	Transp  string  `json:"transp"`
+// FiltresZone restreignent la zone de recherche aux quartiers IRIS dont le
+// prix au m² (médiane de l'IRIS, à défaut de la commune) est dans
+// [PrixM2Min, PrixM2Max] et dont la commune a un score de sécurité >=
+// SecuriteMin et un taux de fiscalité (TFB + TEOM) <= FiscaliteMax. Un champ
+// nul ne filtre pas ; une valeur inconnue exclut le quartier quand le filtre
+// correspondant est actif.
+type FiltresZone struct {
+	PrixM2Min    *float64 `json:"prix_m2_min"`
+	PrixM2Max    *float64 `json:"prix_m2_max"`
+	SecuriteMin  *float64 `json:"securite_min"`
+	FiscaliteMax *float64 `json:"fiscalite_max"`
+}
+
+// Actif indique si au moins un filtre est renseigné.
+func (f FiltresZone) Actif() bool {
+	return f.PrixM2Min != nil || f.PrixM2Max != nil || f.SecuriteMin != nil || f.FiscaliteMax != nil
+}
+
+// SearchRequest est le corps de POST /etablissements : les établissements
+// sources sont cherchés dans un rayon RayonKm autour de l'adresse Centre,
+// selon un critère par nature ; la zone est l'intersection, entre critères,
+// de l'union des isochrones des sources de chaque critère, restreinte par les
+// filtres.
+type SearchRequest struct {
+	Centre   string          `json:"centre"`
+	RayonKm  float64         `json:"rayon_km"`
+	Criteres []CritereNature `json:"criteres"`
+	FiltresZone
+}
+
+// ProximiteRequest est le corps de POST /quartiers/{iris}/proximite.
+type ProximiteRequest struct {
+	Criteres []CritereNature `json:"criteres"`
+}
+
+// Centre est le centre géocodé de la recherche et son rayon.
+type Centre struct {
+	Lon     float64 `json:"lon"`
+	Lat     float64 `json:"lat"`
+	RayonKm float64 `json:"rayon_km"`
+}
+
+// Source est un établissement source de la recherche, avec les paramètres de
+// son isochrone (ceux du critère de sa nature) et son anneau [lon, lat]
+// (vide tant qu'elle n'est pas calculée).
+type Source struct {
+	Etablissement
+	// Critere est la nature du critère pour lequel la source a été retenue ;
+	// elle diffère de Nature pour une école primaire (NaturePrimaire).
+	Critere   string       `json:"critere"`
+	Dist      float64      `json:"dist"`
+	Transp    string       `json:"transp"`
+	Isochrone [][2]float64 `json:"isochrone"`
+}
+
+// LonLat renvoie la position [lon, lat] de la source ; ok=false si elle est
+// absente ou n'est pas un Point GeoJSON.
+func (s Source) LonLat() (lonlat [2]float64, ok bool) {
+	var p struct {
+		Type        string     `json:"type"`
+		Coordinates [2]float64 `json:"coordinates"`
+	}
+	if len(s.Position) == 0 || json.Unmarshal(s.Position, &p) != nil || p.Type != "Point" {
+		return [2]float64{}, false
+	}
+	return p.Coordinates, true
+}
+
+// IsochroneKey identifie une isochrone en cache : position arrondie au
+// 1e-5 degré, temps (secondes) et mode de transport.
+type IsochroneKey struct {
+	LonE5  int
+	LatE5  int
+	Dist   int
+	Transp string
+}
+
+// NewIsochroneKey construit la clé de cache d'une isochrone.
+func NewIsochroneKey(lonlat [2]float64, dist float64, transp string) IsochroneKey {
+	return IsochroneKey{
+		LonE5:  int(math.Round(lonlat[0] * 1e5)),
+		LatE5:  int(math.Round(lonlat[1] * 1e5)),
+		Dist:   int(math.Round(dist)),
+		Transp: transp,
+	}
+}
+
+// Proche est l'établissement le plus proche d'un quartier pour une nature
+// (critère de recherche) ; DistanceM est la distance à vol d'oiseau en
+// mètres, et les autres champs sont nuls si aucun établissement ne correspond.
+type Proche struct {
+	Nature    string   `json:"nature"`
+	DistanceM *float64 `json:"distance_m"`
+	UAI       *string  `json:"uai"`
+	Nom       *string  `json:"nom"`
+	Commune   *string  `json:"commune"`
+	Secteur   *string  `json:"secteur"`
+	Taux      *float64 `json:"taux"`
+}
+
+// SecuriteCommune est le score de sécurité d'une commune (dernière année de
+// securite_score).
+type SecuriteCommune struct {
+	Annee         int `json:"annee"`
+	Score         int `json:"score"`
+	NbIndicateurs int `json:"nb_indicateurs"`
+}
+
+// QuartierProximite est la fiche d'un quartier IRIS : prix au m² (IRIS et
+// commune), sécurité et fiscalité de la commune, et établissement le plus
+// proche par critère (distance depuis un point intérieur du quartier).
+type QuartierProximite struct {
+	Iris        string           `json:"iris"`
+	Nom         string           `json:"nom"`
+	CodeCommune string           `json:"code_commune"`
+	Commune     string           `json:"commune"`
+	Prix        *PrixM2          `json:"prix"`
+	PrixCommune *PrixM2          `json:"prix_commune"`
+	Securite    *SecuriteCommune `json:"securite"`
+	Fiscalite   *Fiscalite       `json:"fiscalite"`
+	Proches     []Proche         `json:"proches"`
 }
 
 // CommuneSecurite est une commune touchée par l'isochrone, avec son score de
@@ -241,22 +367,27 @@ type Fiscalite struct {
 
 // ListeEtablissementsAvecIsochrone est la réponse de POST /etablissements.
 type ListeEtablissementsAvecIsochrone struct {
-	Etablissements []Etablissement `json:"etablissements"`
-	// Isochrone est l'isochrone du premier point de départ (compatibilité).
-	Isochrone Isochrone `json:"isochrone"`
-	// Isochrones contient l'isochrone de chaque point de départ, dans l'ordre.
-	Isochrones []Isochrone `json:"isochrones"`
-	// Zone est la géométrie GeoJSON de la zone de recherche (intersection des
-	// isochrones de temps maximal), null si elle est vide.
-	Zone       json.RawMessage   `json:"zone"`
-	Communes   []CommuneSecurite `json:"communes"`
-	Immobilier ImmobilierZone    `json:"immobilier"`
+	// Centre est le centre géocodé de la recherche et son rayon.
+	Centre Centre `json:"centre"`
+	// Sources sont les établissements retenus par les critères, avec leur
+	// isochrone ; la zone est l'intersection, entre natures, de l'union des
+	// isochrones de chaque nature.
+	Sources []Source `json:"sources"`
+	// CriteresVides sont les natures dont le critère ne retient aucun
+	// établissement dans le rayon (la zone est alors vide).
+	CriteresVides []string `json:"criteres_vides"`
+	// ZoneBrute est l'intersection des unions d'isochrones par nature, avant
+	// les filtres de zone (GeoJSON), null si elle est vide.
+	ZoneBrute json.RawMessage `json:"zone_brute"`
+	// Zone est la zone de recherche (ZoneBrute restreinte par les filtres),
+	// null si elle est vide.
+	Zone           json.RawMessage   `json:"zone"`
+	Etablissements []Etablissement   `json:"etablissements"`
+	Communes       []CommuneSecurite `json:"communes"`
+	Immobilier     ImmobilierZone    `json:"immobilier"`
 	// LogementsSociaux sont les positions (bâtiments) de logements sociaux
-	// RPLS contenues dans l'isochrone.
+	// RPLS contenues dans la zone.
 	LogementsSociaux []LogementSocialPosition `json:"logements_sociaux"`
-	// ZoneLevels sont les niveaux emboîtés de la zone, par temps croissant ;
-	// le dernier est la zone elle-même.
-	ZoneLevels []ZoneLevel `json:"zone_levels"`
 }
 
 // LogementSocialGroupe regroupe les logements sociaux identiques (mêmes
@@ -277,9 +408,6 @@ type LogementSocialPosition struct {
 	Lat         float64                `json:"lat"`
 	NbLogements int                    `json:"nb_logements"`
 	Logements   []LogementSocialGroupe `json:"logements"`
-	// Niveau est le plus petit niveau de temps (secondes) de la zone contenant
-	// la position.
-	Niveau *float64 `json:"niveau,omitempty"`
 }
 
 // PrixM2 est le prix au m² médian (valeur_fonciere / surface_reelle_bati) des

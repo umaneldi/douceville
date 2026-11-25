@@ -8,11 +8,12 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **quinze tables physiques** et une **vue matérialisée** (`securite_score`), toutes créées par les migrations Go :
+La base contient **seize tables physiques**, une **vue matérialisée** (`securite_score`) et une **vue** (`etablissement_taux`), toutes créées par les migrations Go :
 
 - **Données géographiques et scolaires** (créées vides, chargées par les scripts `scripts/import_*.py`, enchaînés par `import.sh`) : `commune` (`import_communes_csv.py`, contours par `import_contours_communes.py`), `quartier` (IRIS, `import_contours_iris.py`), `etablissement` (`import_etablissements_parquet.py`), `resultat` (`import_resultats_parquet.py`), `securite` (`import_securite_parquet.py`), `fiscalite` (`import_fiscalite_parquet.py`), `immobilier` (ventes DVF, `import_immobilier_dvf.py`) et `logement_social` (RPLS, `import_logement_social.py`).
 - **Comptes et authentification** (gérées par le backend) : `utilisateur`, `email_verification`, `revoked_token` et `oidc_identity`.
 - **Facturation** (gérées par le backend) : `billing_settings`, `credit_transaction` et `payment`.
+- **Cache** (géré par le backend) : `isochrone_cache` (isochrones OpenRouteService des recherches).
 
 ## Diagramme relationnel
 
@@ -111,7 +112,7 @@ Relation : quartier (1) ──< (N) logement_social
 | `academie`    | `VARCHAR`             | NULL                            | Académie de rattachement. |
 | `secteur`     | `VARCHAR`             | NOT NULL                        | Secteur (`public` / `privé` (sous contrat) / `hors contrat`). |
 | `ouverture`   | `TIMESTAMP`           | NULL                            | Date d'ouverture. |
-| `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement (ex. `lycée`, `collège`). |
+| `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement : `Maternelle`, `Elementaire`, `Primaire`, `Collège` ou `Lycée`. `Primaire` (nom contenant « primaire », sans distinction de casse : à l'import et par `migrations/019_etablissement_primaire.sql`, qui reclasse les établissements déjà importés) satisfait les critères de recherche `Maternelle` et `Elementaire` (`critereMatch` dans `internal/store/search.go`). |
 
 **Relations** : un établissement a plusieurs `resultat` (FK `resultat.etablissement_uai` → `etablissement.UAI`, suppression en cascade) et appartient à une `commune` (FK `etablissement.code_commune` → `commune.code_commune`).
 
@@ -133,6 +134,17 @@ Résultat d'un examen pour un établissement et une année donnés. Créée par 
 | `etablissement_uai` | `VARCHAR`  | **FK** → `etablissement.UAI`, ON DELETE CASCADE | Établissement rattaché (par son code UAI). |
 
 **Contrainte d'unicité** : `UNIQUE (diplome, annee, etablissement_uai)` — un seul résultat par couple (diplôme, année) et par établissement.
+
+## Vue `etablissement_taux`
+
+Taux de réussite aux examens de chaque établissement, en % (`internal/store/migrations/017_etablissement_taux.sql`) : `100 × Σadmis / Σpresents` sur tous ses résultats dont `presents > 0` et `admis` est renseigné. Un établissement sans tel résultat (maternelles, élémentaires…) est absent de la vue : son taux est inconnu et il n'est jamais exclu par un filtre de taux. Même définition que `successRate()` dans `web/app.js` (à garder synchronisées).
+
+| Colonne | Type SQL           | Description |
+|---------|--------------------|-------------|
+| `uai`   | `TEXT`             | Code UAI de l'établissement (`resultat.etablissement_uai`). |
+| `taux`  | `DOUBLE PRECISION` | Taux de réussite, 0–100. |
+
+Elle sert au choix des établissements sources de la recherche (`SelectSourceEtablissements` : 10 meilleurs taux par nature dans le rayon), au filtrage des établissements de la zone (`FindEtablissementsInZone`) et à la fiche d'un quartier (`QuartierProximite`).
 
 ## Table `commune`
 
@@ -175,7 +187,7 @@ Filtres à l'import : `nature_mutation = 'Vente'`, `surface_reelle_bati > 0`, `v
 
 **Index** : `immobilier_iris_date_idx (iris, date_mutation)` — sert aussi d'index pour la FK. Pas de clé primaire (la source n'en fournit pas une fois `id_mutation` écarté).
 
-L'API (`FindImmobilierInZone`) calcule le prix au m² médian (`valeur_fonciere / surface_reelle_bati`) par IRIS et par commune sur toutes les ventes de la table.
+L'API (`FindImmobilierInZone`, `FilterZone`, `QuartierProximite`) calcule le prix au m² médian (`valeur_fonciere / surface_reelle_bati`) par IRIS et par commune sur toutes les ventes de la table. Le filtre de prix de la recherche (`FilterZone`) utilise le prix de l'IRIS, ou celui de sa commune si l'IRIS n'a aucune vente.
 
 ## Table `logement_social`
 
@@ -279,7 +291,7 @@ Tarifs de facturation, ligne unique (`id = TRUE`), modifiables par un administra
 
 | Colonne                  | Type SQL      | Description |
 |--------------------------|---------------|-------------|
-| `price_per_origin_cents` | `BIGINT`      | Prix par point de départ de `POST /etablissements` (défaut 5). |
+| `price_per_origin_cents` | `BIGINT`      | Prix par isochrone **calculée** lors d'un `POST /etablissements` (défaut 5) ; les isochrones lues dans `isochrone_cache` sont gratuites. Le nom de la colonne date de la recherche par points de départ. |
 | `isochrone_price_cents`  | `BIGINT`      | Prix de `GET /isochrone` (défaut 2). |
 | `welcome_credit_cents`   | `BIGINT`      | Crédit offert à la création d'un compte (défaut 100). |
 | `min_topup_cents`        | `BIGINT`      | Rechargement minimum (défaut 500, au moins 100). |
@@ -314,6 +326,21 @@ Paiements de rechargement auprès de Mollie (`migrations/016_billing.sql`). Le p
 | `status`       | `TEXT`        | Statut Mollie (`open`, `pending`, `paid`, `failed`, `canceled`, `expired`…). |
 | `mode`         | `TEXT`        | `test` ou `live`. |
 | `created_at`, `paid_at` | `TIMESTAMPTZ` | Création et paiement. |
+
+## Table `isochrone_cache`
+
+Cache des isochrones OpenRouteService des recherches (`migrations/018_isochrone_cache.sql`), une par position, temps et mode de transport. Une isochrone créée il y a plus de `ISOCHRONE_CACHE_DAYS` jours (défaut 30) est ignorée puis recalculée ; à chaque écriture, les entrées expirées sont purgées et, au-delà de `ISOCHRONE_CACHE_MAX` lignes (défaut 20 000), les moins récemment utilisées sont supprimées.
+
+| Colonne        | Type SQL      | Description |
+|----------------|---------------|-------------|
+| `lon_e5`, `lat_e5` | `INTEGER` | Position de l'établissement source, en 1e-5 degré (arrondie). |
+| `dist`         | `INTEGER`     | Temps de trajet (secondes). |
+| `transp`       | `TEXT`        | Profil OpenRouteService (`driving-car`, `cycling-regular`, `foot-walking`). |
+| `ring`         | `JSONB`       | Anneau du polygone : tableau de `[lon, lat]`. |
+| `created_at`   | `TIMESTAMPTZ` | Calcul de l'isochrone (index, pour la purge). |
+| `last_used_at` | `TIMESTAMPTZ` | Dernière lecture (index, pour l'éviction LRU). |
+
+**Clé primaire** : `(lon_e5, lat_e5, dist, transp)`.
 
 ## Table `email_verification`
 
@@ -357,14 +384,16 @@ Structures Go d'échange API (`internal/models/models.go`), sans table associée
 - `DvUser` / `UserRecord` — profil public / interne (hash du mot de passe, jamais sérialisé).
 - `Credentials`, `AuthResponse` — corps des requêtes `/api/auth/*` et réponse `{token, user}`.
 - `Etablissement`, `Resultat` — projections lues depuis la base.
-- `Isochrone` — zone d'accessibilité (géométrie `POLYGON`) calculée à la volée, non stockée.
-- `CommuneSecurite` — commune touchée par l'isochrone : code, nom, `score` / `annee` / `nb_indicateurs` (dernière année de `securite_score`, `null` sans données) et `contour` GeoJSON ; renvoyée dans le champ `communes` de `POST /api/etablissements`.
-- `LogementSocialPosition`, `LogementSocialGroupe` — logements sociaux de `logement_social` contenus dans l'isochrone, regroupés par position (bâtiment) puis par caractéristiques identiques ; renvoyés dans le champ `logements_sociaux` de `POST /api/etablissements`.
-- `ListeEtablissementsAvecIsochrone`, `QueryParameters` — réponse/requête de `POST /api/etablissements`.
+- `Isochrone` — zone d'accessibilité (géométrie `POLYGON`) calculée par OpenRouteService ; les isochrones des recherches sont mises en cache dans `isochrone_cache`.
+- `CommuneSecurite` — commune touchée par la zone : code, nom, `score` / `annee` / `nb_indicateurs` (dernière année de `securite_score`, `null` sans données) et `contour` GeoJSON ; renvoyée dans le champ `communes` de `POST /api/etablissements`.
+- `LogementSocialPosition`, `LogementSocialGroupe` — logements sociaux de `logement_social` contenus dans la zone, regroupés par position (bâtiment) puis par caractéristiques identiques ; renvoyés dans le champ `logements_sociaux` de `POST /api/etablissements`.
+- `ListeEtablissementsAvecIsochrone`, `SearchRequest` (`CritereNature`, `FiltresZone`), `Source`, `Centre` — réponse/requête de `POST /api/etablissements`.
+- `QuartierProximite`, `Proche`, `ProximiteRequest` — fiche d'un quartier IRIS (`POST /api/quartiers/{iris}/proximite`).
+- `IsochroneKey` — clé de `isochrone_cache`.
 
 ## Références dans le code
 
 - Migrations SQL : `internal/store/migrations/*.sql` (runner : `internal/store/migrate.go`).
-- Accès base : `internal/store/queries.go`, `internal/store/billing.go` ; modèles : `internal/models/models.go`, `internal/models/billing.go`.
+- Accès base : `internal/store/queries.go`, `internal/store/search.go`, `internal/store/billing.go` ; modèles : `internal/models/models.go`, `internal/models/billing.go`.
 - Auth : `internal/auth/` (JWT `jwt.go`, mots de passe `password.go`, middleware `middleware.go`).
 - Infrastructure PostGIS : `docker-compose.yml` (service `geotestdb`).

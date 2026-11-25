@@ -13,7 +13,6 @@ let currentUser = null; // profil de l'utilisateur connecté (GET /user)
 let pendingEmail = null; // e-mail en attente de vérification (pour le renvoi du lien)
 let map, isoLayer, markerLayer, communeLayer, immoLayer, fiscLayer, logementLayer, logementRenderer;
 let lastData = null; // dernière réponse de /etablissements (re-filtrage côté client)
-let levelLegend = null; // légende des niveaux de temps de la zone
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -172,13 +171,14 @@ function startApp(user) {
   currentUser = user || null;
   renderUser();
 
+  if (!$("#criteres").children.length) buildCriteres();
   if (!map) initMap();
   // Leaflet a besoin de recalculer sa taille une fois le conteneur visible.
   setTimeout(() => map.invalidateSize(), 0);
   loadBilling();
 
   // Premier démarrage : état de la page repris de l'URL (favori, lien partagé)
-  // et recherche relancée s'il y a au moins une adresse de départ.
+  // et recherche relancée s'il y a un centre et au moins une nature cochée.
   if (!urlReady) {
     const run = applyQuery(new URLSearchParams(location.search));
     urlReady = true;
@@ -188,11 +188,12 @@ function startApp(user) {
 }
 
 // ---------------------------------------------------------------------------
-// État de la page dans l'URL : points de départ, filtres, couches et onglet,
-// pour qu'un favori ou un lien partagé restaure la page (et relance la
-// recherche). Ex. : /?depart=15,voiture,12 rue X, Paris&depart=30,velo,Gare
-// &nature=Collège&secteur=public&taux=20-80&couche=prix&logements=1
-// &onglet=list
+// État de la page dans l'URL : centre, rayon, critères par nature, filtres de
+// zone, couches et onglet, pour qu'un favori ou un lien partagé restaure la
+// page (et relance la recherche). Ex. :
+// /?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100
+// &critere=Collège,10,pied,public,0-100&prix=0-4000&securite=50&fiscalite=45
+// &couche=prix&logements=1&onglet=list
 // ---------------------------------------------------------------------------
 const TRANSP_CODES = { "driving-car": "voiture", "cycling-regular": "velo", "foot-walking": "pied" };
 const TRANSP_BY_CODE = Object.fromEntries(Object.entries(TRANSP_CODES).map(([k, v]) => [v, k]));
@@ -201,13 +202,19 @@ let urlReady = false; // false tant que l'état de l'URL n'a pas été appliqué
 
 function pageQuery() {
   const q = new URLSearchParams();
-  for (const o of collectOrigins()) {
-    q.append("depart", `${o.dist / 60},${TRANSP_CODES[o.transp] || o.transp},${o.adresse}`);
+  const centre = $("#centre").value.trim();
+  if (centre) q.set("centre", centre);
+  q.set("rayon", $("#rayon").value);
+  for (const c of collectCriteres()) {
+    q.append(
+      "critere",
+      [c.nature, c.dist / 60, TRANSP_CODES[c.transp] || c.transp, c.secteur.join("+"), `${c.taux_min}-${c.taux_max}`].join(","),
+    );
   }
-  for (const v of checkedValues("nature")) q.append("nature", v);
-  for (const v of checkedValues("secteur")) q.append("secteur", v);
-  const { min, max } = rateBounds();
-  if (min > 0 || max < 100) q.set("taux", `${min}-${max}`);
+  const f = collectFiltres();
+  if (f.prix_m2_min != null || f.prix_m2_max != null) q.set("prix", `${f.prix_m2_min ?? ""}-${f.prix_m2_max ?? ""}`);
+  if (f.securite_min != null) q.set("securite", f.securite_min);
+  if (f.fiscalite_max != null) q.set("fiscalite", f.fiscalite_max);
   if (map) {
     const couche = map.hasLayer(communeLayer) ? "securite"
       : map.hasLayer(immoLayer) ? "prix"
@@ -224,50 +231,46 @@ function pageQuery() {
 // Reflète l'état courant dans l'URL (sans entrée d'historique).
 function syncUrl() {
   if (!urlReady) return;
-  // Virgules laissées en clair (valides dans une requête) : URL plus lisible.
-  const qs = pageQuery().toString().replace(/%2C/gi, ",");
+  // Virgules et « + » laissés en clair (valides dans une requête) : URL plus lisible.
+  const qs = pageQuery().toString().replace(/%2C/gi, ",").replace(/%2B/gi, "+");
   history.replaceState(null, "", qs ? `/?${qs}` : "/");
 }
 
 // Applique l'état décrit par params ; renvoie true si une recherche peut être
-// lancée (au moins une adresse de départ).
+// lancée (un centre et au moins un critère).
 function applyQuery(params) {
-  // Points de départ : « minutes,transport,adresse » (l'adresse peut contenir des virgules).
-  const departs = params.getAll("depart").slice(0, MAX_ORIGINS).map((d) => {
-    const [min, transp, ...addr] = d.split(",");
-    return { min: parseInt(min, 10), transp: TRANSP_BY_CODE[transp] || transp, adresse: addr.join(",").trim() };
-  });
-  if (departs.length) {
-    document.querySelectorAll("#origins .origin-row").forEach((row) => row.remove());
-    for (const d of departs) {
-      addOrigin({ focus: false });
-      const row = $("#origins .origin-row:last-child");
-      row.querySelector(".origin-address input").value = d.adresse;
-      const range = row.querySelector('input[type="range"]');
-      if (Number.isFinite(d.min)) {
-        range.value = Math.min(60, Math.max(5, Math.round(d.min / 5) * 5));
-        row.querySelector(".origin-time-val").textContent = range.value;
-      }
-      const select = row.querySelector("select");
-      if ([...select.options].some((o) => o.value === d.transp)) select.value = d.transp;
+  if (params.has("centre")) $("#centre").value = params.get("centre");
+  const rayon = parseInt(params.get("rayon"), 10);
+  if (Number.isFinite(rayon)) {
+    $("#rayon").value = Math.min(50, Math.max(1, rayon));
+    $("#rayon-val").textContent = $("#rayon").value;
+  }
+
+  // Critères : « nature,minutes,transport,secteurs (+),tmin-tmax ».
+  const criteres = params.getAll("critere");
+  if (criteres.length) {
+    for (const row of document.querySelectorAll("#criteres .critere-row")) setCritere(row, null);
+    for (const c of criteres) {
+      const [nature, min, transp, secteurs, taux] = c.split(",");
+      const row = document.querySelector(`#criteres .critere-row[data-nature="${CSS.escape(nature || "")}"]`);
+      if (!row) continue;
+      const t = /^(\d+)-(\d+)$/.exec(taux || "");
+      setCritere(row, {
+        min: parseInt(min, 10),
+        transp: TRANSP_BY_CODE[transp] || transp,
+        secteur: secteurs ? secteurs.split(/[+ ]/).filter(Boolean) : null,
+        taux: t ? [parseInt(t[1], 10), parseInt(t[2], 10)] : null,
+      });
     }
-    refreshOrigins();
   }
 
-  for (const name of ["nature", "secteur"]) {
-    if (!params.has(name)) continue;
-    const values = params.getAll(name);
-    document.querySelectorAll(`input[name="${name}"]`).forEach((cb) => (cb.checked = values.includes(cb.value)));
+  const prix = /^(\d*)-(\d*)$/.exec(params.get("prix") || "");
+  if (prix) {
+    $("#prix-min").value = prix[1];
+    $("#prix-max").value = prix[2];
   }
-
-  const taux = /^(\d+)-(\d+)$/.exec(params.get("taux") || "");
-  if (taux) {
-    setRate("min", 0);
-    setRate("max", 100);
-    setRate("min", parseInt(taux[1], 10));
-    setRate("max", parseInt(taux[2], 10));
-    syncRateUI();
-  }
+  if (params.has("securite")) $("#securite-min").value = params.get("securite");
+  if (params.has("fiscalite")) $("#fiscalite-max").value = params.get("fiscalite");
 
   const couche = params.get("couche");
   const choros = { securite: communeLayer, prix: immoLayer, fiscalite: fiscLayer, aucune: null };
@@ -280,7 +283,8 @@ function applyQuery(params) {
   const tab = document.querySelector(`.tabs .tab[data-tab="${CSS.escape(params.get("onglet") || "")}"]`);
   if (tab) tab.click();
 
-  return departs.some((d) => d.adresse);
+  updateSearchCost();
+  return !!$("#centre").value.trim() && collectCriteres().length > 0;
 }
 
 // Avant une redirection qui revient sur « / » (SSO, paiement) : l'état est
@@ -527,7 +531,8 @@ function renderBilling() {
       ? "illimité (administrateur)"
       : fmtMoney(billing.balance_cents);
     $("#billing-prices").textContent =
-      `Tarifs : ${fmtMoney(billing.price_per_origin_cents)} par point de départ d'une recherche` +
+      `Tarifs : ${fmtMoney(billing.price_per_origin_cents)} par isochrone calculée lors d'une recherche ` +
+      `(isochrones en cache gratuites)` +
       (billing.isochrone_price_cents ? `, ${fmtMoney(billing.isochrone_price_cents)} par isochrone.` : ".");
     const amount = $("#topup-amount");
     amount.min = (billing.min_topup_cents / 100).toFixed(2);
@@ -577,12 +582,14 @@ function updateSearchCost() {
     el.classList.remove("err");
     return;
   }
-  const n = document.querySelectorAll("#origins .origin-row").length || 1;
+  // Au plus SOURCES_PAR_NATURE isochrones par nature ; celles déjà en cache
+  // (recherche récente sur les mêmes établissements) sont gratuites.
+  const n = SOURCES_PAR_NATURE * collectCriteres().length;
   const cost = n * billing.price_per_origin_cents;
   el.textContent =
-    `Coût : ${n > 1 ? `${n} × ${fmtMoney(billing.price_per_origin_cents)} = ` : ""}${fmtMoney(cost)}` +
-    ` · solde ${fmtMoney(billing.balance_cents)}`;
-  el.classList.toggle("err", cost > billing.balance_cents);
+    `Coût : jusqu'à ${n} × ${fmtMoney(billing.price_per_origin_cents)} = ${fmtMoney(cost)}` +
+    ` (isochrones en cache gratuites) · solde ${fmtMoney(billing.balance_cents)}`;
+  el.classList.toggle("err", n > 0 && billing.price_per_origin_cents > billing.balance_cents);
 }
 
 // Ouvre les paramètres sur la section « Crédit », avec un message éventuel.
@@ -909,7 +916,6 @@ function initMap() {
   // Clic sur une choroplèthe : fiche détaillée du lieu.
   for (const l of [communeLayer, immoLayer, fiscLayer]) l.on("click", (e) => openPlaceCard(e.latlng));
   securityLegend().addTo(map);
-  levelLegend = levelLegendControl().addTo(map);
   immoLegend().addTo(map);
   fiscLegend().addTo(map);
   map.on("overlayadd overlayremove", (e) => {
@@ -1041,58 +1047,11 @@ function communeTooltip(p) {
 }
 
 // ---------------------------------------------------------------------------
-// Niveaux de temps de trajet de la zone de recherche
+// Isochrones et zone de recherche
 // ---------------------------------------------------------------------------
-const ZONE_COLOR = "#eab308"; // jaune : remplissage des niveaux
-const ZONE_STROKE = "#ca8a04"; // contour, plus foncé pour rester lisible
-const ZONE_RGB = "234,179,8"; // ZONE_COLOR en RGB (légende)
-const ZONE_ALPHA = 0.45; // opacité cumulée du niveau le plus intérieur
-
-// « ≤ N min » pour un niveau exprimé en secondes.
-function levelLabel(dist) {
-  return `≤ ${Math.round(dist / 60)} min`;
-}
-
-function levelLegendControl() {
-  const legend = L.control({ position: "bottomleft" });
-  legend.onAdd = () => {
-    const div = L.DomUtil.create("div", "map-legend level-legend");
-    div.hidden = true;
-    return div;
-  };
-  return legend;
-}
-
-// Met à jour la légende : le niveau i (par temps croissant) est recouvert par
-// les bandes de tous les niveaux >= i, d'où son opacité cumulée.
-function updateLevelLegend(levels, multi) {
-  if (!levelLegend) return;
-  const div = levelLegend.getContainer();
-  if (!levels || !levels.length) {
-    div.hidden = true;
-    div.innerHTML = "";
-    return;
-  }
-  const alpha = ZONE_ALPHA / levels.length;
-  const rows = levels
-    .map((lv, i) => {
-      const a = (alpha * (levels.length - i)).toFixed(3);
-      return `<li><span class="swatch" style="background:linear-gradient(rgba(${ZONE_RGB},${a}),rgba(${ZONE_RGB},${a})),#f1f5f9"></span>${levelLabel(lv.dist)}</li>`;
-    })
-    .join("");
-  div.innerHTML =
-    `<div class="legend-title">Temps de trajet${multi ? "<br/><small>depuis tous les départs</small>" : ""}</div>` +
-    `<ul>${rows}</ul>`;
-  div.hidden = false;
-}
-
-// Ligne de popup du niveau de temps d'un résultat.
-function levelPopupLine(niveau) {
-  if (niveau == null) return "";
-  const multi = lastData && (lastData.isochrones || []).length > 1;
-  return `<div class="popup-meta">Temps de trajet : <strong>${levelLabel(niveau)}</strong>` +
-    `${multi ? " depuis tous les départs" : ""}</div>`;
-}
+const ZONE_COLOR = "#eab308";
+const ZONE_STROKE = "#ca8a04";
+const ZONE_ALPHA = 0.25;
 
 function securityLegend() {
   const legend = L.control({ position: "bottomright" });
@@ -1141,6 +1100,9 @@ let immoData = null; // data.immobilier de la dernière recherche
 let immoCommunes = []; // data.communes (noms et contours des communes)
 let immoLevel = null; // "commune" | "iris" (niveau actuellement affiché)
 let immoScale = null; // { breaks, colors, min, max } de l'échelle courante
+// Filtre de prix au m² de la dernière recherche (null : borne absente). Les
+// quartiers IRIS hors de cet intervalle ne sont pas colorés.
+let immoFiltre = { min: null, max: null };
 
 const fmtPrix = (n) => `${n.toLocaleString("fr-FR")} €/m²`;
 
@@ -1164,9 +1126,21 @@ function immoLevelForZoom() {
   return map.getZoom() >= IRIS_MIN_ZOOM ? "iris" : "commune";
 }
 
-// Prix au m² médian d'une entité, ou null sans vente.
+// Prix au m² médian d'une entité, ou null sans vente ou hors filtre de prix
+// (exclue de l'échelle de couleurs).
 function prixFor(p) {
+  if (p.horsFiltre) return null;
   return p.prix ? p.prix.prix_m2 : null;
+}
+
+// Indique si le prix d'un quartier IRIS (à défaut, celui de sa commune, comme
+// côté serveur) ne respecte pas le filtre de prix ; un prix inconnu l'exclut
+// dès qu'une borne est renseignée.
+function horsFiltrePrix(prix) {
+  const { min, max } = immoFiltre;
+  if (min == null && max == null) return false;
+  if (prix == null) return true;
+  return (min != null && prix < min) || (max != null && prix > max);
 }
 
 // Quantiles (au plus ramp.length classes, bornes arrondies au multiple de
@@ -1239,8 +1213,13 @@ function immoColor(v) {
 }
 
 function immoStyle(feature) {
+  if (feature.properties.horsFiltre) {
+    // Quartier exclu par le filtre de prix : contour seul, aucune couleur.
+    return { color: "#a8a29e", weight: 0.6, opacity: 0.6, fill: true, fillOpacity: 0, dashArray: null };
+  }
   const v = prixFor(feature.properties);
   return {
+    fill: true,
     color: "#ffffff",
     weight: feature.properties.niveau === "iris" ? 0.6 : 1,
     opacity: 0.9,
@@ -1259,9 +1238,10 @@ function prixLine(p) {
 function immoTooltip(p) {
   const commune = p.niveau === "commune";
   const sub = commune ? "" : `<br><span class="muted">Quartier IRIS — ${esc(p.commune || "")}</span>`;
+  const hors = p.horsFiltre ? `<br><span class="muted">Hors du filtre de prix</span>` : "";
   return (
     `<strong>${esc(p.nom)}</strong>${sub}` +
-    `<br>${prixLine(p.prix)}`
+    `<br>${prixLine(p.prix)}${hors}`
   );
 }
 
@@ -1287,7 +1267,11 @@ function updateImmoLegend() {
   const y1 = immoData.date_max ? immoData.date_max.slice(0, 4) : "";
   const periode = y0 ? ` (${y0 === y1 ? y0 : `${y0}–${y1}`})` : "";
   div.querySelector(".legend-title").textContent = `Prix au m²${periode}`;
-  div.querySelector("ul").innerHTML = scaleLegendRows(immoScale, fmtPrix, (n) => n.toLocaleString("fr-FR"));
+  const hors =
+    immoLevel === "iris" && immoLayer.getLayers().some((l) => l.feature.properties.horsFiltre)
+      ? `<li><span class="swatch excluded"></span>Hors filtre de prix</li>`
+      : "";
+  div.querySelector("ul").innerHTML = scaleLegendRows(immoScale, fmtPrix, (n) => n.toLocaleString("fr-FR")) + hors;
   div.querySelector(".legend-hint").textContent =
     immoLevel === "iris"
       ? "Niveau : quartiers IRIS — dézoomez pour la médiane par commune"
@@ -1310,6 +1294,9 @@ function buildImmobilier() {
     const noms = new Map(immoCommunes.map((c) => [c.code_commune, c.nom]));
     let features;
     if (immoLevel === "iris") {
+      const prixCommune = new Map(
+        (immoData.communes || []).map((c) => [c.code_commune, c.prix ? c.prix.prix_m2 : null]),
+      );
       features = (immoData.quartiers || [])
         .filter((q) => q.contour)
         .map((q) => ({
@@ -1320,6 +1307,7 @@ function buildImmobilier() {
             nom: q.nom,
             commune: noms.get(q.code_commune),
             prix: q.prix,
+            horsFiltre: horsFiltrePrix(q.prix ? q.prix.prix_m2 : prixCommune.get(q.code_commune)),
           },
         }));
     } else {
@@ -1446,9 +1434,11 @@ function renderFiscalite(communes) {
 
 // ---------------------------------------------------------------------------
 // Fiche d'un lieu : clic sur une choroplèthe → popup regroupant prix au m²,
-// sécurité, fiscalité et temps de trajet depuis chaque point de départ.
+// sécurité, fiscalité et, pour le quartier IRIS cliqué, la distance (à vol
+// d'oiseau) à l'établissement le plus proche de chaque nature recherchée.
 // ---------------------------------------------------------------------------
-let searchOrigins = []; // points de départ de la dernière recherche
+let lastCriteres = []; // critères de la dernière recherche
+let placeSeq = 0; // ignore les réponses de fiches obsolètes
 
 // Point (lon, lat) dans un anneau [[lon, lat], ...] (lancer de rayon).
 function pointInRing(lon, lat, ring) {
@@ -1474,23 +1464,47 @@ function pointInGeometry(lon, lat, geom) {
   return false;
 }
 
-// Plus petit temps de trajet (secondes) de l'isochrone iso contenant le point,
-// ou null s'il est hors de l'isochrone.
-function isoTimeAt(iso, lon, lat) {
-  const levels = iso.levels && iso.levels.length ? iso.levels : [{ dist: iso.dist, geometry: iso.geometry }];
-  let best = null;
-  for (const lv of levels) {
-    if (!Array.isArray(lv.geometry) || lv.geometry.length < 3) continue;
-    if (pointInRing(lon, lat, lv.geometry) && (best == null || lv.dist < best)) best = lv.dist;
-  }
-  return best;
-}
-
 function placeSection(title, body) {
   return `<div class="place-section"><div class="place-section-title">${title}</div>${body}</div>`;
 }
 
-function placeCardHtml(lon, lat) {
+// Distance lisible : « 850 m », « 1,3 km », « 24 km ».
+function fmtDistance(m) {
+  if (m < 1000) return `${Math.round(m / 10) * 10} m`;
+  const km = m / 1000;
+  return `${km.toLocaleString("fr-FR", { maximumFractionDigits: km < 10 ? 1 : 0 })} km`;
+}
+
+// Section « Établissements les plus proches » : contenu provisoire tant que
+// la réponse du serveur n'est pas arrivée.
+function prochesSection(proches) {
+  let body;
+  if (proches === undefined) {
+    body = `<span class="muted">Chargement…</span>`;
+  } else if (proches === null) {
+    body = `<span class="muted">Distances indisponibles.</span>`;
+  } else if (!proches.length) {
+    body = `<span class="muted">Aucune nature recherchée.</span>`;
+  } else {
+    body = `<ul class="place-times">${proches
+      .map((p) => {
+        const label = natureLabel(p.nature);
+        const val = p.distance_m == null
+          ? `<span class="muted">aucun établissement</span>`
+          : `<strong>${fmtDistance(p.distance_m)}</strong>`;
+        const detail = p.nom
+          ? `<div class="muted place-proche">${esc(p.nom)}${p.commune ? `, ${esc(p.commune)}` : ""}` +
+            `${p.taux != null ? ` — ${fmtTaux(p.taux)}` : ""}</div>`
+          : "";
+        return `<li><span class="place-dot" style="background:${natureGroup(p.nature).color}"></span>` +
+          `<span class="place-origin">${label}${detail}</span><span>${val}</span></li>`;
+      })
+      .join("")}</ul>`;
+  }
+  return placeSection(`Établissements les plus proches <span class="muted">(à vol d'oiseau)</span>`, body);
+}
+
+function placeCardHtml(lon, lat, quartier, proches) {
   const communes = lastData.communes || [];
   const commune = communes.find((c) => pointInGeometry(lon, lat, c.contour));
   const immo = immoData || {};
@@ -1505,7 +1519,6 @@ function placeCardHtml(lon, lat) {
     const pc = (immo.communes || []).find((c) => c.code_commune === commune.code_commune);
     prix += `<div>Commune — ${prixLine(pc && pc.prix)}</div>`;
   }
-  const quartier = (immo.quartiers || []).find((q) => pointInGeometry(lon, lat, q.contour));
   if (quartier) prix += `<div>Quartier ${esc(quartier.nom)} — ${prixLine(quartier.prix)}</div>`;
   html += placeSection(`Prix au m²${periode}`, prix || `<span class="muted">pas de données</span>`);
 
@@ -1530,88 +1543,141 @@ function placeCardHtml(lon, lat) {
     html += placeSection("Fiscalité locale", fisc);
   }
 
-  // Temps de trajet depuis chaque point de départ.
-  const isos = Array.isArray(lastData.isochrones) && lastData.isochrones.length
-    ? lastData.isochrones
-    : lastData.isochrone ? [lastData.isochrone] : [];
-  if (isos.length) {
-    const rows = isos
-      .map((iso, i) => {
-        const t = isoTimeAt(iso, lon, lat);
-        const o = searchOrigins[i];
-        const label = `Départ ${i + 1}${o && o.adresse ? ` <span class="muted">(${esc(o.adresse)})</span>` : ""}`;
-        const val = t == null
-          ? `<span class="muted">&gt; ${Math.round(iso.dist / 60)} min</span>`
-          : `<strong>${levelLabel(t)}</strong>`;
-        return `<li><span class="place-dot" style="background:${originColor(i)}"></span>` +
-          `<span class="place-origin">${label}</span><span>${val}</span></li>`;
-      })
-      .join("");
-    html += placeSection("Temps de trajet", `<ul class="place-times">${rows}</ul>`);
-  }
+  if (quartier) html += prochesSection(proches);
   return html;
 }
 
+// Ouvre la fiche du lieu cliqué ; pour un quartier IRIS, les distances aux
+// établissements sont demandées au serveur (non facturé) puis ajoutées.
 function openPlaceCard(latlng) {
   if (!lastData) return;
-  L.popup({ maxWidth: 340, className: "place-popup" })
+  const { lng: lon, lat } = latlng;
+  const quartier = ((immoData && immoData.quartiers) || []).find((q) => pointInGeometry(lon, lat, q.contour));
+  const popup = L.popup({ maxWidth: 340, className: "place-popup" })
     .setLatLng(latlng)
-    .setContent(placeCardHtml(latlng.lng, latlng.lat))
+    .setContent(placeCardHtml(lon, lat, quartier, undefined))
     .openOn(map);
+  if (!quartier) return;
+
+  const seq = ++placeSeq;
+  api(`/quartiers/${encodeURIComponent(quartier.iris)}/proximite`, {
+    method: "POST",
+    body: JSON.stringify({ criteres: lastCriteres }),
+  })
+    .then((fiche) => fiche.proches)
+    .catch(() => null)
+    .then((proches) => {
+      if (seq === placeSeq && popup.isOpen()) popup.setContent(placeCardHtml(lon, lat, quartier, proches));
+    });
 }
 
 // ---------------------------------------------------------------------------
-// Points de départ : la zone de recherche est l'intersection de leurs
-// isochrones. Le premier utilise l'adresse de la barre de recherche.
+// Critères par nature : pour chaque nature cochée, les meilleurs
+// établissements du rayon donnent chacun une isochrone (temps et mode propres
+// à la nature) ; la zone est l'intersection, entre natures, de l'union des
+// isochrones de chaque nature (près d'au moins un établissement de chacune).
 // ---------------------------------------------------------------------------
-const ORIGIN_COLORS = ["#a855f7", "#f97316", "#14b8a6", "#ec4899", "#84cc16", "#3b82f6"];
-const MAX_ORIGINS = 10; // même limite que le serveur
+const SOURCES_PAR_NATURE = 10; // même limite que le serveur
+const SECTEURS = ["public", "privé", "hors contrat"];
+// Natures proposées (valeurs de etablissement.nature) et réglages par défaut ;
+// taux : la nature a des résultats d'examens.
+const CRITERE_NATURES = [
+  { nature: "Maternelle", label: "Maternelle", taux: false, min: 10, transp: "foot-walking" },
+  { nature: "Elementaire", label: "Élémentaire", taux: false, min: 10, transp: "foot-walking" },
+  { nature: "Collège", label: "Collège", taux: true, min: 15, transp: "foot-walking" },
+  { nature: "Lycée", label: "Lycée", taux: true, min: 20, transp: "driving-car" },
+];
 
-function originColor(i) {
-  return ORIGIN_COLORS[i % ORIGIN_COLORS.length];
+function natureLabel(nature) {
+  const n = CRITERE_NATURES.find((c) => c.nature === nature);
+  return n ? n.label : esc(nature);
 }
 
-// Renumérote les lignes (titre, couleur) après un ajout ou une suppression.
-function refreshOrigins() {
-  const rows = document.querySelectorAll("#origins .origin-row");
-  rows.forEach((row, i) => {
-    row.querySelector(".origin-dot").style.background = originColor(i);
-    row.querySelector(".origin-title").textContent = `Départ ${i + 1}`;
-    // Au moins un point de départ est requis : pas de suppression s'il est seul.
-    row.querySelector(".origin-remove").hidden = rows.length === 1;
-  });
-  $("#add-origin").hidden = rows.length >= MAX_ORIGINS;
-  updateSearchCost();
-  syncUrl();
+function buildCriteres() {
+  const box = $("#criteres");
+  for (const n of CRITERE_NATURES) {
+    const row = $("#critere-tpl").content.firstElementChild.cloneNode(true);
+    row.dataset.nature = n.nature;
+    row.querySelector(".critere-title").textContent = n.label;
+    row.querySelector(".origin-dot").style.background = natureGroup(n.nature).color;
+    row.querySelector(".critere-taux").hidden = !n.taux;
+    const range = row.querySelector(".critere-time");
+    range.addEventListener("input", () => {
+      row.querySelector(".origin-time-val").textContent = range.value;
+    });
+    row.querySelector(".critere-on").addEventListener("change", (e) => {
+      row.querySelector(".critere-body").hidden = !e.target.checked;
+      updateSearchCost();
+    });
+    box.appendChild(row);
+    // Réglages par défaut de la nature (repris quand on la coche) ; seuls
+    // les lycées sont recherchés au départ.
+    setCritere(row, {});
+    if (n.nature !== "Lycée") setCritere(row, null);
+  }
 }
 
-function addOrigin({ focus = true } = {}) {
-  const row = $("#origin-tpl").content.firstElementChild.cloneNode(true);
-  const range = row.querySelector('input[type="range"]');
-  range.addEventListener("input", () => {
-    row.querySelector(".origin-time-val").textContent = range.value;
-  });
-  row.querySelector(".origin-remove").addEventListener("click", () => {
-    row.remove();
-    refreshOrigins();
-  });
-  const input = row.querySelector(".origin-address input");
-  setupAddressAutocomplete(input, row.querySelector(".origin-address .ac-list"));
-  $("#origins").appendChild(row);
-  refreshOrigins();
-  if (focus) input.focus();
+// Active (opts : {min, transp, secteur, taux: [min, max]}, champs absents :
+// valeurs par défaut de la nature) ou désactive (opts null, réglages
+// conservés) un critère.
+function setCritere(row, opts) {
+  const n = CRITERE_NATURES.find((c) => c.nature === row.dataset.nature);
+  const on = opts != null;
+  row.querySelector(".critere-on").checked = on;
+  row.querySelector(".critere-body").hidden = !on;
+  if (!on) return;
+  const range = row.querySelector(".critere-time");
+  const min = Number.isFinite(opts.min) ? opts.min : n.min;
+  range.value = Math.min(60, Math.max(5, Math.round(min / 5) * 5));
+  row.querySelector(".origin-time-val").textContent = range.value;
+  const select = row.querySelector(".critere-transp");
+  const transp = opts.transp || n.transp;
+  if ([...select.options].some((o) => o.value === transp)) select.value = transp;
+  const secteurs = opts.secteur && opts.secteur.length ? opts.secteur : SECTEURS;
+  row.querySelectorAll(".critere-secteurs input").forEach((cb) => (cb.checked = secteurs.includes(cb.value)));
+  const [tmin, tmax] = opts.taux || [0, 100];
+  row.querySelector(".taux-min").value = Math.min(100, Math.max(0, tmin));
+  row.querySelector(".taux-max").value = Math.min(100, Math.max(0, tmax));
 }
 
-// Liste des points de départ saisis : [{adresse, dist, transp}, ...].
-function collectOrigins() {
-  return Array.from(document.querySelectorAll("#origins .origin-row")).map((row) => ({
-    adresse: row.querySelector(".origin-address input").value.trim(),
-    dist: parseInt(row.querySelector('input[type="range"]').value, 10) * 60, // minutes → secondes
-    transp: row.querySelector("select").value,
-  }));
+// Critères des natures cochées, au format de l'API.
+function collectCriteres() {
+  return Array.from(document.querySelectorAll("#criteres .critere-row"))
+    .filter((row) => row.querySelector(".critere-on").checked)
+    .map((row) => {
+      const n = CRITERE_NATURES.find((c) => c.nature === row.dataset.nature);
+      const num = (sel, def) => {
+        const v = parseFloat(row.querySelector(sel).value);
+        return Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : def;
+      };
+      return {
+        nature: n.nature,
+        dist: parseInt(row.querySelector(".critere-time").value, 10) * 60, // minutes → secondes
+        transp: row.querySelector(".critere-transp").value,
+        secteur: Array.from(row.querySelectorAll(".critere-secteurs input:checked")).map((cb) => cb.value),
+        taux_min: n.taux ? num(".taux-min", 0) : 0,
+        taux_max: n.taux ? num(".taux-max", 100) : 100,
+      };
+    });
 }
 
-$("#add-origin").addEventListener("click", () => addOrigin());
+// Filtres de zone saisis (null : pas de filtre).
+function collectFiltres() {
+  const num = (id) => {
+    const v = parseFloat($(id).value);
+    return Number.isFinite(v) ? v : null;
+  };
+  return {
+    prix_m2_min: num("#prix-min"),
+    prix_m2_max: num("#prix-max"),
+    securite_min: num("#securite-min"),
+    fiscalite_max: num("#fiscalite-max"),
+  };
+}
+
+$("#rayon").addEventListener("input", () => {
+  $("#rayon-val").textContent = $("#rayon").value;
+});
 
 $("#logout").addEventListener("click", async () => {
   // Révoque le token côté serveur ; on se déconnecte localement quoi qu'il arrive.
@@ -1624,10 +1690,10 @@ $("#logout").addEventListener("click", async () => {
   if (isoLayer) isoLayer.clearLayers();
   if (markerLayer) markerLayer.clearLayers();
   if (communeLayer) renderCommunes([]);
+  immoFiltre = { min: null, max: null };
   if (immoLayer) renderImmobilier(null, []);
   if (fiscLayer) renderFiscalite([]);
   if (logementLayer) renderLogements([]);
-  updateLevelLegend([]);
   lastData = null;
   billing = null;
   renderBilling();
@@ -1639,41 +1705,40 @@ $("#logout").addEventListener("click", async () => {
   applyMode();
 });
 
-function checkedValues(name) {
-  return Array.from(
-    document.querySelectorAll(`input[name="${name}"]:checked`)
-  ).map((el) => el.value);
-}
-
 $("#search-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const status = $("#search-status");
   const btn = $("#search-btn");
   status.classList.remove("err");
 
-  const origines = collectOrigins();
-  const missing = origines.findIndex((o) => !o.adresse);
-  if (missing >= 0) {
-    status.textContent = `Adresse manquante pour le départ ${missing + 1}.`;
+  const fail = (msg) => {
+    status.textContent = msg;
     status.classList.add("err");
-    return;
+  };
+  const centre = $("#centre").value.trim();
+  if (!centre) return fail("Indiquez le centre de la recherche.");
+  const criteres = collectCriteres();
+  if (!criteres.length) return fail("Cochez au moins une nature d'établissement.");
+  for (const c of criteres) {
+    if (!c.secteur.length) return fail(`${natureLabel(c.nature)} : cochez au moins un secteur.`);
+    if (c.taux_min > c.taux_max) return fail(`${natureLabel(c.nature)} : taux minimum supérieur au maximum.`);
+  }
+  const filtres = collectFiltres();
+  if (filtres.prix_m2_min != null && filtres.prix_m2_max != null && filtres.prix_m2_min > filtres.prix_m2_max) {
+    return fail("Prix au m² : minimum supérieur au maximum.");
   }
 
   status.textContent = "Recherche en cours…";
   btn.disabled = true;
 
-  const body = {
-    origines,
-    nature: checkedValues("nature"),
-    secteur: checkedValues("secteur"),
-  };
-
+  const body = { centre, rayon_km: parseInt($("#rayon").value, 10), criteres, ...filtres };
   try {
     const data = await api("/etablissements", {
       method: "POST",
       body: JSON.stringify(body),
     });
-    searchOrigins = origines;
+    lastCriteres = criteres;
+    immoFiltre = { min: filtres.prix_m2_min, max: filtres.prix_m2_max };
     render(data);
   } catch (ex) {
     status.textContent = ex.message;
@@ -1693,7 +1758,7 @@ $("#search-form").addEventListener("submit", async (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Autocomplétion de l'adresse de départ
+// Autocomplétion de l'adresse du centre de la recherche
 // ---------------------------------------------------------------------------
 let acSeq = 0; // préfixe unique des identifiants d'options par liste
 
@@ -1883,10 +1948,16 @@ function setupAddressAutocomplete(input, list) {
   $("#search-form").addEventListener("submit", close);
 }
 
-addOrigin({ focus: false });
+// Après la section d'autocomplétion (acSeq doit être initialisé).
+setupAddressAutocomplete($("#centre"), $("#centre-wrap .ac-list"));
 
-// Saisie dans le formulaire (adresses, temps, transport, cases, taux) : URL à jour.
-for (const type of ["input", "change"]) $("#search-form").addEventListener(type, () => syncUrl());
+// Saisie dans le formulaire (centre, rayon, critères, filtres) : URL et coût à jour.
+for (const type of ["input", "change"]) {
+  $("#search-form").addEventListener(type, () => {
+    syncUrl();
+    updateSearchCost();
+  });
+}
 
 function render(data) {
   isoLayer.clearLayers();
@@ -1896,90 +1967,119 @@ function render(data) {
   renderFiscalite(data.communes);
   renderLogements(data.logements_sociaux || []);
 
-  // Isochrones : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
-  const isos = Array.isArray(data.isochrones) && data.isochrones.length
-    ? data.isochrones
-    : data.isochrone ? [data.isochrone] : [];
-  const multi = isos.length > 1;
-  const zoneBounds = L.latLngBounds([]);
-  isos.forEach((iso, i) => {
-    // Plusieurs départs : isochrones emboîtées de chaque départ en pointillés
-    // à sa couleur (avec un seul départ, elles se confondent avec la zone).
-    const levels = iso.levels && iso.levels.length ? iso.levels : [{ dist: iso.dist, geometry: iso.geometry }];
-    levels.forEach((lv, k) => {
-      if (!Array.isArray(lv.geometry) || !lv.geometry.length) return;
-      const outer = k === levels.length - 1;
-      const poly = L.polygon(lv.geometry.map(([lon, lat]) => [lat, lon]), {
-        color: originColor(i),
-        weight: outer ? 2.2 : 1.4,
-        opacity: outer ? 1 : 0.75,
-        dashArray: "6 5",
+  const isoBounds = L.latLngBounds([]);
+  // Centre et rayon de la recherche.
+  if (data.centre) {
+    const c = [data.centre.lat, data.centre.lon];
+    const circle = L.circle(c, {
+      radius: data.centre.rayon_km * 1000,
+      color: "#64748b",
+      weight: 1.5,
+      dashArray: "4 6",
+      fill: false,
+      interactive: false,
+    }).addTo(isoLayer);
+    isoBounds.extend(circle.getBounds());
+    L.circleMarker(c, { radius: 7, color: "#334155", fillColor: "#334155", fillOpacity: 0.9 })
+      .bindPopup("Centre de la recherche")
+      .addTo(isoLayer);
+  }
+
+  // Isochrones des établissements sources (contour à la couleur de la nature
+  // de leur critère : une école primaire peut servir aux critères maternelle
+  // et élémentaire) : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
+  const sources = data.sources || [];
+  for (const src of sources) {
+    const color = natureGroup(sourceNature(src)).color;
+    if (Array.isArray(src.isochrone) && src.isochrone.length) {
+      const poly = L.polygon(src.isochrone.map(([lon, lat]) => [lat, lon]), {
+        color,
+        weight: 1.2,
+        opacity: 0.75,
         fill: false,
         interactive: false,
-      });
-      if (multi) isoLayer.addLayer(poly);
-      zoneBounds.extend(poly.getBounds());
-    });
-    if (iso.lonlat) {
-      L.circleMarker([iso.lonlat[1], iso.lonlat[0]], {
-        radius: 7,
-        color: originColor(i),
-        fillColor: originColor(i),
-        fillOpacity: 0.9,
-      })
-        .bindPopup(multi ? `Point de départ ${i + 1}` : "Point de départ")
-        .addTo(isoLayer);
-    }
-  });
-
-  // Niveaux de la zone de recherche (intersection des isochrones par temps) :
-  // bandes superposées de l'extérieur vers l'intérieur, plus sombres au centre.
-  const zoneLevels = data.zone_levels || [];
-  const alpha = zoneLevels.length ? ZONE_ALPHA / zoneLevels.length : 0;
-  zoneLevels
-    .slice()
-    .reverse()
-    .forEach((lv, k) => {
-      const outer = k === 0;
-      L.geoJSON(lv.geometry, {
-        style: {
-          color: ZONE_STROKE,
-          weight: outer ? 2.5 : 1,
-          opacity: outer ? 1 : 0.55,
-          fillColor: ZONE_COLOR,
-          fillOpacity: alpha,
-        },
-        interactive: false,
       }).addTo(isoLayer);
-    });
-  updateLevelLegend(zoneLevels, multi);
+      isoBounds.extend(poly.getBounds());
+    }
+  }
+
+  // Intersection des unions par nature avant filtres (pointillés), puis zone retenue (remplie).
+  if (data.zone_brute) {
+    L.geoJSON(data.zone_brute, {
+      style: { color: "#854d0e", weight: 2, dashArray: "6 5", fill: false },
+      interactive: false,
+    }).addTo(isoLayer);
+  }
+  let zoneBounds = null;
+  if (data.zone) {
+    const zone = L.geoJSON(data.zone, {
+      style: { color: ZONE_STROKE, weight: 2, fillColor: ZONE_COLOR, fillOpacity: ZONE_ALPHA },
+      interactive: false,
+    }).addTo(isoLayer);
+    zoneBounds = zone.getBounds();
+  }
+
+  // Établissements sources : pastille à la couleur de la nature du critère.
+  for (const src of sources) {
+    const coords = src.position && src.position.coordinates;
+    if (!coords) continue;
+    L.circleMarker([coords[1], coords[0]], {
+      radius: 6,
+      color: "#fff",
+      weight: 2,
+      fillColor: natureGroup(sourceNature(src)).color,
+      fillOpacity: 1,
+    })
+      .bindPopup(() => sourcePopupHtml(src))
+      .addTo(isoLayer);
+  }
 
   lastData = data;
-  const bounds = renderMarkers();
+  renderMarkers();
 
-  if (multi && !data.zone) {
-    const status = $("#search-status");
-    status.textContent = "Aucune zone commune à tous les points de départ.";
+  // Zone vide : explication.
+  const status = $("#search-status");
+  let empty = "";
+  if ((data.criteres_vides || []).length) {
+    empty = `Aucun établissement retenu pour : ${data.criteres_vides.map(natureLabel).join(", ")}. ` +
+      "Élargissez le rayon ou assouplissez les critères de cette nature.";
+  } else if (!data.zone_brute) {
+    empty = `Les ${sources.length} isochrones n'ont aucune zone commune. ` +
+      "Augmentez les temps de trajet, réduisez le rayon ou le nombre de natures, ou relevez le taux minimum.";
+  } else if (!data.zone) {
+    empty = "Aucun quartier de la zone ne respecte les filtres de zone (prix, sécurité, fiscalité).";
+  }
+  if (empty) {
+    status.textContent = empty;
     status.classList.add("err");
   }
 
   showMapOnNarrow();
-  if (bounds.length) {
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
-  } else if (zoneBounds.isValid()) {
-    map.fitBounds(zoneBounds, { padding: [40, 40], maxZoom: 13 });
-  }
+  const fit = zoneBounds && zoneBounds.isValid() ? zoneBounds : isoBounds;
+  if (fit.isValid()) map.fitBounds(fit, { padding: [40, 40], maxZoom: 14 });
 }
 
-// (Re)dessine les marqueurs de la dernière recherche selon le filtre de taux
-// de réussite ; renvoie les positions affichées.
+// Popup d'un établissement source : fiche, et paramètres de son isochrone.
+// Nature du critère pour lequel une source a été retenue (sa propre nature
+// pour une réponse sans « critere »).
+function sourceNature(src) {
+  return src.critere || src.nature;
+}
+
+function sourcePopupHtml(src) {
+  return popupHtml(src) +
+    `<div class="popup-meta">Établissement source (critère ${natureLabel(sourceNature(src))}) : isochrone de ${Math.round(src.dist / 60)} min ` +
+    `${{ "driving-car": "en voiture", "cycling-regular": "à vélo", "foot-walking": "à pied" }[src.transp] || esc(src.transp)}.</div>`;
+}
+
+// (Re)dessine les marqueurs des établissements de la zone ; renvoie leurs
+// positions.
 function renderMarkers() {
   const bounds = [];
   if (!markerLayer || !lastData) return bounds;
   markerLayer.clearLayers();
 
-  const all = lastData.etablissements || [];
-  const etabs = all.filter(passesRateFilter);
+  const etabs = lastData.etablissements || [];
   markerByEtab = new Map();
   for (const etab of etabs) {
     const coords = etab.position && etab.position.coordinates;
@@ -1994,19 +2094,18 @@ function renderMarkers() {
   const status = $("#search-status");
   status.classList.remove("err");
   status.textContent =
-    etabs.length === all.length
-      ? `${all.length} établissement(s) trouvé(s).`
-      : `${etabs.length} établissement(s) affiché(s) sur ${all.length} trouvé(s).`;
+    `${etabs.length} établissement(s) dans la zone, ${(lastData.sources || []).length} établissement(s) source(s).`;
   const nbLogements = (lastData.logements_sociaux || []).reduce((n, p) => n + p.nb_logements, 0);
   if (nbLogements) status.textContent += ` ${nbLogements} logement(s) social(aux).`;
   return bounds;
 }
 
 // ---------------------------------------------------------------------------
-// Filtre « taux de réussite » (Admis / Présents) : slicer + champs synchronisés
+// Taux de réussite (Admis / Présents)
 // ---------------------------------------------------------------------------
 
-// Taux global d'un établissement en % (Σ admis / Σ présents), ou null.
+// Taux global d'un établissement en % (Σ admis / Σ présents), ou null. Même
+// définition que la vue etablissement_taux (migration 017), à garder synchronisées.
 function successRate(etab) {
   let presents = 0;
   let admis = 0;
@@ -2017,79 +2116,6 @@ function successRate(etab) {
   }
   return presents > 0 ? (100 * admis) / presents : null;
 }
-
-function rateBounds() {
-  return {
-    min: parseInt($("#rate-min").value, 10),
-    max: parseInt($("#rate-max").value, 10),
-  };
-}
-
-// Plage complète (0–100) : aucun filtrage. Les établissements sans résultats
-// d'examen ne sont pas concernés par le filtre et restent affichés.
-function passesRateFilter(etab) {
-  const { min, max } = rateBounds();
-  if (min <= 0 && max >= 100) return true;
-  if (!etab.resultats || etab.resultats.length === 0) return true;
-  const rate = successRate(etab);
-  return rate != null && rate >= min && rate <= max;
-}
-
-function syncRateUI() {
-  const { min, max } = rateBounds();
-  $("#rate-min-txt").value = min;
-  $("#rate-max-txt").value = max;
-  const fill = $("#rate-fill");
-  fill.style.left = min + "%";
-  fill.style.right = 100 - max + "%";
-  // Poignées confondues : garder accessible celle qui peut encore bouger.
-  $("#rate-min").style.zIndex = min === max && min >= 50 ? 2 : "";
-}
-
-function setRate(which, value) {
-  const { min, max } = rateBounds();
-  let v = Math.round(Math.min(100, Math.max(0, value)));
-  if (which === "min") v = Math.min(v, max);
-  else v = Math.max(v, min);
-  $(`#rate-${which}`).value = v;
-}
-
-function onRateChange() {
-  syncRateUI();
-  renderMarkers();
-  syncUrl();
-}
-
-for (const which of ["min", "max"]) {
-  const slider = $(`#rate-${which}`);
-  const txt = $(`#rate-${which}-txt`);
-
-  slider.addEventListener("input", () => {
-    setRate(which, parseInt(slider.value, 10)); // empêche min > max
-    onRateChange();
-  });
-
-  // Saisie en cours : on ne met à jour que si la valeur est utilisable,
-  // sans réécrire le champ pour ne pas gêner la frappe.
-  txt.addEventListener("input", () => {
-    const v = parseFloat(txt.value);
-    if (Number.isNaN(v)) return;
-    setRate(which, v);
-    const { min, max } = rateBounds();
-    const fill = $("#rate-fill");
-    fill.style.left = min + "%";
-    fill.style.right = 100 - max + "%";
-    renderMarkers();
-  });
-
-  // Validation (Entrée / perte du focus) : le champ reprend la valeur retenue.
-  txt.addEventListener("change", () => {
-    const v = parseFloat(txt.value);
-    if (!Number.isNaN(v)) setRate(which, v);
-    onRateChange();
-  });
-}
-syncRateUI();
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
@@ -2104,7 +2130,6 @@ function popupHtml(etab) {
   html += `<div class="popup-meta">${esc(meta)}<br/>${esc(addr)}`;
   if (etab.UAI) html += `<br/>UAI : ${esc(etab.UAI)}`;
   html += `</div>`;
-  html += levelPopupLine(etab.niveau);
 
   const res = etab.resultats || [];
   const rate = successRate(etab);
@@ -2152,7 +2177,6 @@ function logementPopupHtml(p) {
   const dash = (v) => (v == null ? "—" : esc(v));
   let html = `<div class="popup-title">${p.nb_logements} logement(s) social(aux)</div>`;
   html += `<div class="popup-meta">Position : ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</div>`;
-  html += levelPopupLine(p.niveau);
   html += `<div class="popup-scroll"><table class="popup-table"><thead><tr>
     <th>Type</th><th>Droit</th><th>Pièces</th><th>Surface (m²)</th><th>Année</th><th>Nb</th>
     </tr></thead><tbody>`;
@@ -2169,7 +2193,7 @@ function logementPopupHtml(p) {
 // Panneau de droite : onglets, répartition par nature, taux, liste
 // ---------------------------------------------------------------------------
 let markerByEtab = new Map();
-let insightEtabs = []; // établissements affichés (après filtre de taux)
+let insightEtabs = []; // établissements de la zone affichés
 let rateSel = new Set(); // tranches (0–9) sélectionnées dans l'histogramme des taux
 
 // Tranche de 10 % du taux de réussite d'un établissement, ou null sans taux.
@@ -2208,6 +2232,9 @@ document.querySelectorAll(".tabs .tab").forEach((tab) =>
 const NATURE_GROUPS = [
   { key: "matern", label: "Maternelle", color: "#3987e5" },
   { key: "elem", label: "Élémentaire", color: "#d95926" },
+  // Écoles primaires (nature « Primaire ») : retenues par les critères
+  // maternelle et élémentaire (voir critereMatch dans internal/store/search.go).
+  { key: "primaire", label: "Primaire", color: "#8e44ad" },
   { key: "coll", label: "Collège", color: "#199e70" },
   { key: "lycee", label: "Lycée", color: "#c98500" },
 ];
@@ -2387,7 +2414,6 @@ function renderEtabList(ul, etabs, withRate, highlight = false) {
       `<div class="etab-main"><div class="etab-name">${esc(e.nom)}</div>` +
       `<div class="etab-sub">${esc(sub)}</div></div>` +
       `<div class="etab-side">` +
-      (e.niveau != null ? `<span class="etab-time">${levelLabel(e.niveau)}</span>` : "") +
       (withRate && rate != null ? `<span class="etab-rate">${rate.toFixed(0)} %</span>` : "") +
       (e.secteur ? `<span class="badge ${secteurClass(e.secteur)}">${esc(e.secteur)}</span>` : "") +
       `</div>`;

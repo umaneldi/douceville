@@ -82,6 +82,9 @@ func main() {
 		JWTSecret: cfg.JWTSecret,
 		Mailer:    mailer,
 		PublicURL: cfg.PublicURL,
+		// Cache des isochrones de recherche.
+		IsoCacheTTL: cfg.IsochroneCacheTTL,
+		IsoCacheMax: cfg.IsochroneCacheMax,
 	}
 
 	if cfg.OIDCEnabled() {

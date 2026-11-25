@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,9 +31,10 @@ type mockStore struct {
 	verified *models.DvUser
 	// revoked reçoit le jti passé à RevokeToken (si non nil).
 	revoked *string
-	// interEmpty est renvoyé par IntersectZones ; interCalls compte ses appels.
+	// interEmpty est renvoyé par IntersectUnions ; interCalls enregistre les
+	// groupes de polygones reçus à chaque appel.
 	interEmpty bool
-	interCalls *int
+	interCalls *[][][]string
 	// emailChanged est renvoyé par VerifyEmail.
 	emailChanged bool
 	// byID est renvoyé par GetUserRecordByID.
@@ -55,6 +55,77 @@ type mockStore struct {
 	deleted    *string
 	// bill porte l'état de facturation simulé (nil : tarifs nuls, aucun mouvement).
 	bill *fakeBill
+	// sources est renvoyé par SelectSourceEtablissements.
+	sources []models.Source
+	// cache simule le cache d'isochrones (nil : toujours vide, écritures ignorées).
+	cache *isoCache
+	// filterEmpty est renvoyé par FilterZone ; filterCalls compte ses appels.
+	filterEmpty bool
+	filterCalls *int
+	// proximite est renvoyé par QuartierProximite.
+	proximite *models.QuartierProximite
+	// criteres reçoit les critères passés à FindEtablissementsInZone ou
+	// QuartierProximite (si non nil).
+	criteres *[]models.CritereNature
+}
+
+// isoCache est un cache d'isochrones en mémoire ; getErr et putErr font
+// échouer la lecture et l'écriture.
+type isoCache struct {
+	rings  map[models.IsochroneKey][][2]float64
+	puts   int
+	getErr error
+	putErr error
+}
+
+func (m mockStore) SelectSourceEtablissements(ctx context.Context, centre [2]float64, rayonM float64, criteres []models.CritereNature, parNature int) ([]models.Source, error) {
+	return m.sources, m.err
+}
+func (m mockStore) GetCachedIsochrones(ctx context.Context, keys []models.IsochroneKey, maxAge time.Duration) (map[models.IsochroneKey][][2]float64, error) {
+	out := map[models.IsochroneKey][][2]float64{}
+	if m.cache == nil {
+		return out, m.err
+	}
+	if m.cache.getErr != nil {
+		return nil, m.cache.getErr
+	}
+	for _, k := range keys {
+		if r, ok := m.cache.rings[k]; ok {
+			out[k] = r
+		}
+	}
+	return out, m.err
+}
+func (m mockStore) PutCachedIsochrones(ctx context.Context, entries map[models.IsochroneKey][][2]float64, maxAge time.Duration, maxEntries int) error {
+	if m.cache == nil {
+		return m.err
+	}
+	if m.cache.putErr != nil {
+		return m.cache.putErr
+	}
+	m.cache.puts++
+	if m.cache.rings == nil {
+		m.cache.rings = map[models.IsochroneKey][][2]float64{}
+	}
+	for k, r := range entries {
+		m.cache.rings[k] = r
+	}
+	return m.err
+}
+func (m mockStore) FilterZone(ctx context.Context, wkt string, f models.FiltresZone) (string, json.RawMessage, bool, error) {
+	if m.filterCalls != nil {
+		*m.filterCalls++
+	}
+	if m.filterEmpty {
+		return "", nil, true, m.err
+	}
+	return "POLYGON((1 2,3 4,5 6,1 2))", json.RawMessage(`{"type":"Polygon","coordinates":[]}`), false, m.err
+}
+func (m mockStore) QuartierProximite(ctx context.Context, iris string, criteres []models.CritereNature) (*models.QuartierProximite, error) {
+	if m.criteres != nil {
+		*m.criteres = criteres
+	}
+	return m.proximite, m.err
 }
 
 // knownUser renvoie le compte d'identifiant id parmi m.users.
@@ -101,29 +172,14 @@ func (m mockStore) FindOrCreateOIDCUser(ctx context.Context, id models.OIDCIdent
 	return m.oidcUser, m.oidcErr
 }
 
-func (m mockStore) IntersectZones(ctx context.Context, wkts []string) (string, json.RawMessage, bool, error) {
+func (m mockStore) IntersectUnions(ctx context.Context, groups [][]string) (string, json.RawMessage, bool, error) {
 	if m.interCalls != nil {
-		*m.interCalls++
+		*m.interCalls = append(*m.interCalls, groups)
 	}
 	if m.interEmpty {
 		return "", nil, true, m.err
 	}
 	return "MULTIPOLYGON(((1 2,3 4,5 6,1 2)))", json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`), false, m.err
-}
-
-// PointLevels place tous les points dans le premier niveau.
-func (m mockStore) PointLevels(ctx context.Context, lonlats [][2]float64, wkts []string) ([]int, error) {
-	return make([]int, len(lonlats)), m.err
-}
-
-// isoWithLevels renvoie une isochrone factice aux niveaux dists (secondes).
-func isoWithLevels(dists ...float64) models.Isochrone {
-	ring := [][2]float64{{1, 2}, {3, 4}, {5, 6}}
-	iso := models.Isochrone{Dist: dists[len(dists)-1], Geometry: ring}
-	for _, d := range dists {
-		iso.Levels = append(iso.Levels, models.IsoLevel{Dist: d, Geometry: ring})
-	}
-	return iso
 }
 
 func (m mockStore) CreateEmailVerification(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
@@ -188,7 +244,10 @@ func (m mockStore) CreateUser(ctx context.Context, email, passwordHash string, f
 func (m mockStore) GetEtablissementByUAI(ctx context.Context, uai string) (*models.Etablissement, error) {
 	return m.etab, m.err
 }
-func (m mockStore) FindEtablissementsInZone(ctx context.Context, wkt string, nature, secteur []string) ([]models.Etablissement, error) {
+func (m mockStore) FindEtablissementsInZone(ctx context.Context, wkt string, criteres []models.CritereNature) ([]models.Etablissement, error) {
+	if m.criteres != nil {
+		*m.criteres = criteres
+	}
 	return m.zone, m.err
 }
 
@@ -204,19 +263,48 @@ func (m mockStore) FindLogementsSociauxInZone(ctx context.Context, wkt string) (
 	return m.logements, m.err
 }
 
+// mockIso simule OpenRouteService. CalcIsochrones renvoie, pour chaque
+// position, un triangle qui commence par elle ; calls (si non nil) reçoit
+// chaque appel.
 type mockIso struct {
-	iso models.Isochrone
-	err error
+	iso   models.Isochrone
+	err   error
+	calls *[]isoCall
+}
+
+// isoCall est un appel à CalcIsochrones.
+type isoCall struct {
+	lonlats [][2]float64
+	dist    float64
+	transp  string
 }
 
 func (m mockIso) CalcIsochrone(ctx context.Context, lonlat [2]float64, dist, interval float64, transp string) (models.Isochrone, error) {
 	return m.iso, m.err
 }
 
-type mockGeo struct{ res geo.BANResult }
+func (m mockIso) CalcIsochrones(ctx context.Context, lonlats [][2]float64, dist float64, transp string) ([]models.Isochrone, error) {
+	if m.calls != nil {
+		*m.calls = append(*m.calls, isoCall{lonlats, dist, transp})
+	}
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make([]models.Isochrone, len(lonlats))
+	for i, p := range lonlats {
+		out[i] = models.Isochrone{LonLat: p, Dist: dist, Transp: transp,
+			Geometry: [][2]float64{p, {p[0] + 0.1, p[1]}, {p[0], p[1] + 0.1}, p}}
+	}
+	return out, nil
+}
+
+type mockGeo struct {
+	res geo.BANResult
+	err error
+}
 
 func (m mockGeo) Geocode(ctx context.Context, query string) (geo.BANResult, error) {
-	return m.res, nil
+	return m.res, m.err
 }
 
 // --- Tests ---
@@ -257,269 +345,6 @@ func TestReadEtablissement_NotFound(t *testing.T) {
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rr.Code)
-	}
-}
-
-func TestEtablissementsInZone(t *testing.T) {
-	score := 42
-	t3, t4 := 3, 4
-	dateMin, dateMax := "2021-07-01", "2025-06-30"
-	h := &Handlers{
-		Store: mockStore{
-			zone: []models.Etablissement{{UAI: "A"}, {UAI: "B"}},
-			communes: []models.CommuneSecurite{
-				{CodeCommune: "31555", Nom: "Toulouse", Score: &score, Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
-				{CodeCommune: "31069", Nom: "Blagnac"},
-			},
-			immo: models.ImmobilierZone{
-				DateMin: &dateMin,
-				DateMax: &dateMax,
-				Communes: []models.CommuneImmobilier{
-					{CodeCommune: "31555", Prix: &models.PrixM2{PrixM2: 3400, Ventes: 1200}},
-				},
-				Quartiers: []models.QuartierImmobilier{
-					{Iris: "315550101", CodeCommune: "31555", Nom: "Capitole",
-						Prix:    &models.PrixM2{PrixM2: 5100, Ventes: 12},
-						Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
-					{Iris: "315550102", CodeCommune: "31555", Nom: "Arnaud Bernard",
-						Contour: json.RawMessage(`{"type":"MultiPolygon","coordinates":[]}`)},
-				},
-			},
-			logements: []models.LogementSocialPosition{
-				{Lon: 1.44, Lat: 43.6, NbLogements: 5, Logements: []models.LogementSocialGroupe{
-					{NbPieces: &t3, Nb: 3},
-					{NbPieces: &t4, Nb: 2},
-				}},
-			},
-		},
-		Isochron: mockIso{iso: models.Isochrone{Transp: "driving-car", Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
-		Geocoder: mockGeo{res: geo.BANResult{Longitude: 1.44, Latitude: 43.6}},
-	}
-
-	body := `{"adresse":"Toulouse","dist":600}`
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-	var got models.ListeEtablissementsAvecIsochrone
-	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(got.Etablissements) != 2 {
-		t.Errorf("got %d etablissements, want 2", len(got.Etablissements))
-	}
-	if got.Isochrone.Transp != "driving-car" {
-		t.Errorf("isochrone.transp = %q, want driving-car", got.Isochrone.Transp)
-	}
-	if len(got.Communes) != 2 {
-		t.Fatalf("got %d communes, want 2", len(got.Communes))
-	}
-	if c := got.Communes[0]; c.Score == nil || *c.Score != 42 || c.Nom != "Toulouse" {
-		t.Errorf("communes[0] = %+v, want Toulouse with score 42", c)
-	}
-	if got.Communes[1].Score != nil {
-		t.Errorf("communes[1].score = %v, want null", *got.Communes[1].Score)
-	}
-	im := got.Immobilier
-	if im.DateMin == nil || *im.DateMin != dateMin || im.DateMax == nil || *im.DateMax != dateMax {
-		t.Errorf("immobilier dates = %v..%v, want %s..%s", im.DateMin, im.DateMax, dateMin, dateMax)
-	}
-	if len(im.Communes) != 1 || im.Communes[0].Prix == nil || im.Communes[0].Prix.PrixM2 != 3400 {
-		t.Errorf("immobilier.communes = %+v, want 31555 prix 3400", im.Communes)
-	}
-	if len(im.Quartiers) != 2 || im.Quartiers[0].Prix == nil || im.Quartiers[0].Prix.Ventes != 12 || im.Quartiers[1].Prix != nil {
-		t.Errorf("immobilier.quartiers = %+v, want Capitole 12 ventes, Arnaud Bernard sans prix", im.Quartiers)
-	}
-	if ls := got.LogementsSociaux; len(ls) != 1 || ls[0].NbLogements != 5 || len(ls[0].Logements) != 2 ||
-		ls[0].Logements[1].NbPieces == nil || *ls[0].Logements[1].NbPieces != 4 {
-		t.Errorf("logements_sociaux = %+v, want 1 position, 5 logements en 2 groupes", ls)
-	}
-}
-
-// Sans commune dans la zone, le champ communes est un tableau vide (pas null).
-func TestEtablissementsInZone_NoCommunes(t *testing.T) {
-	h := &Handlers{
-		Store:    mockStore{},
-		Isochron: mockIso{iso: models.Isochrone{Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
-		Geocoder: mockGeo{},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(`{"adresse":"x","dist":600}`))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), `"communes":[]`) {
-		t.Errorf("body = %s, want \"communes\":[]", rr.Body.String())
-	}
-	if !strings.Contains(rr.Body.String(), `"logements_sociaux":[]`) {
-		t.Errorf("body = %s, want \"logements_sociaux\":[]", rr.Body.String())
-	}
-}
-
-func TestEtablissementsInZone_MissingAdresse(t *testing.T) {
-	h := &Handlers{Store: mockStore{}, Isochron: mockIso{}, Geocoder: mockGeo{}}
-
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(`{"dist":600}`))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", rr.Code)
-	}
-}
-
-func TestEtablissementsInZone_MultipleOrigines(t *testing.T) {
-	calls := 0
-	h := &Handlers{
-		Store: mockStore{
-			zone:       []models.Etablissement{{UAI: "A", Position: json.RawMessage(`{"type":"Point","coordinates":[1.4,43.6]}`)}},
-			logements:  []models.LogementSocialPosition{{Lon: 1.4, Lat: 43.6, NbLogements: 1}},
-			interCalls: &calls,
-		},
-		Isochron: mockIso{iso: isoWithLevels(300, 600, 900)},
-		Geocoder: mockGeo{},
-	}
-	body := `{"origines":[{"adresse":"a","dist":600,"transp":"driving-car"},{"adresse":"b","dist":900,"transp":"foot-walking"}]}`
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (%s)", rr.Code, rr.Body.String())
-	}
-	var got models.ListeEtablissementsAvecIsochrone
-	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if calls != 3 {
-		t.Errorf("IntersectZones called %d times, want 3 (one per level)", calls)
-	}
-	if len(got.ZoneLevels) != 3 || got.ZoneLevels[0].Dist != 300 || got.ZoneLevels[2].Dist != 900 {
-		t.Errorf("zone_levels = %+v, want levels 300, 600, 900", got.ZoneLevels)
-	}
-	if len(got.Isochrones) != 2 {
-		t.Errorf("got %d isochrones, want 2", len(got.Isochrones))
-	}
-	if len(got.Zone) == 0 || string(got.Zone) == "null" {
-		t.Errorf("zone = %s, want intersection geometry", got.Zone)
-	}
-	if len(got.Etablissements) != 1 || got.Etablissements[0].Niveau == nil || *got.Etablissements[0].Niveau != 300 {
-		t.Errorf("etablissements = %+v, want 1 with niveau 300", got.Etablissements)
-	}
-	if len(got.LogementsSociaux) != 1 || got.LogementsSociaux[0].Niveau == nil || *got.LogementsSociaux[0].Niveau != 300 {
-		t.Errorf("logements_sociaux = %+v, want 1 with niveau 300", got.LogementsSociaux)
-	}
-}
-
-// Un seul point de départ : ses niveaux forment ceux de la zone.
-func TestEtablissementsInZone_SingleOrigineLevels(t *testing.T) {
-	h := &Handlers{
-		Store:    mockStore{},
-		Isochron: mockIso{iso: isoWithLevels(300, 600)},
-		Geocoder: mockGeo{},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(`{"origines":[{"adresse":"a","dist":600}]}`))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-	var got models.ListeEtablissementsAvecIsochrone
-	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(got.Zone) == 0 || string(got.Zone) == "null" {
-		t.Errorf("zone = %s, want geometry", got.Zone)
-	}
-	if len(got.ZoneLevels) != 2 || got.ZoneLevels[1].Dist != 600 {
-		t.Errorf("zone_levels = %+v, want levels 300, 600", got.ZoneLevels)
-	}
-}
-
-func TestZoneLevelWKTs(t *testing.T) {
-	// A : 5/10/15 min ; B : 10/20 min (pas de niveau 5 min).
-	a := isoWithLevels(300, 600, 900)
-	b := isoWithLevels(600, 1200)
-	b.Levels[1].Geometry = [][2]float64{{7, 8}, {9, 10}, {11, 12}}
-
-	levels := zoneLevelWKTs([]models.Isochrone{a, b})
-	var dists []float64
-	for _, lv := range levels {
-		dists = append(dists, lv.Dist)
-		if len(lv.WKTs) != 2 {
-			t.Errorf("level %v has %d WKTs, want 2", lv.Dist, len(lv.WKTs))
-		}
-	}
-	if fmt.Sprint(dists) != "[600 900 1200]" {
-		t.Fatalf("dists = %v, want [600 900 1200] (300 skipped: B has no level <= 300)", dists)
-	}
-	// À 15 min, B contribue son niveau 10 min ; à 20 min, A contribue son max (15 min).
-	if levels[1].WKTs[1] != geo.RingWKT(b.Levels[0].Geometry) {
-		t.Errorf("level 900: B WKT = %s, want its 600 level", levels[1].WKTs[1])
-	}
-	if levels[2].WKTs[1] != geo.RingWKT(b.Levels[1].Geometry) || levels[2].WKTs[0] != geo.RingWKT(a.Levels[2].Geometry) {
-		t.Errorf("level 1200 = %v, want A max + B max", levels[2].WKTs)
-	}
-
-	// Isochrone sans niveaux : un seul niveau, son temps maximal.
-	if got := zoneLevelWKTs([]models.Isochrone{{Dist: 600, Geometry: a.Geometry}}); len(got) != 1 || got[0].Dist != 600 {
-		t.Errorf("no levels: got %+v, want one level 600", got)
-	}
-}
-
-// Intersection vide : 200 avec des listes vides, sans interroger les zones.
-func TestEtablissementsInZone_EmptyIntersection(t *testing.T) {
-	h := &Handlers{
-		Store:    mockStore{zone: []models.Etablissement{{UAI: "A"}}, interEmpty: true},
-		Isochron: mockIso{iso: models.Isochrone{Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
-		Geocoder: mockGeo{},
-	}
-	body := `{"origines":[{"adresse":"a","dist":600},{"adresse":"b","dist":600}]}`
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rr.Code)
-	}
-	for _, want := range []string{`"etablissements":[]`, `"communes":[]`, `"logements_sociaux":[]`, `"zone":null`} {
-		if !strings.Contains(rr.Body.String(), want) {
-			t.Errorf("body = %s, want %s", rr.Body.String(), want)
-		}
-	}
-}
-
-func TestEtablissementsInZone_OrigineMissingAdresse(t *testing.T) {
-	h := &Handlers{Store: mockStore{}, Isochron: mockIso{}, Geocoder: mockGeo{}}
-	body := `{"origines":[{"adresse":"a","dist":600},{"adresse":"  ","dist":600}]}`
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", rr.Code)
-	}
-}
-
-func TestEtablissementsInZone_TooManyOrigines(t *testing.T) {
-	h := &Handlers{Store: mockStore{}, Isochron: mockIso{}, Geocoder: mockGeo{}}
-	o := make([]string, maxOrigines+1)
-	for i := range o {
-		o[i] = `{"adresse":"a","dist":600}`
-	}
-	body := `{"origines":[` + strings.Join(o, ",") + `]}`
-	req := httptest.NewRequest(http.MethodPost, "/etablissements", strings.NewReader(body))
-	rr := httptest.NewRecorder()
-	h.etablissementsInZone(rr, req)
-
-	if rr.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", rr.Code)
 	}
 }
 

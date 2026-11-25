@@ -25,6 +25,10 @@ inserted. Rows are never deleted. WGS84 latitude/longitude are preferred;
 otherwise the projected coordonnee_x/y are reprojected by PostGIS using the
 row's `epsg`. Rows without any position, or whose nature does not map to one of
 the app's values (Maternelle, Elementaire, Collège, Lycée), are skipped.
+An établissement whose name contains "primaire" (case-insensitive) gets the
+nature 'Primaire' whatever its natureUAI code: such a school matches both the
+Maternelle and Elementaire search criteria (same rule as migration
+019_etablissement_primaire.sql).
 `secteur` is 'public', 'privé' (sous contrat) or 'hors contrat', the latter
 taken from `secteur_prive_libelle_type_contrat`.
 Positions are stored with SRID 0 (see schema.md).
@@ -50,11 +54,12 @@ from tqdm import tqdm
 import pyarrow.parquet as pq
 
 # Values expected by the frontend filters (web/index.html).
-MATERNELLE, ELEMENTAIRE, COLLEGE, LYCEE = (
+MATERNELLE, ELEMENTAIRE, COLLEGE, LYCEE, PRIMAIRE = (
     "Maternelle",
     "Elementaire",
     "Collège",
     "Lycée",
+    "Primaire",
 )
 PUBLIC, PRIVE, HORS_CONTRAT = "public", "privé", "hors contrat"
 
@@ -95,6 +100,14 @@ def nature_from_code(code: int | None) -> str | None:
     if 340 <= code < 400:  # collèges, SEGPA, EREA
         return COLLEGE
     return None
+
+
+def nature_for(code: int | None, nom: str) -> str | None:
+    """App nature of an établissement: 'Primaire' when its name says so,
+    otherwise mapped from its natureUAI code."""
+    if "primaire" in nom.casefold():
+        return PRIMAIRE
+    return nature_from_code(code)
 
 
 def secteur(libe: str | None, contrat: str | None, denomination: str) -> str:
@@ -160,17 +173,17 @@ def extract(path: Path):
                 stats["no_position"] += 1
                 continue
 
-        nature = nature_from_code(r["nature_uai"])
-        if nature is None:
-            stats["no_nature"] += 1
-            continue
-
         denomination = r["denomination_principale"] or ""
         nom = (
             (r["appellation_officielle"] or "").strip()
             or f"{denomination} {r['patronyme_uai'] or ''}".strip()
             or uai
         )
+
+        nature = nature_for(r["nature_uai"], nom)
+        if nature is None:
+            stats["no_nature"] += 1
+            continue
 
         rows.append(
             (

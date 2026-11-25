@@ -451,51 +451,6 @@ func (s *PgStore) GetEtablissementByUAI(ctx context.Context, uai string) (*model
 	return etab, nil
 }
 
-// FindEtablissementsInZone implémente Store.FindEtablissementsInZone.
-func (s *PgStore) FindEtablissementsInZone(ctx context.Context, polygonWKT string, nature, secteur []string) ([]models.Etablissement, error) {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, `SELECT %s FROM etablissement WHERE ST_Within(position, ST_GeomFromEWKT($1))`, etabColumns)
-
-	args := []any{polygonWKT}
-	if len(nature) > 0 {
-		args = append(args, nature)
-		fmt.Fprintf(&sb, " AND nature = ANY($%d)", len(args))
-	}
-	if len(secteur) > 0 {
-		args = append(args, secteur)
-		fmt.Fprintf(&sb, " AND secteur = ANY($%d)", len(args))
-	}
-
-	rows, err := s.pool.Query(ctx, sb.String(), args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var etabs []models.Etablissement
-	for rows.Next() {
-		e, err := scanEtablissement(rows)
-		if err != nil {
-			return nil, err
-		}
-		etabs = append(etabs, *e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Charge les résultats de chaque établissement.
-	for i := range etabs {
-		res, err := s.resultatsForUAI(ctx, etabs[i].UAI)
-		if err != nil {
-			return nil, err
-		}
-		etabs[i].Resultats = res
-	}
-
-	return etabs, nil
-}
-
 // FindCommunesInZone implémente Store.FindCommunesInZone. Le WKT de
 // l'isochrone n'a pas de SRID : il est fixé à 4326 pour correspondre à
 // commune.contour. La fiscalité est celle du dernier exercice de la table
@@ -663,19 +618,32 @@ func (s *PgStore) FindLogementsSociauxInZone(ctx context.Context, polygonWKT str
 	return positions, rows.Err()
 }
 
-// IntersectZones implémente Store.IntersectZones. Les polygones sont rendus
-// valides (ST_MakeValid) puis intersectés successivement ; seules les parties
-// surfaciques sont conservées (des isochrones qui se touchent peuvent donner
-// des lignes ou des points).
-func (s *PgStore) IntersectZones(ctx context.Context, polygonWKTs []string) (string, json.RawMessage, bool, error) {
-	if len(polygonWKTs) == 0 {
-		return "", nil, true, errors.New("IntersectZones: no polygon")
+// IntersectUnions implémente Store.IntersectUnions. Les polygones sont rendus
+// valides (ST_MakeValid), unis au sein de chaque groupe (ST_Union), puis les
+// unions sont intersectées successivement ; seules les parties surfaciques
+// sont conservées (des isochrones qui se touchent peuvent donner des lignes
+// ou des points).
+func (s *PgStore) IntersectUnions(ctx context.Context, groups [][]string) (string, json.RawMessage, bool, error) {
+	if len(groups) == 0 {
+		return "", nil, true, errors.New("IntersectUnions: no group")
 	}
-	expr := "ST_MakeValid(ST_GeomFromText($1))"
-	args := []any{polygonWKTs[0]}
-	for _, wkt := range polygonWKTs[1:] {
-		args = append(args, wkt)
-		expr = fmt.Sprintf("ST_Intersection(%s, ST_MakeValid(ST_GeomFromText($%d)))", expr, len(args))
+	var args []any
+	expr := ""
+	for i, group := range groups {
+		if len(group) == 0 {
+			return "", nil, true, fmt.Errorf("IntersectUnions: group %d is empty", i)
+		}
+		parts := make([]string, len(group))
+		for j, wkt := range group {
+			args = append(args, wkt)
+			parts[j] = fmt.Sprintf("ST_MakeValid(ST_GeomFromText($%d))", len(args))
+		}
+		union := "ST_Union(ARRAY[" + strings.Join(parts, ", ") + "])"
+		if expr == "" {
+			expr = union
+		} else {
+			expr = fmt.Sprintf("ST_Intersection(%s, %s)", expr, union)
+		}
 	}
 	q := fmt.Sprintf(`SELECT ST_IsEmpty(g), ST_AsText(g), ST_AsGeoJSON(g, 6)
 		FROM (SELECT ST_CollectionExtract(%s, 3) AS g) z`, expr)
@@ -689,53 +657,6 @@ func (s *PgStore) IntersectZones(ctx context.Context, polygonWKTs []string) (str
 		return "", nil, true, nil
 	}
 	return wkt, json.RawMessage(gj), false, nil
-}
-
-// PointLevels implémente Store.PointLevels en une seule requête : les
-// polygones sont convertis une fois (CTE matérialisée), puis chaque point
-// prend le plus petit indice de polygone qui le contient.
-func (s *PgStore) PointLevels(ctx context.Context, lonlats [][2]float64, levelWKTs []string) ([]int, error) {
-	if len(lonlats) == 0 || len(levelWKTs) == 0 {
-		levels := make([]int, len(lonlats))
-		for i := range levels {
-			levels[i] = -1
-		}
-		return levels, nil
-	}
-	lons := make([]float64, len(lonlats))
-	lats := make([]float64, len(lonlats))
-	for i, p := range lonlats {
-		lons[i], lats[i] = p[0], p[1]
-	}
-
-	const q = `WITH l AS MATERIALIZED (
-			SELECT k, ST_GeomFromText(w) AS g
-			FROM unnest($3::text[]) WITH ORDINALITY l(w, k)
-		)
-		SELECT coalesce((SELECT min(k) FROM l WHERE ST_Intersects(l.g, ST_MakePoint(p.lon, p.lat))), 0)::integer - 1
-		FROM unnest($1::float8[], $2::float8[]) WITH ORDINALITY p(lon, lat, i)
-		ORDER BY p.i`
-	rows, err := s.pool.Query(ctx, q, lons, lats, levelWKTs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	levels := make([]int, 0, len(lonlats))
-	for rows.Next() {
-		var k int
-		if err := rows.Scan(&k); err != nil {
-			return nil, err
-		}
-		levels = append(levels, k)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(levels) != len(lonlats) {
-		return nil, fmt.Errorf("PointLevels: got %d levels for %d points", len(levels), len(lonlats))
-	}
-	return levels, nil
 }
 
 func (s *PgStore) resultatsForUAI(ctx context.Context, uai string) ([]models.Resultat, error) {

@@ -83,3 +83,50 @@ func TestPermsValid(t *testing.T) {
 		}
 	}
 }
+
+func TestFiltresZoneActif(t *testing.T) {
+	v := 1.0
+	for _, tc := range []struct {
+		f    FiltresZone
+		want bool
+	}{
+		{FiltresZone{}, false},
+		{FiltresZone{PrixM2Min: &v}, true},
+		{FiltresZone{PrixM2Max: &v}, true},
+		{FiltresZone{SecuriteMin: &v}, true},
+		{FiltresZone{FiscaliteMax: &v}, true},
+	} {
+		if got := tc.f.Actif(); got != tc.want {
+			t.Errorf("Actif(%+v) = %v, want %v", tc.f, got, tc.want)
+		}
+	}
+}
+
+func TestSourceLonLat(t *testing.T) {
+	for _, tc := range []struct {
+		pos  string
+		want [2]float64
+		ok   bool
+	}{
+		{`{"type":"Point","coordinates":[1.44,43.6]}`, [2]float64{1.44, 43.6}, true},
+		{`{"type":"LineString","coordinates":[[1,2],[3,4]]}`, [2]float64{}, false},
+		{`{`, [2]float64{}, false},
+		{``, [2]float64{}, false},
+	} {
+		s := Source{Etablissement: Etablissement{Position: json.RawMessage(tc.pos)}}
+		if got, ok := s.LonLat(); got != tc.want || ok != tc.ok {
+			t.Errorf("LonLat(%s) = %v, %v; want %v, %v", tc.pos, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestNewIsochroneKey(t *testing.T) {
+	k := NewIsochroneKey([2]float64{1.444446, -43.600004}, 599.6, "foot-walking")
+	if k != (IsochroneKey{LonE5: 144445, LatE5: -4360000, Dist: 600, Transp: "foot-walking"}) {
+		t.Errorf("key = %+v", k)
+	}
+	// Deux positions à moins d'un demi-mètre partagent la clé.
+	if NewIsochroneKey([2]float64{1.400001, 43.6}, 600, "x") != NewIsochroneKey([2]float64{1.4, 43.600002}, 600, "x") {
+		t.Error("close positions must share the key")
+	}
+}

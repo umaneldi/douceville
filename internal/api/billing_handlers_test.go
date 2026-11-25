@@ -21,10 +21,11 @@ func billed(t *testing.T, perms models.Perms, balance int64) (*Handlers, mockSto
 	st.user.BalanceCents = balance
 	st.bill = newFakeBill(map[string]int64{"u1": balance, "u2": 0})
 	st.zone = []models.Etablissement{{UAI: "A"}}
+	st.sources = threeSources()
 	prov := newFakeProvider()
 	h := &Handlers{
 		Store:             st,
-		Isochron:          mockIso{iso: isoWithLevels(300, 600)},
+		Isochron:          mockIso{iso: models.Isochrone{Dist: 600, Geometry: [][2]float64{{1, 2}, {3, 4}, {5, 6}}}},
 		Geocoder:          mockGeo{},
 		Billing:           prov,
 		PublicURL:         "https://dv.example",
@@ -33,7 +34,18 @@ func billed(t *testing.T, perms models.Perms, balance int64) (*Handlers, mockSto
 	return h, st, prov
 }
 
-const threeOrigins = `{"origines":[{"adresse":"a","dist":600},{"adresse":"b","dist":600},{"adresse":"c","dist":600}]}`
+// threeSources renvoie trois lycées sources, de positions distinctes : une
+// recherche sans cache calcule trois isochrones.
+func threeSources() []models.Source {
+	return []models.Source{
+		source("A", "Lycée", 1.40, 43.60, 600, "driving-car"),
+		source("B", "Lycée", 1.41, 43.61, 600, "driving-car"),
+		source("C", "Lycée", 1.42, 43.62, 600, "driving-car"),
+	}
+}
+
+// threeOrigins est une recherche sur les lycées (trois sources avec billed).
+const threeOrigins = `{"centre":"Toulouse","rayon_km":10,"criteres":[{"nature":"Lycée","dist":600}]}`
 
 func TestBilling_ChargesPerOrigin(t *testing.T) {
 	h, st, _ := billed(t, models.PermsGranted, 100)

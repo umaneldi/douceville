@@ -19,6 +19,9 @@ reçoivent leurs paramètres explicitement (structs de config, arguments).
   le scope `openid` est ajouté s'il manque.
 - Si `BILLING_ENABLED` est vrai (`1`, `true`, `yes`, `on`) : `MOLLIE_API_KEY`
   doit commencer par `test_` ou `live_`.
+- `ISOCHRONE_CACHE_DAYS` (défaut 30, converti en `IsochroneCacheTTL`) et
+  `ISOCHRONE_CACHE_MAX` (défaut 20 000, `IsochroneCacheMax`) doivent être des
+  entiers strictement positifs (`positiveInt`).
 
 Valeurs dérivées : `PUBLIC_URL` est privé de son `/` final ;
 `OIDC_REDIRECT_URL` et `MOLLIE_WEBHOOK_URL` ont pour défaut une URL construite
@@ -40,7 +43,8 @@ de `docker-compose.yml` et le tableau *Configuration* du `README.md`.
 ## Tests
 
 `go test ./internal/config/` — valeurs par défaut et URL dérivées,
-`DatabaseURL`, validation de `JWT_SECRET`, SMTP, OIDC et facturation. Le
+`DatabaseURL`, validation de `JWT_SECRET`, SMTP, OIDC, facturation et cache
+d'isochrones. Le
 helper `clearEnv` vide toutes les variables lues, pour que les tests ne
 dépendent pas de l'environnement du développeur : toute nouvelle variable doit
 y être ajoutée.

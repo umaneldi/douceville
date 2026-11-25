@@ -88,37 +88,37 @@
 
           <h2 class="panel-title">Filtres</h2>
           <form id="search-form">
-            <h3 class="lbl">Points de départ</h3>
-            <p class="hint">La recherche porte sur la zone accessible depuis tous les points.</p>
-            <div id="origins" class="origins"></div>
-            <button id="add-origin" type="button" class="btn-link">+ Ajouter un point de départ</button>
+            <h3 class="lbl">Centre de la recherche</h3>
+            <p class="hint">Les établissements sont cherchés dans ce rayon. La zone affichée est
+              accessible depuis <strong>tous</strong> les établissements retenus.</p>
+            <div class="ac-wrap" id="centre-wrap">
+              <input id="centre" type="text" placeholder="Adresse ou commune" autocomplete="off" spellcheck="false"
+                     role="combobox" aria-autocomplete="both" aria-expanded="false" aria-label="Centre de la recherche" />
+              <ul class="ac-list" role="listbox" hidden></ul>
+            </div>
+            <label class="origin-time">Rayon : <strong id="rayon-val">10</strong> km
+              <input id="rayon" type="range" min="1" max="50" step="1" value="10" aria-label="Rayon de recherche (km)" />
+            </label>
 
-            <fieldset class="filters">
-              <legend>Nature</legend>
-              <label><input type="checkbox" name="nature" value="Maternelle" /> Maternelle</label>
-              <label><input type="checkbox" name="nature" value="Elementaire" /> Élémentaire</label>
-              <label><input type="checkbox" name="nature" value="Collège" /> Collège</label>
-              <label><input type="checkbox" name="nature" value="Lycée" /> Lycée</label>
-            </fieldset>
+            <h3 class="lbl">Établissements par nature</h3>
+            <p class="hint">Pour chaque nature cochée, les 10 établissements du rayon ayant le meilleur
+              taux de réussite donnent chacun une isochrone (temps et mode propres à la nature).</p>
+            <div id="criteres" class="origins"></div>
 
-            <fieldset class="filters">
-              <legend>Secteur</legend>
-              <label><input type="checkbox" name="secteur" value="public" /> Public</label>
-              <label><input type="checkbox" name="secteur" value="privé" /> Privé</label>
-              <label><input type="checkbox" name="secteur" value="hors contrat" /> Hors contrat</label>
-            </fieldset>
-
-            <fieldset class="filters">
-              <legend>Taux de réussite (Admis / Présents)</legend>
-              <div class="dual-range">
-                <div class="dual-range-track"><div id="rate-fill" class="dual-range-fill"></div></div>
-                <input id="rate-min" type="range" min="0" max="100" step="1" value="0" aria-label="Taux minimum" />
-                <input id="rate-max" type="range" min="0" max="100" step="1" value="100" aria-label="Taux maximum" />
+            <fieldset class="filters zone-filters">
+              <legend>Filtres de zone</legend>
+              <p class="hint">Restreignent la zone aux quartiers IRIS qui les respectent (champ vide : pas de filtre).</p>
+              <div class="zone-filter">
+                <span>Prix au m²</span>
+                <input id="prix-min" type="number" min="0" step="100" placeholder="min" aria-label="Prix au m² minimum (€)" />
+                –
+                <input id="prix-max" type="number" min="0" step="100" placeholder="max" aria-label="Prix au m² maximum (€)" />
+                €
               </div>
-              <div class="range-inputs">
-                <label>Min <input id="rate-min-txt" type="number" min="0" max="100" step="1" value="0" /> %</label>
-                <label>Max <input id="rate-max-txt" type="number" min="0" max="100" step="1" value="100" /> %</label>
-              </div>
+              <label class="zone-filter"><span>Sécurité min.</span>
+                <input id="securite-min" type="number" min="0" max="100" step="1" placeholder="0–100" /> /100</label>
+              <label class="zone-filter"><span>Fiscalité max.</span>
+                <input id="fiscalite-max" type="number" min="0" step="0.5" placeholder="TFB+TEOM" /> %</label>
             </fieldset>
 
             <p id="search-cost" class="hint search-cost" hidden></p>
@@ -250,8 +250,8 @@
     <form id="admin-pricing-form" class="settings-section" hidden>
       <h3>Tarifs <span id="admin-test-badge" class="test-badge" hidden>MODE TEST</span></h3>
       <div class="pricing-grid">
-        <label>Prix par point de départ (€) <input id="price-origin" type="number" min="0" max="100" step="0.01" required /></label>
-        <label>Prix d'une isochrone (€) <input id="price-isochrone" type="number" min="0" max="100" step="0.01" required /></label>
+        <label>Recherche : prix par isochrone calculée (€) <input id="price-origin" type="number" min="0" max="100" step="0.01" required /></label>
+        <label>Isochrone seule, /api/isochrone (€) <input id="price-isochrone" type="number" min="0" max="100" step="0.01" required /></label>
         <label>Crédit de bienvenue (€) <input id="price-welcome" type="number" min="0" max="100" step="0.01" required /></label>
         <label>Rechargement minimum (€) <input id="price-min-topup" type="number" min="1" max="1000" step="0.01" required /></label>
       </div>
@@ -269,28 +269,37 @@
     </div>
   </dialog>
 
-  <!-- Ligne « point de départ » (le premier utilise l'adresse de la barre de recherche) -->
-  <template id="origin-tpl">
-    <div class="origin-row">
-      <div class="origin-head">
+  <!-- Critère d'une nature d'établissement : sources et paramètres de leurs isochrones -->
+  <template id="critere-tpl">
+    <div class="origin-row critere-row">
+      <label class="origin-head critere-head">
+        <input type="checkbox" class="critere-on" />
         <span class="origin-dot" aria-hidden="true"></span>
-        <span class="origin-title"></span>
-        <button type="button" class="origin-remove" title="Retirer ce point de départ" aria-label="Retirer ce point de départ">×</button>
-      </div>
-      <div class="ac-wrap origin-address">
-        <input type="text" placeholder="Adresse" autocomplete="off" spellcheck="false"
-               role="combobox" aria-autocomplete="both" aria-expanded="false" aria-label="Adresse du point de départ" />
-        <ul class="ac-list" role="listbox" hidden></ul>
-      </div>
-      <label class="origin-time">Temps max : <strong class="origin-time-val">15</strong> min
-        <input type="range" min="5" max="60" step="5" value="15" aria-label="Temps de trajet (min)" />
-        <span class="time-ticks" aria-hidden="true"><span data-label="5"></span><span></span><span data-label="15"></span><span></span><span></span><span data-label="30"></span><span></span><span></span><span data-label="45"></span><span></span><span></span><span data-label="60"></span></span>
+        <span class="origin-title critere-title"></span>
       </label>
-      <select aria-label="Mode de transport">
-        <option value="driving-car">Voiture</option>
-        <option value="cycling-regular">Vélo</option>
-        <option value="foot-walking">À pied</option>
-      </select>
+      <div class="critere-body" hidden>
+        <label class="origin-time">Temps max : <strong class="origin-time-val">15</strong> min
+          <input class="critere-time" type="range" min="5" max="60" step="5" value="15" aria-label="Temps de trajet (min)" />
+          <span class="time-ticks" aria-hidden="true"><span data-label="5"></span><span></span><span data-label="15"></span><span></span><span></span><span data-label="30"></span><span></span><span></span><span data-label="45"></span><span></span><span></span><span data-label="60"></span></span>
+        </label>
+        <select class="critere-transp" aria-label="Mode de transport">
+          <option value="driving-car">Voiture</option>
+          <option value="cycling-regular">Vélo</option>
+          <option value="foot-walking">À pied</option>
+        </select>
+        <div class="critere-secteurs">
+          <label><input type="checkbox" value="public" checked /> Public</label>
+          <label><input type="checkbox" value="privé" checked /> Privé</label>
+          <label><input type="checkbox" value="hors contrat" checked /> Hors contrat</label>
+        </div>
+        <div class="critere-taux">
+          <span>Taux de réussite</span>
+          <input class="taux-min" type="number" min="0" max="100" step="1" value="0" aria-label="Taux minimum (%)" />
+          –
+          <input class="taux-max" type="number" min="0" max="100" step="1" value="100" aria-label="Taux maximum (%)" />
+          %
+        </div>
+      </div>
     </div>
   </template>
 

@@ -2,13 +2,14 @@
 
 Structures de données partagées : corps de requête et de réponse de l'API
 (sérialisés en JSON) et types échangés entre paquets. Il ne contient pas de
-logique métier, hormis le classement des niveaux d'accès.
+logique métier, hormis le classement des niveaux d'accès et quelques
+utilitaires (clé de cache d'isochrone, position d'une source).
 
 ## Fichiers
 
 | Fichier | Contenu |
 | ------- | ------- |
-| `models.go` | Niveaux d'accès `Perms` (`AtLeast`, `Valid`) ; utilisateurs (`DvUser`, `UserRecord`, `OIDCIdentity`) ; corps des routes d'auth et de compte (`Credentials`, `AuthResponse`, `ProfileUpdate`…) ; recherche (`QueryParameters`, `Origine`, `Isochrone`, `IsoLevel`, `ZoneLevel`, `ListeEtablissementsAvecIsochrone`) ; données de la zone (`Etablissement`, `Resultat`, `CommuneSecurite`, `Fiscalite`, `ImmobilierZone`, `QuartierImmobilier`, `CommuneImmobilier`, `PrixM2`, `LogementSocialPosition`, `LogementSocialGroupe`). |
+| `models.go` | Niveaux d'accès `Perms` (`AtLeast`, `Valid`) ; utilisateurs (`DvUser`, `UserRecord`, `OIDCIdentity`) ; corps des routes d'auth et de compte (`Credentials`, `AuthResponse`, `ProfileUpdate`…) ; recherche (`SearchRequest`, `CritereNature`, `FiltresZone` et `Actif`, `Centre`, `Source` et `LonLat`, `ListeEtablissementsAvecIsochrone`, `Isochrone`, `IsoLevel`, `IsochroneKey` et `NewIsochroneKey`, valeurs acceptées `Natures` / `Secteurs` / `Transports`, `NaturePrimaire` et `NaturesPrimaire` (natures de critère que satisfait une école primaire) ; `Source.Critere` est la nature du critère qui a retenu la source) ; fiche d'un quartier (`ProximiteRequest`, `QuartierProximite`, `Proche`, `SecuriteCommune`) ; données de la zone (`Etablissement`, `Resultat`, `CommuneSecurite`, `Fiscalite`, `ImmobilierZone`, `QuartierImmobilier`, `CommuneImmobilier`, `PrixM2`, `LogementSocialPosition`, `LogementSocialGroupe`). |
 | `billing.go` | Facturation : `BillingSettings`, `CreditTransaction` et ses types (`topup`, `usage`, `refund`, `admin_adjust`, `welcome`), `Payment`, `TopupRequest`, `CreditAdjustment`. |
 
 ## Dépendances
@@ -34,4 +35,5 @@ risque de cycle.
 ## Tests
 
 `go test ./internal/models/` — noms des champs JSON (contrat avec le frontend),
-ordre et validité des niveaux d'accès.
+ordre et validité des niveaux d'accès, `FiltresZone.Actif`, `Source.LonLat`,
+`NewIsochroneKey` (arrondi au 1e-5 degré).

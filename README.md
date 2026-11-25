@@ -1,6 +1,6 @@
 [![CI](https://github.com/umaneldi/douceville/actions/workflows/docker-image.yml/badge.svg)](https://github.com/umaneldi/douceville/actions/workflows/docker-image.yml)
 [![Version Go](https://img.shields.io/github/go-mod/go-version/umaneldi/douceville?logo=go)](go.mod)
-[![Couverture](https://img.shields.io/badge/couverture-~86%25-brightgreen)](#développement)
+[![Couverture](https://img.shields.io/badge/couverture-~87%25-brightgreen)](#développement)
 [![Dernière version](https://img.shields.io/github/v/tag/umaneldi/douceville?label=version&sort=semver)](https://github.com/umaneldi/douceville/tags)
 [![Image Docker](https://img.shields.io/badge/image-ghcr.io-2496ED?logo=docker&logoColor=white)](https://github.com/umaneldi/douceville/pkgs/container/douceville)
 [![PostGIS](https://img.shields.io/badge/PostGIS-18--3.7-336791?logo=postgresql&logoColor=white)](https://postgis.net/)
@@ -8,20 +8,27 @@
 
 # Douceville
 
-Douceville aide à choisir où habiter. À partir d'un ou plusieurs **points de
-départ** (adresse + temps de trajet + mode de transport), le service calcule la
-**zone atteignable** depuis tous ces points (intersection des isochrones) et
-affiche sur une carte ce qu'elle contient :
+Douceville aide à choisir où habiter. L'utilisateur choisit un **centre** et un
+**rayon**, puis, pour chaque **nature d'établissement** scolaire (maternelle,
+élémentaire, collège, lycée), ses critères : secteurs, plage de taux de réussite,
+temps de trajet et mode de transport. Les **10 meilleurs établissements** du
+rayon pour chaque nature donnent chacun une isochrone ; la **zone** affichée est
+l'intersection, entre natures, de l'**union** des isochrones de chaque nature (on
+y est près d'au moins un établissement retenu de chaque nature), restreinte
+par des **filtres de zone** (prix au m², score de sécurité, fiscalité). La carte
+montre ce qu'elle contient :
 
 - les **établissements scolaires** et leurs résultats aux examens (bac, brevet) ;
 - la **sécurité** des communes (score de délinquance SSMSI) et leur **fiscalité
   locale** (taxe foncière, TEOM) ;
-- le **prix de l'immobilier** au m² (ventes DVF) par commune et par quartier IRIS ;
-- les **logements sociaux** (répertoire RPLS) ;
-- des **niveaux de temps de trajet** emboîtés (≤ 5 min, ≤ 10 min…) pour situer
-  chaque résultat dans la zone.
+- le **prix de l'immobilier** au m² (ventes DVF) par commune et par quartier IRIS
+  (les quartiers hors du filtre de prix ne sont pas colorés) ;
+- les **logements sociaux** (répertoire RPLS).
 
-L'état de la page (points de départ, filtres, couches, onglet) est reflété dans
+Un clic sur un quartier IRIS ouvre sa fiche : prix au m², sécurité, fiscalité et
+**distance à l'établissement le plus proche de chaque nature** recherchée.
+
+L'état de la page (centre, critères, filtres, couches, onglet) est reflété dans
 l'URL : un favori ou un lien partagé restaure la recherche.
 
 ## Sommaire
@@ -79,17 +86,25 @@ navigateur ──► / (UI statique embarquée, web/)
 
 ### Déroulement d'une recherche (`POST /api/etablissements`)
 
-1. Le prix de la recherche est débité du crédit de l'utilisateur (si la
-   facturation est active ; remboursé en cas d'échec).
-2. Chaque adresse de départ est géocodée (BAN) puis son isochrone est calculée
-   (OpenRouteService), en parallèle, avec des niveaux emboîtés tous les 5 min
-   (10 min au-delà de 50 min).
-3. PostGIS calcule l'intersection des isochrones : la **zone**, et ses niveaux
-   intérieurs.
-4. Les établissements, communes (sécurité, fiscalité), prix immobiliers et
-   logements sociaux de la zone sont lus en base ; chaque établissement et
-   logement social est étiqueté avec le plus petit niveau de temps qui le
-   contient.
+1. Le centre est géocodé (BAN).
+2. Pour chaque critère (une nature), PostGIS retient au plus 10 établissements
+   **sources** dans le rayon : ceux de la nature, des secteurs et de la plage de
+   taux de réussite demandés (taux = Σadmis / Σprésents, vue
+   `etablissement_taux` ; un établissement sans résultats n'est pas filtré),
+   classés par taux décroissant puis par distance au centre. Une **école
+   primaire** (nature `Primaire`) satisfait les critères `Maternelle` et
+   `Elementaire` : elle peut être source de chacun. Si une nature n'a
+   aucune source, la zone est vide (`criteres_vides`).
+3. Les isochrones des sources (temps et mode du critère de leur nature) sont lues
+   dans le **cache** (`isochrone_cache`) ; les manquantes sont **facturées**
+   (débit d'avance, remboursé en cas d'échec), calculées par OpenRouteService
+   (5 positions par requête) puis mises en cache.
+4. PostGIS unit les isochrones des sources de chaque critère, puis calcule
+   l'**intersection** de ces unions (`zone_brute`), puis la restreint aux quartiers IRIS qui respectent les
+   filtres de zone (`zone`).
+5. Les établissements (satisfaisant le critère de leur nature), communes
+   (sécurité, fiscalité), prix immobiliers et logements sociaux de la zone sont
+   lus en base.
 
 ## Organisation du dépôt
 
@@ -158,8 +173,9 @@ JWT_SECRET=dev-secret POSTGRES_HOST=127.0.0.1 go run ./cmd/server
    La vérification donne directement accès à l'application.
 3. Promouvez votre compte administrateur si besoin :
    `uv run scripts/set_user_perms.py set EMAIL admin`.
-4. Saisissez une adresse, un temps de trajet et un mode de transport, puis
-   **Rechercher**.
+4. Saisissez un centre et un rayon, cochez une ou plusieurs natures
+   d'établissement (temps de trajet, mode, secteurs, taux de réussite propres à
+   chacune), éventuellement des filtres de zone, puis **Rechercher**.
 
 > La recherche nécessite un `OPENROUTESERVICE_KEY` (isochrones) et des données
 > chargées en base (voir ci-dessous). Le géocodage utilise l'API publique de la
@@ -181,7 +197,7 @@ douceville -d douceville"`), et la plupart `--dry-run`.
 | 3 | `import_contours_iris.py` | `quartier` | IGN, contours IRIS (WFS, ou fichier sauvegardé avec `--save`) |
 | 4 | `import_immobilier_dvf.py` | `immobilier` | DVF géolocalisées |
 | 5 | `import_logement_social.py` | `logement_social` | RPLS |
-| 6 | `import_etablissements_parquet.py` | `etablissement` | Annuaire géolocalisé des établissements |
+| 6 | `import_etablissements_parquet.py` | `etablissement` (nature `Primaire` si le nom contient « primaire ») | Annuaire géolocalisé des établissements |
 | 7 | `import_resultats_parquet.py` | `resultat` | Indicateurs de résultats lycées / collèges |
 | 8 | `import_securite_parquet.py` | `securite` (+ rafraîchit `securite_score`) | SSMSI, délinquance communale |
 | 9 | `import_fiscalite_parquet.py` | `fiscalite` | DGFiP, fiscalité locale des particuliers |
@@ -232,6 +248,8 @@ lues par le backend ([`internal/config`](internal/config/README.md)) :
 | `BILLING_ENABLED`      | `false`       | Active la facturation prépayée (`true`/`1`/`yes`/`on`). Sinon tout est gratuit. |
 | `MOLLIE_API_KEY`       | — (requis si facturation) | Clé Mollie : `test_…` (paiements simulés) ou `live_…`. |
 | `MOLLIE_WEBHOOK_URL`   | `${PUBLIC_URL}/api/billing/webhook/mollie` | URL notifiée par Mollie (non transmise si locale). |
+| `ISOCHRONE_CACHE_DAYS` | `30`          | Durée de validité (jours) d'une isochrone en cache ; au-delà, elle est recalculée puis purgée. |
+| `ISOCHRONE_CACHE_MAX`  | `20000`       | Nombre maximal d'isochrones en cache ; au-delà, les moins récemment utilisées sont supprimées. |
 
 `sample.env` contient aussi des variables propres au déploiement
 (`TRAEFIK_NETWORK`, `HOST`, `HOME_*`…), lues par `docker-compose.yml` et non par
@@ -272,32 +290,52 @@ exigent un header `Authorization: Bearer <token>` **et** un compte de niveau
 
 | Méthode | Route | Auth | Description |
 | ------- | ----- | :--: | ----------- |
-| `POST` | `/api/etablissements` | ✓ | Recherche dans la zone atteignable (payante). |
+| `POST` | `/api/etablissements` | ✓ | Recherche par établissements (payante : isochrones calculées). |
+| `POST` | `/api/quartiers/{iris}/proximite` | ✓ | Fiche d'un quartier IRIS et établissement le plus proche par critère (gratuite). |
 | `GET` | `/api/etablissement/{uai}` | ✓ | Détail d'un établissement et de ses résultats. |
 | `GET` | `/api/isochrone` | ✓ | Isochrone depuis des coordonnées (`lat`, `lon`, `dist`, `transp`) (payante). |
 | `GET` | `/api/address/suggest?q=…` | ✓ | Autocomplétion d'adresse (5 suggestions, à partir de 3 caractères ; gratuite). |
 
-Corps de `POST /api/etablissements` (`dist` est un **temps en secondes** ;
-`transp` vaut `driving-car`, `cycling-regular` ou `foot-walking` ; au plus 10
-points de départ) :
+Corps de `POST /api/etablissements` : un centre (adresse), un rayon en km
+(]0, 50]), **un critère par nature** (1 à 4, natures `Maternelle`,
+`Elementaire`, `Collège`, `Lycée`, sans doublon) et des filtres de zone
+facultatifs. Dans un critère, `dist` est un **temps en secondes** (60–3600),
+`transp` vaut `driving-car` (défaut), `cycling-regular` ou `foot-walking`,
+`secteur` (vide : tous) parmi `public`, `privé`, `hors contrat`, et
+`taux_min`/`taux_max` en % (`taux_max` absent : 100). Paramètres invalides :
+`422`. `Primaire` n'est pas un critère : les écoles primaires sont retenues par
+les critères `Maternelle` et `Elementaire`.
 
 ```json
 {
-  "origines": [
-    {"adresse": "1 rue de la Paix, Paris", "dist": 900, "transp": "driving-car"},
-    {"adresse": "Gare de Lyon, Paris", "dist": 1800, "transp": "cycling-regular"}
+  "centre": "Toulouse",
+  "rayon_km": 10,
+  "criteres": [
+    {"nature": "Lycée", "secteur": ["public", "privé"], "taux_min": 85, "taux_max": 100,
+     "dist": 1200, "transp": "driving-car"},
+    {"nature": "Collège", "secteur": ["public"], "dist": 600, "transp": "foot-walking"}
   ],
-  "nature": ["Lycée", "Collège"],
-  "secteur": ["public"]
+  "prix_m2_min": null, "prix_m2_max": 4000, "securite_min": 50, "fiscalite_max": 45
 }
 ```
 
-La forme historique à un seul point (`adresse`, `dist`, `transp` à la racine)
-reste acceptée. La réponse contient `etablissements`, `isochrones` (une par
-point de départ), `zone` et `zone_levels` (GeoJSON), `communes` (contour, score
-de sécurité, fiscalité), `immobilier` (prix au m² par commune et par IRIS) et
-`logements_sociaux`. Les structures sont décrites dans
-[`internal/models`](internal/models/README.md).
+La réponse contient `centre` (`{lon, lat, rayon_km}`), `sources` (établissements
+retenus, avec `taux`, la nature `critere` du critère qui les a retenus — elle
+diffère de `nature` pour une école primaire, qui peut figurer une fois par
+critère —, `dist`, `transp` et leur anneau `isochrone`),
+`criteres_vides` (natures sans source), `zone_brute` (intersection,
+entre natures, des unions d'isochrones) et `zone` (après filtres) en GeoJSON — `null` si vides —,
+`etablissements`, `communes` (contour, score de sécurité, fiscalité),
+`immobilier` (prix au m² par commune et par IRIS) et `logements_sociaux`.
+
+`POST /api/quartiers/{iris}/proximite` reçoit `{"criteres": [...]}` (mêmes
+critères ; `dist` et `transp` ignorés) et renvoie le prix au m² de l'IRIS et de
+sa commune, la sécurité et la fiscalité de la commune, et `proches` : pour
+chaque critère, l'établissement le plus proche qui le satisfait (sans limite de
+rayon), avec sa distance **à vol d'oiseau** en mètres (`distance_m`, `null` si
+aucun) depuis un point intérieur du quartier. IRIS inconnu : `404`.
+
+Les structures sont décrites dans [`internal/models`](internal/models/README.md).
 
 ### Facturation
 
@@ -385,9 +423,11 @@ Si `BILLING_ENABLED=true`, chaque requête payante est débitée du **solde
 prépayé** du compte (`utilisateur.balance_cents`), que l'utilisateur recharge
 par [Mollie](https://www.mollie.com) depuis *Paramètres du compte → Crédit*.
 
-- `POST /api/etablissements` coûte *prix par point de départ × nombre de points
-  de départ* (chaque point est un appel OpenRouteService) ; `GET /api/isochrone`
-  a son propre prix. L'autocomplétion d'adresse est gratuite.
+- `POST /api/etablissements` coûte *prix par isochrone × nombre d'isochrones
+  calculées* (réglage `price_per_origin_cents`) : les isochrones déjà en cache
+  sont gratuites, une recherche entièrement en cache ne coûte rien. `GET
+  /api/isochrone` a son propre prix. La fiche d'un quartier et l'autocomplétion
+  d'adresse sont gratuites.
 - Le prix est débité **avant** les appels externes, de façon atomique (le solde
   ne peut pas devenir négatif) ; si la requête échoue, il est remboursé. Solde
   insuffisant : `402`, `code=insufficient_credit`.
@@ -440,7 +480,7 @@ go test ./...
     -p 127.0.0.1:55432:5432 postgis/postgis:18-3.7
   DV_TEST_DSN=postgres://test:test@127.0.0.1:55432/test go test -cover ./...
   ```
-- **Couverture** — environ 86 % des instructions avec les tests d'intégration
+- **Couverture** — environ 87 % des instructions avec les tests d'intégration
   (`go test -coverprofile=cov.out ./... && go tool cover -func=cov.out`).
   Toute évolution doit être accompagnée de tests : voir [`CLAUDE.md`](CLAUDE.md).
 - **Frontend** — HTML/CSS/JS statique sans étape de build dans `web/`, embarqué

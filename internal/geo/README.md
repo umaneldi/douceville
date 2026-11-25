@@ -8,7 +8,7 @@ l'autocomplétion d'adresses. Plus quelques utilitaires de conversion en WKT.
 
 | Fichier | Contenu |
 | ------- | ------- |
-| `ors.go` | `ORSClient.CalcIsochrone` : isochrones emboîtées autour d'un point `[lon, lat]` pour un temps maximal et un pas donnés (profils `driving-car` par défaut, `cycling-regular`, `foot-walking`…). `LevelInterval` : pas de 5 min, ou 10 min au-delà de 50 min (ORS limite une requête à 10 isochrones). `PolygonWKT` / `RingWKT` : anneau → `POLYGON((…))`. |
+| `ors.go` | `ORSClient.CalcIsochrone` : isochrones emboîtées autour d'un point `[lon, lat]` pour un temps maximal et un pas donnés (`GET /api/isochrone`). `ORSClient.CalcIsochrones` : isochrone d'un seul temps pour chaque position d'une liste, par requêtes de `orsMaxLocations` (5) positions, résultats remis dans l'ordre grâce à `group_index` (recherche par établissements). Profils `driving-car` par défaut, `cycling-regular`, `foot-walking`. `PolygonWKT` / `RingWKT` : anneau → `POLYGON((…))`. |
 | `ban.go` | `BANClient` : `Geocode` (adresse → coordonnées) et `Suggest` (autocomplétion). Cible `http://<ADDOK_HOST>:7878`, ou l'API publique `https://data.geopf.fr/geocodage` si l'hôte est vide. |
 
 ## Dépendances
@@ -23,8 +23,11 @@ l'autocomplétion d'adresses. Plus quelques utilitaires de conversion en WKT.
 - ORS renvoie du GeoJSON : l'en-tête `Accept` doit accepter
   `application/geo+json` (sinon `406`).
 - Les niveaux d'une isochrone sont triés par temps croissant ; `Geometry` est
-  celle du temps maximal.
-- Chaque appel ORS est facturé à l'utilisateur (voir `internal/api`).
+  celle du temps maximal. `CalcIsochrones` ne demande qu'un temps (pas de
+  niveaux) et échoue si une position n'a pas de géométrie dans la réponse.
+- Chaque isochrone calculée est facturée à l'utilisateur ; celles des
+  recherches sont mises en cache en base (voir `internal/api` et
+  `internal/store`).
 
 ## Tests
 
@@ -33,4 +36,6 @@ contre des serveurs `httptest`. Les URL fixes (API publique ORS) ou dérivées
 d'un nom d'hôte (addok) sont redirigées vers le serveur de test par le helper
 `redirect`, un `http.Client` dont le transport réécrit l'hôte. Couvre aussi
 les erreurs (statut HTTP, JSON invalide, réponse vide, serveur injoignable),
-`LevelInterval` et la conversion WKT.
+le découpage en lots de `CalcIsochrones` (7 positions → 2 requêtes, réponse
+dans le désordre, géométrie manquante, `group_index` invalide) et la
+conversion WKT.

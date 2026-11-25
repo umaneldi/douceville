@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/umaneldi/douceville/internal/models"
 )
 
 // Zone de recherche des tests : le carré lon 2–3, lat 48–49.
@@ -89,32 +91,52 @@ func TestEtablissementsIntegration(t *testing.T) {
 		t.Errorf("unknown UAI = %+v, %v", e, err)
 	}
 
-	uais := func(nature, secteur []string) []string {
+	uais := func(criteres []models.CritereNature) []string {
 		t.Helper()
-		etabs, err := s.FindEtablissementsInZone(ctx, testZone, nature, secteur)
+		etabs, err := s.FindEtablissementsInZone(ctx, testZone, criteres)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var out []string
+		out := []string{}
 		for _, e := range etabs {
 			out = append(out, e.UAI)
-			if e.UAI == "A" && len(e.Resultats) != 3 {
-				t.Errorf("results not loaded: %+v", e.Resultats)
+			if e.UAI == "A" && (len(e.Resultats) != 3 || e.Taux == nil) {
+				t.Errorf("results or taux not loaded: %+v, taux %v", e.Resultats, e.Taux)
 			}
 		}
 		return out
 	}
-	if got := uais(nil, nil); len(got) != 2 {
-		t.Errorf("no filter: %v, want [A B]", got)
+	all := func(nature string, secteur ...string) models.CritereNature {
+		return models.CritereNature{Nature: nature, Secteur: secteur, TauxMax: 100}
 	}
-	if got := uais([]string{"Lycée"}, nil); len(got) != 1 || got[0] != "A" {
-		t.Errorf("nature filter: %v", got)
+	// Tri par nature : Collège B, puis Lycée A.
+	if got := fmt.Sprint(uais(nil)); got != "[B A]" {
+		t.Errorf("no criteria: %v, want [B A]", got)
 	}
-	if got := uais(nil, []string{"privé"}); len(got) != 1 || got[0] != "B" {
-		t.Errorf("secteur filter: %v", got)
+	if got := fmt.Sprint(uais([]models.CritereNature{all("Lycée")})); got != "[A]" {
+		t.Errorf("nature criteria: %v, want [A]", got)
 	}
-	if got := uais([]string{"Collège"}, []string{"public"}); len(got) != 0 {
-		t.Errorf("combined filters: %v", got)
+	if got := fmt.Sprint(uais([]models.CritereNature{all("Lycée"), all("Collège", "privé")})); got != "[B A]" {
+		t.Errorf("two criteria: %v, want [B A]", got)
+	}
+	if got := fmt.Sprint(uais([]models.CritereNature{all("Collège", "public")})); got != "[]" {
+		t.Errorf("secteur criteria: %v, want []", got)
+	}
+	// Taux de A : (90 + 99 + 15) / (100 + 110 + 20) = 88,7 %.
+	strict := all("Lycée")
+	strict.TauxMin = 90
+	if got := fmt.Sprint(uais([]models.CritereNature{strict})); got != "[]" {
+		t.Errorf("taux >= 90: %v, want []", got)
+	}
+	strict.TauxMin = 88
+	if got := fmt.Sprint(uais([]models.CritereNature{strict})); got != "[A]" {
+		t.Errorf("taux >= 88: %v, want [A]", got)
+	}
+	// B n'a pas de résultats : jamais exclu par le taux.
+	college := all("Collège")
+	college.TauxMin = 99
+	if got := fmt.Sprint(uais([]models.CritereNature{college})); got != "[B]" {
+		t.Errorf("no results: %v, want [B]", got)
 	}
 }
 
@@ -217,28 +239,61 @@ func TestLogementsSociauxInZoneIntegration(t *testing.T) {
 	}
 }
 
-func TestIntersectZonesIntegration(t *testing.T) {
+func TestIntersectUnionsIntegration(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 
-	if _, _, _, err := s.IntersectZones(ctx, nil); err == nil {
-		t.Error("no polygon: expected an error")
+	if _, _, _, err := s.IntersectUnions(ctx, nil); err == nil {
+		t.Error("no group: expected an error")
+	}
+	if _, _, _, err := s.IntersectUnions(ctx, [][]string{{testZone}, {}}); err == nil {
+		t.Error("empty group: expected an error")
 	}
 
-	wkt, gj, empty, err := s.IntersectZones(ctx, []string{testZone})
+	wkt, gj, empty, err := s.IntersectUnions(ctx, [][]string{{testZone}})
 	if err != nil || empty || wkt == "" || !json.Valid(gj) {
 		t.Errorf("single polygon = %q, %s, %v, %v", wkt, gj, empty, err)
 	}
 
+	area := func(wkt string) float64 {
+		t.Helper()
+		var a float64
+		if err := s.pool.QueryRow(ctx, `SELECT ST_Area(ST_GeomFromText($1))`, wkt).Scan(&a); err != nil {
+			t.Fatalf("area of %q: %v", wkt, err)
+		}
+		return a
+	}
+
 	// Deux carrés qui se chevauchent sur lon 2.5–3 : intersection non vide,
 	// dont le WKT est réutilisable par les requêtes de zone.
-	wkt, _, empty, err = s.IntersectZones(ctx, []string{testZone, "POLYGON((2.5 48,3.5 48,3.5 49,2.5 49,2.5 48))"})
+	wkt, _, empty, err = s.IntersectUnions(ctx, [][]string{{testZone}, {"POLYGON((2.5 48,3.5 48,3.5 49,2.5 49,2.5 48))"}})
 	if err != nil || empty {
 		t.Fatalf("overlap = %v, %v", empty, err)
 	}
-	var area float64
-	if err := s.pool.QueryRow(ctx, `SELECT ST_Area(ST_GeomFromText($1))`, wkt).Scan(&area); err != nil || area < 0.49 || area > 0.51 {
-		t.Errorf("overlap area = %v (%v), want 0.5", area, err)
+	if a := area(wkt); a < 0.49 || a > 0.51 {
+		t.Errorf("overlap area = %v, want 0.5", a)
+	}
+
+	// Union dans un groupe, intersection entre groupes : A = [0,1]×[0,1] et
+	// B = [2,3]×[0,1] (disjoints, même critère) ; C = [0.5,2.5]×[0,1] chevauche
+	// chacun sur 0.5. L'intersection stricte des trois serait vide.
+	a := "POLYGON((0 0,1 0,1 1,0 1,0 0))"
+	b := "POLYGON((2 0,3 0,3 1,2 1,2 0))"
+	c := "POLYGON((0.5 0,2.5 0,2.5 1,0.5 1,0.5 0))"
+	wkt, _, empty, err = s.IntersectUnions(ctx, [][]string{{a, b}, {c}})
+	if err != nil || empty {
+		t.Fatalf("union then intersection = %v, %v", empty, err)
+	}
+	if got := area(wkt); got < 0.99 || got > 1.01 {
+		t.Errorf("union then intersection area = %v, want 1", got)
+	}
+	// Union de polygones qui se chevauchent : la surface commune compte une fois.
+	wkt, _, empty, err = s.IntersectUnions(ctx, [][]string{{a, c}})
+	if err != nil || empty {
+		t.Fatalf("overlapping union = %v, %v", empty, err)
+	}
+	if got := area(wkt); got < 2.49 || got > 2.51 {
+		t.Errorf("overlapping union area = %v, want 2.5", got)
 	}
 
 	// Carrés disjoints, ou qui ne se touchent que par un bord : zone vide.
@@ -246,31 +301,13 @@ func TestIntersectZonesIntegration(t *testing.T) {
 		"POLYGON((10 10,11 10,11 11,10 11,10 10))",
 		"POLYGON((3 48,4 48,4 49,3 49,3 48))",
 	} {
-		if _, gj, empty, err := s.IntersectZones(ctx, []string{testZone, other}); err != nil || !empty || gj != nil {
+		if _, gj, empty, err := s.IntersectUnions(ctx, [][]string{{testZone}, {other}}); err != nil || !empty || gj != nil {
 			t.Errorf("%s: empty = %v, geojson = %s, err = %v", other, empty, gj, err)
 		}
 	}
 
-	// Polygone invalide (papillon) : rendu valide avant l'intersection.
-	if _, _, empty, err := s.IntersectZones(ctx, []string{"POLYGON((2 48,3 49,3 48,2 49,2 48))"}); err != nil || empty {
+	// Polygone invalide (papillon) : rendu valide avant l'union.
+	if _, _, empty, err := s.IntersectUnions(ctx, [][]string{{"POLYGON((2 48,3 49,3 48,2 49,2 48))"}}); err != nil || empty {
 		t.Errorf("bow-tie = %v, %v", empty, err)
-	}
-}
-
-func TestPointLevelsIntegration(t *testing.T) {
-	s, _ := newTestStore(t)
-	ctx := context.Background()
-
-	inner := "POLYGON((2.4 48.4,2.6 48.4,2.6 48.6,2.4 48.6,2.4 48.4))"
-	got, err := s.PointLevels(ctx, [][2]float64{{2.5, 48.5}, {2.9, 48.9}, {10, 10}}, []string{inner, testZone})
-	if err != nil || len(got) != 3 || got[0] != 0 || got[1] != 1 || got[2] != -1 {
-		t.Errorf("PointLevels = %v, %v; want [0 1 -1]", got, err)
-	}
-
-	if got, err := s.PointLevels(ctx, [][2]float64{{2.5, 48.5}}, nil); err != nil || len(got) != 1 || got[0] != -1 {
-		t.Errorf("no level = %v, %v", got, err)
-	}
-	if got, err := s.PointLevels(ctx, nil, []string{testZone}); err != nil || len(got) != 0 {
-		t.Errorf("no point = %v, %v", got, err)
 	}
 }

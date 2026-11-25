@@ -63,9 +63,34 @@ type Store interface {
 	DeleteUser(ctx context.Context, id string) (bool, error)
 	// GetEtablissementByUAI renvoie un établissement et ses résultats, ou (nil, nil) si absent.
 	GetEtablissementByUAI(ctx context.Context, uai string) (*models.Etablissement, error)
-	// FindEtablissementsInZone renvoie les établissements contenus dans le polygone WKT,
-	// filtrés optionnellement par nature et secteur.
-	FindEtablissementsInZone(ctx context.Context, polygonWKT string, nature, secteur []string) ([]models.Etablissement, error)
+	// FindEtablissementsInZone renvoie les établissements contenus dans le
+	// polygone WKT qui satisfont le critère de leur nature (nature, secteurs,
+	// taux de réussite ; une école primaire satisfait les critères maternelle
+	// et élémentaire), avec leur taux et leurs résultats ; sans critère, tous
+	// les établissements du polygone.
+	FindEtablissementsInZone(ctx context.Context, polygonWKT string, criteres []models.CritereNature) ([]models.Etablissement, error)
+	// SelectSourceEtablissements renvoie, pour chaque critère, au plus
+	// parNature établissements de sa nature situés à moins de rayonM mètres de
+	// centre ([lon, lat]) et satisfaisant le critère, classés par taux de
+	// réussite décroissant (inconnu en dernier) puis par distance au centre.
+	// Chaque source porte la nature (Critere), le temps et le mode de
+	// transport de son critère ; une école primaire peut être retenue pour
+	// les critères maternelle et élémentaire.
+	SelectSourceEtablissements(ctx context.Context, centre [2]float64, rayonM float64, criteres []models.CritereNature, parNature int) ([]models.Source, error)
+	// FilterZone restreint le polygone WKT (coordonnées WGS84) aux quartiers
+	// IRIS satisfaisant les filtres f ; mêmes résultats que IntersectUnions.
+	FilterZone(ctx context.Context, polygonWKT string, f models.FiltresZone) (wkt string, geojson json.RawMessage, empty bool, err error)
+	// GetCachedIsochrones renvoie les anneaux en cache des clés données, créés
+	// il y a moins de maxAge, et les marque utilisés.
+	GetCachedIsochrones(ctx context.Context, keys []models.IsochroneKey, maxAge time.Duration) (map[models.IsochroneKey][][2]float64, error)
+	// PutCachedIsochrones enregistre (ou remplace) des isochrones en cache, puis
+	// purge les entrées plus anciennes que maxAge et, au-delà de maxEntries
+	// (si > 0), les moins récemment utilisées.
+	PutCachedIsochrones(ctx context.Context, entries map[models.IsochroneKey][][2]float64, maxAge time.Duration, maxEntries int) error
+	// QuartierProximite renvoie la fiche du quartier IRIS (prix, sécurité,
+	// fiscalité) et, pour chaque critère, l'établissement le plus proche qui le
+	// satisfait ; (nil, nil) si l'IRIS est inconnu.
+	QuartierProximite(ctx context.Context, iris string, criteres []models.CritereNature) (*models.QuartierProximite, error)
 	// FindCommunesInZone renvoie les communes dont le contour intersecte le
 	// polygone WKT (coordonnées WGS84), avec leur score de sécurité de la
 	// dernière année disponible et leur fiscalité locale du dernier exercice.
@@ -77,13 +102,11 @@ type Store interface {
 	// FindLogementsSociauxInZone renvoie les logements sociaux géolocalisés
 	// contenus dans le polygone WKT, regroupés par position.
 	FindLogementsSociauxInZone(ctx context.Context, polygonWKT string) ([]models.LogementSocialPosition, error)
-	// IntersectZones calcule l'intersection (surfacique) des polygones WKT
-	// donnés. Elle renvoie son WKT (sans SRID, utilisable par les méthodes
-	// Find*InZone), sa géométrie GeoJSON, et empty=true si elle est vide.
-	IntersectZones(ctx context.Context, polygonWKTs []string) (wkt string, geojson json.RawMessage, empty bool, err error)
-	// PointLevels renvoie, pour chaque point [lon, lat], l'indice du premier
-	// polygone WKT de levelWKTs qui le contient (-1 si aucun).
-	PointLevels(ctx context.Context, lonlats [][2]float64, levelWKTs []string) ([]int, error)
+	// IntersectUnions calcule l'union des polygones WKT de chaque groupe, puis
+	// l'intersection (surfacique) de ces unions. Elle renvoie son WKT (sans
+	// SRID, utilisable par les méthodes Find*InZone), sa géométrie GeoJSON, et
+	// empty=true si elle est vide. Il faut au moins un groupe, et aucun vide.
+	IntersectUnions(ctx context.Context, groups [][]string) (wkt string, geojson json.RawMessage, empty bool, err error)
 
 	// GetBillingSettings renvoie les tarifs et paramètres de facturation.
 	GetBillingSettings(ctx context.Context) (models.BillingSettings, error)

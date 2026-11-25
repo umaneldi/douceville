@@ -153,11 +153,41 @@ func (f failingStore) GetEtablissementByUAI(ctx context.Context, uai string) (*m
 	}
 	return f.mockStore.GetEtablissementByUAI(ctx, uai)
 }
-func (f failingStore) FindEtablissementsInZone(ctx context.Context, wkt string, nature, secteur []string) ([]models.Etablissement, error) {
+func (f failingStore) FindEtablissementsInZone(ctx context.Context, wkt string, criteres []models.CritereNature) ([]models.Etablissement, error) {
 	if f.is("FindEtablissementsInZone") {
 		return nil, errDB
 	}
-	return f.mockStore.FindEtablissementsInZone(ctx, wkt, nature, secteur)
+	return f.mockStore.FindEtablissementsInZone(ctx, wkt, criteres)
+}
+func (f failingStore) SelectSourceEtablissements(ctx context.Context, centre [2]float64, rayonM float64, criteres []models.CritereNature, parNature int) ([]models.Source, error) {
+	if f.is("SelectSourceEtablissements") {
+		return nil, errDB
+	}
+	return f.mockStore.SelectSourceEtablissements(ctx, centre, rayonM, criteres, parNature)
+}
+func (f failingStore) FilterZone(ctx context.Context, wkt string, fz models.FiltresZone) (string, json.RawMessage, bool, error) {
+	if f.is("FilterZone") {
+		return "", nil, true, errDB
+	}
+	return f.mockStore.FilterZone(ctx, wkt, fz)
+}
+func (f failingStore) GetCachedIsochrones(ctx context.Context, keys []models.IsochroneKey, maxAge time.Duration) (map[models.IsochroneKey][][2]float64, error) {
+	if f.is("GetCachedIsochrones") {
+		return nil, errDB
+	}
+	return f.mockStore.GetCachedIsochrones(ctx, keys, maxAge)
+}
+func (f failingStore) PutCachedIsochrones(ctx context.Context, entries map[models.IsochroneKey][][2]float64, maxAge time.Duration, maxEntries int) error {
+	if f.is("PutCachedIsochrones") {
+		return errDB
+	}
+	return f.mockStore.PutCachedIsochrones(ctx, entries, maxAge, maxEntries)
+}
+func (f failingStore) QuartierProximite(ctx context.Context, iris string, criteres []models.CritereNature) (*models.QuartierProximite, error) {
+	if f.is("QuartierProximite") {
+		return nil, errDB
+	}
+	return f.mockStore.QuartierProximite(ctx, iris, criteres)
 }
 func (f failingStore) FindCommunesInZone(ctx context.Context, wkt string) ([]models.CommuneSecurite, error) {
 	if f.is("FindCommunesInZone") {
@@ -177,17 +207,11 @@ func (f failingStore) FindLogementsSociauxInZone(ctx context.Context, wkt string
 	}
 	return f.mockStore.FindLogementsSociauxInZone(ctx, wkt)
 }
-func (f failingStore) IntersectZones(ctx context.Context, wkts []string) (string, json.RawMessage, bool, error) {
-	if f.is("IntersectZones") {
+func (f failingStore) IntersectUnions(ctx context.Context, groups [][]string) (string, json.RawMessage, bool, error) {
+	if f.is("IntersectUnions") {
 		return "", nil, true, errDB
 	}
-	return f.mockStore.IntersectZones(ctx, wkts)
-}
-func (f failingStore) PointLevels(ctx context.Context, lonlats [][2]float64, wkts []string) ([]int, error) {
-	if f.is("PointLevels") {
-		return nil, errDB
-	}
-	return f.mockStore.PointLevels(ctx, lonlats, wkts)
+	return f.mockStore.IntersectUnions(ctx, groups)
 }
 
 // callAs exécute une requête authentifiée (compte u1) à travers le routeur ;
@@ -212,7 +236,8 @@ func callAs(t *testing.T, h *Handlers, users auth.UserLookup, method, path, body
 // TestStoreFailures vérifie que chaque erreur de la base est convertie en une
 // réponse d'erreur propre (jamais un 200 ni une panique).
 func TestStoreFailures(t *testing.T) {
-	const search = `{"adresse":"a","dist":600}`
+	const search = threeOrigins
+	const filtered = `{"centre":"a","rayon_km":5,"criteres":[{"nature":"Lycée","dist":600}],"prix_m2_max":4000}`
 	cases := []struct {
 		fail         string
 		perms        models.Perms
@@ -235,12 +260,14 @@ func TestStoreFailures(t *testing.T) {
 		{"GetPayment", models.PermsGranted, http.MethodPost, "/api/billing/webhook/mollie", "id=tr_a", 500},
 		{"GetBillingSettings", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
 		{"DebitCredit", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
-		{"IntersectZones", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
+		{"IntersectUnions", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
 		{"FindEtablissementsInZone", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
 		{"FindCommunesInZone", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
 		{"FindImmobilierInZone", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
 		{"FindLogementsSociauxInZone", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
-		{"PointLevels", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
+		{"SelectSourceEtablissements", models.PermsGranted, http.MethodPost, "/api/etablissements", search, 500},
+		{"FilterZone", models.PermsGranted, http.MethodPost, "/api/etablissements", filtered, 500},
+		{"QuartierProximite", models.PermsGranted, http.MethodPost, "/api/quartiers/315550101/proximite", `{"criteres":[]}`, 500},
 		{"GetEtablissementByUAI", models.PermsGranted, http.MethodGet, "/api/etablissement/A", "", 500},
 		{"RevokeToken", models.PermsGranted, http.MethodPost, "/api/auth/logout", "", 500},
 		{"UpdateProfile", models.PermsGranted, http.MethodPatch, "/api/user", `{"first_name":"A"}`, 500},
@@ -287,7 +314,7 @@ func TestStoreFailures(t *testing.T) {
 func TestSearchRefundedOnStoreFailure(t *testing.T) {
 	h, st, _ := billed(t, models.PermsGranted, 100)
 	h.Store = failingStore{mockStore: st, fail: "FindCommunesInZone"}
-	if rr := callAs(t, h, st, http.MethodPost, "/api/etablissements", `{"adresse":"a","dist":600}`); rr.Code != 500 {
+	if rr := callAs(t, h, st, http.MethodPost, "/api/etablissements", threeOrigins); rr.Code != 500 {
 		t.Fatalf("status = %d", rr.Code)
 	}
 	if st.bill.balances["u1"] != 100 {
