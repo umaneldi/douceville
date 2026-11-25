@@ -25,11 +25,21 @@ montre ce qu'elle contient :
   (les quartiers hors du filtre de prix ne sont pas colorés) ;
 - les **logements sociaux** (répertoire RPLS).
 
-Un clic sur un quartier IRIS ouvre sa fiche : prix au m², sécurité, fiscalité et
-**distance à l'établissement le plus proche de chaque nature** recherchée. Les
-**itinéraires** du quartier vers chacun de ces établissements (mode de
-transport du critère de la nature) sont tracés sur la carte, avec leur durée,
-tant que la fiche est ouverte.
+Sur la carte, seule la zone retenue est tracée (contour orange épais, non
+rempli), avec le cercle du rayon de recherche ; les isochrones de chaque
+établissement source et la zone avant filtres de zone ne sont pas affichées.
+
+Le panneau de gauche comporte deux zones repliables : les **paramètres de
+recherche** et le **quartier sélectionné**. Une recherche aboutie replie la
+première et déplie la seconde (si la zone est vide, les paramètres restent
+dépliés pour afficher l'explication). Un clic sur un quartier IRIS le
+sélectionne (contour en pointillés sur la carte) et affiche sa fiche dans cette
+seconde zone : prix au m², sécurité, fiscalité et **distance à l'établissement
+le plus proche de chaque nature** recherchée. Les **itinéraires** du quartier
+vers chacun de ces établissements (mode de transport du critère de la nature)
+sont tracés sur la carte, avec leur durée, tant que le quartier reste
+sélectionné. Sans quartier sélectionné (clic hors quartier, bouton « × »,
+nouvelle recherche), la zone est vide.
 
 Le panneau de droite résume la zone : répartition des établissements par
 nature, histogramme des taux de réussite (sélection de tranches mise en avant

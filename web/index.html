@@ -86,7 +86,8 @@
 
           <hr class="sep" />
 
-          <h2 class="panel-title">Filtres</h2>
+          <details id="search-fold" class="fold" open>
+          <summary class="panel-title">Paramètres de recherche</summary>
           <form id="search-form">
             <h3 class="lbl">Centre de la recherche</h3>
             <p class="hint">Les établissements sont cherchés dans ce rayon. La zone affichée est
@@ -127,6 +128,12 @@
           </form>
 
           <div id="results-summary" class="results-summary" hidden></div>
+          </details>
+
+          <details id="quartier-fold" class="fold" open>
+            <summary class="panel-title">Quartier sélectionné</summary>
+            <div id="quartier-info" class="quartier-info"></div>
+          </details>
         </aside>
 
         <div class="map-wrap">

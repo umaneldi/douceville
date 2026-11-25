@@ -661,9 +661,46 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .popup-table th { background: #f1f5f9; }
 .popup-scroll { max-height: 14rem; overflow-y: auto; }
 
-/* Fiche d'un lieu (clic sur une choroplèthe) */
-.place-popup .muted { color: #64748b; font-size: 0.9em; }
-.place-section { margin-top: 0.45rem; padding-top: 0.35rem; border-top: 1px solid #e2e8f0; }
+/* Zones repliables du panneau de gauche */
+.fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::before {
+  content: "▸";
+  color: var(--muted);
+  font-size: 0.8em;
+  transition: transform 0.15s;
+}
+.fold[open] > summary::before { transform: rotate(90deg); }
+.fold:not([open]) > summary { margin-bottom: 0; }
+.fold + .fold { margin-top: 1.1rem; padding-top: 1.1rem; border-top: 1px dashed var(--border); }
+
+/* Quartier sélectionné (clic sur une choroplèthe) */
+.quartier-info { font-size: 0.85rem; }
+.quartier-info .muted { color: var(--muted); font-size: 0.9em; }
+.quartier-head { display: flex; align-items: flex-start; gap: 0.5rem; }
+.quartier-head .popup-title { flex: 1; min-width: 0; }
+.quartier-clear {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.quartier-clear:hover { color: var(--text); }
+.place-section { margin-top: 0.45rem; padding-top: 0.35rem; border-top: 1px solid var(--border); }
 .place-section-title { font-weight: 600; margin-bottom: 0.15rem; }
 .place-times { list-style: none; margin: 0; padding: 0; }
 .place-times li { display: flex; align-items: baseline; gap: 0.4rem; }

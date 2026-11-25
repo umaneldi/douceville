@@ -902,7 +902,7 @@ function initMap() {
   logementRenderer = L.canvas({ pane: "logements" });
   logementLayer = L.layerGroup(); // désactivée par défaut
   isoLayer = L.layerGroup().addTo(map);
-  // Itinéraires de la fiche d'un quartier : au-dessus de la zone.
+  // Quartier sélectionné (contour et itinéraires) : au-dessus de la zone.
   routeLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   const layers = L.control.layers(
@@ -926,8 +926,8 @@ function initMap() {
       e.stopPropagation();
     }),
   );
-  // Clic sur une choroplèthe : fiche détaillée du lieu.
-  for (const l of [communeLayer, immoLayer, fiscLayer]) l.on("click", (e) => openPlaceCard(e.latlng));
+  // Clic sur une choroplèthe : sélection du quartier IRIS (zone « Quartier sélectionné »).
+  for (const l of [communeLayer, immoLayer, fiscLayer]) l.on("click", (e) => selectQuartier(e.latlng));
   securityLegend().addTo(map);
   immoLegend().addTo(map);
   fiscLegend().addTo(map);
@@ -1062,9 +1062,9 @@ function communeTooltip(p) {
 // ---------------------------------------------------------------------------
 // Isochrones et zone de recherche
 // ---------------------------------------------------------------------------
-const ZONE_COLOR = "#eab308";
-const ZONE_STROKE = "#ca8a04";
-const ZONE_ALPHA = 0.25;
+// Zone retenue : non remplie (choroplèthes lisibles), contour orange épais.
+const ZONE_STROKE = "#f97316";
+const ZONE_WEIGHT = 4;
 
 function securityLegend() {
   const legend = L.control({ position: "bottomright" });
@@ -1446,13 +1446,15 @@ function renderFiscalite(communes) {
 }
 
 // ---------------------------------------------------------------------------
-// Fiche d'un lieu : clic sur une choroplèthe → popup regroupant prix au m²,
-// sécurité, fiscalité et, pour le quartier IRIS cliqué, la distance (à vol
-// d'oiseau) à l'établissement le plus proche de chaque nature recherchée.
+// Quartier sélectionné : un clic sur une choroplèthe sélectionne le quartier
+// IRIS cliqué ; sa fiche (prix au m², sécurité, fiscalité, distance à vol
+// d'oiseau à l'établissement le plus proche de chaque nature recherchée et
+// itinéraires) s'affiche dans la zone « Quartier sélectionné » du panneau de
+// gauche, vide sans sélection.
 // ---------------------------------------------------------------------------
 let lastCriteres = []; // critères de la dernière recherche
 let lastFiltres = {}; // filtres de zone de la dernière recherche
-let placeSeq = 0; // ignore les réponses de fiches obsolètes
+let placeSeq = 0; // ignore les réponses d'une sélection obsolète
 const routeCache = new Map(); // "lon,lat|lon,lat|transp" → promesse de /itineraire
 
 // Point (lon, lat) dans un anneau [[lon, lat], ...] (lancer de rayon).
@@ -1543,7 +1545,11 @@ function placeCardHtml(lon, lat, quartier, proches, itineraires) {
   const communes = lastData.communes || [];
   const commune = communes.find((c) => pointInGeometry(lon, lat, c.contour));
   const immo = immoData || {};
-  let html = `<div class="popup-title">${commune ? esc(commune.nom) : "Hors des communes de la zone"}</div>`;
+  let html =
+    `<div class="quartier-head"><div class="popup-title">${esc(quartier.nom)}` +
+    `<div class="muted">${commune ? esc(commune.nom) : "Hors des communes de la zone"}</div></div>` +
+    `<button type="button" class="quartier-clear" aria-label="Désélectionner le quartier" ` +
+    `title="Désélectionner">×</button></div>`;
 
   // Prix au m² : médiane de la commune et, si disponible, du quartier IRIS.
   const y0 = immo.date_min ? immo.date_min.slice(0, 4) : "";
@@ -1554,7 +1560,7 @@ function placeCardHtml(lon, lat, quartier, proches, itineraires) {
     const pc = (immo.communes || []).find((c) => c.code_commune === commune.code_commune);
     prix += `<div>Commune — ${prixLine(pc && pc.prix)}</div>`;
   }
-  if (quartier) prix += `<div>Quartier ${esc(quartier.nom)} — ${prixLine(quartier.prix)}</div>`;
+  prix += `<div>Quartier — ${prixLine(quartier.prix)}</div>`;
   html += placeSection(`Prix au m²${periode}`, prix || `<span class="muted">pas de données</span>`);
 
   if (commune) {
@@ -1578,28 +1584,39 @@ function placeCardHtml(lon, lat, quartier, proches, itineraires) {
     html += placeSection("Fiscalité locale", fisc);
   }
 
-  if (quartier) html += prochesSection(proches, itineraires);
+  html += prochesSection(proches, itineraires);
   return html;
 }
 
-// Ouvre la fiche du lieu cliqué ; pour un quartier IRIS, les distances aux
-// établissements sont demandées au serveur (non facturé), puis l'itinéraire
-// du point du quartier vers chacun (mode de transport de son critère) est
-// tracé sur la carte jusqu'à la fermeture de la fiche.
-function openPlaceCard(latlng) {
+// Désélectionne le quartier : zone vidée, contour et itinéraires effacés,
+// réponses en attente ignorées.
+function clearQuartier() {
+  placeSeq++;
+  if (routeLayer) routeLayer.clearLayers();
+  $("#quartier-info").innerHTML = "";
+}
+
+// Sélectionne le quartier IRIS sous le point cliqué (aucun : désélection) ;
+// les distances aux établissements sont demandées au serveur (non facturé),
+// puis l'itinéraire du point du quartier vers chacun (mode de transport de
+// son critère) est tracé sur la carte tant que le quartier reste sélectionné.
+function selectQuartier(latlng) {
   if (!lastData) return;
+  clearQuartier();
   const { lng: lon, lat } = latlng;
   const quartier = ((immoData && immoData.quartiers) || []).find((q) => pointInGeometry(lon, lat, q.contour));
-  const popup = L.popup({ maxWidth: 340, className: "place-popup" })
-    .setLatLng(latlng)
-    .setContent(placeCardHtml(lon, lat, quartier, undefined))
-    .openOn(map); // ferme la fiche précédente (et efface ses itinéraires)
-  // Quartier désélectionné (fiche fermée ou remplacée) : itinéraires effacés.
-  popup.on("remove", () => routeLayer.clearLayers());
   if (!quartier) return;
 
-  const seq = ++placeSeq;
-  const current = () => seq === placeSeq && popup.isOpen();
+  const box = $("#quartier-info");
+  box.innerHTML = placeCardHtml(lon, lat, quartier, undefined);
+  $("#quartier-fold").open = true;
+  L.geoJSON(quartier.contour, {
+    interactive: false,
+    style: { color: "#f8fafc", weight: 2.5, dashArray: "6 4", fill: false },
+  }).addTo(routeLayer);
+
+  const seq = placeSeq;
+  const current = () => seq === placeSeq;
   api(`/quartiers/${encodeURIComponent(quartier.iris)}/proximite`, {
     method: "POST",
     body: JSON.stringify({ criteres: lastCriteres }),
@@ -1610,13 +1627,18 @@ function openPlaceCard(latlng) {
       const proches = fiche ? fiche.proches : null;
       const itineraires = new Map();
       const refresh = () => {
-        if (current()) popup.setContent(placeCardHtml(lon, lat, quartier, proches, itineraires));
+        if (current()) box.innerHTML = placeCardHtml(lon, lat, quartier, proches, itineraires);
       };
       refresh();
       if (!fiche) return;
       drawQuartierRoutes(fiche, itineraires, current, refresh);
     });
 }
+
+// Bouton « × » de la zone : désélection (le contenu est régénéré, d'où la délégation).
+$("#quartier-info").addEventListener("click", (e) => {
+  if (e.target.closest(".quartier-clear")) clearQuartier();
+});
 
 // Itinéraire (mis en cache) de from à to ([lon, lat]) pour un profil.
 function fetchRoute(from, to, transp) {
@@ -1634,8 +1656,8 @@ function fetchRoute(from, to, transp) {
 
 // Trace les itinéraires du point du quartier (fiche /proximite) vers chaque
 // établissement proche ; itineraires (nature → résultat) est complété au fil
-// des réponses, puis refresh met la fiche à jour. current() est faux dès que
-// la fiche a été fermée ou remplacée.
+// des réponses, puis refresh met la zone à jour. current() est faux dès que
+// le quartier a été désélectionné ou remplacé.
 function drawQuartierRoutes(fiche, itineraires, current, refresh) {
   const from = [fiche.lon, fiche.lat];
   const proches = (fiche.proches || []).filter((p) => p.lon != null && p.lat != null);
@@ -1659,7 +1681,7 @@ function drawQuartierRoutes(fiche, itineraires, current, refresh) {
         if (!current()) return;
         itineraires.set(p.nature, it);
         if (it && it.geometry && it.geometry.length) {
-          // Non interactif : un clic sur le tracé ne doit pas fermer la fiche.
+          // Non interactif : un clic sur le tracé ne doit pas changer la sélection.
           L.polyline(it.geometry.map(([x, y]) => [y, x]), {
             color: natureGroup(p.nature).color,
             weight: 4,
@@ -1790,7 +1812,7 @@ $("#logout").addEventListener("click", async () => {
   }
   setToken(null);
   if (map) map.closePopup();
-  if (routeLayer) routeLayer.clearLayers();
+  clearQuartier();
   if (isoLayer) isoLayer.clearLayers();
   if (markerLayer) markerLayer.clearLayers();
   if (communeLayer) renderCommunes([]);
@@ -1846,6 +1868,12 @@ $("#search-form").addEventListener("submit", async (e) => {
     lastFiltres = filtres;
     immoFiltre = { min: filtres.prix_m2_min, max: filtres.prix_m2_max };
     render(data);
+    // Recherche aboutie : place à la carte et au quartier sélectionné. Zone
+    // vide : les paramètres restent dépliés pour lire l'explication.
+    if (data.zone) {
+      $("#search-fold").open = false;
+      $("#quartier-fold").open = true;
+    }
   } catch (ex) {
     status.textContent = ex.message;
     status.classList.add("err");
@@ -2066,8 +2094,8 @@ for (const type of ["input", "change"]) {
 }
 
 function render(data) {
-  map.closePopup(); // fiche d'un quartier de la recherche précédente
-  routeLayer.clearLayers();
+  map.closePopup(); // popup d'un établissement de la recherche précédente
+  clearQuartier(); // quartier sélectionné dans la recherche précédente
   isoLayer.clearLayers();
   markerLayer.clearLayers();
   renderCommunes(data.communes);
@@ -2093,35 +2121,19 @@ function render(data) {
       .addTo(isoLayer);
   }
 
-  // Isochrones des établissements sources (contour à la couleur de la nature
-  // de leur critère : une école primaire peut servir aux critères maternelle
-  // et élémentaire) : geometry = [[lon, lat], ...] → Leaflet attend [lat, lon].
+  // Seule la zone retenue est tracée ; les isochrones des établissements
+  // sources (geometry = [[lon, lat], ...]) servent au cadrage si elle est vide.
   const sources = data.sources || [];
   for (const src of sources) {
-    const color = natureGroup(sourceNature(src)).color;
     if (Array.isArray(src.isochrone) && src.isochrone.length) {
-      const poly = L.polygon(src.isochrone.map(([lon, lat]) => [lat, lon]), {
-        color,
-        weight: 1.2,
-        opacity: 0.75,
-        fill: false,
-        interactive: false,
-      }).addTo(isoLayer);
-      isoBounds.extend(poly.getBounds());
+      isoBounds.extend(L.latLngBounds(src.isochrone.map(([lon, lat]) => [lat, lon])));
     }
   }
 
-  // Intersection des unions par nature avant filtres (pointillés), puis zone retenue (remplie).
-  if (data.zone_brute) {
-    L.geoJSON(data.zone_brute, {
-      style: { color: "#854d0e", weight: 2, dashArray: "6 5", fill: false },
-      interactive: false,
-    }).addTo(isoLayer);
-  }
   let zoneBounds = null;
   if (data.zone) {
     const zone = L.geoJSON(data.zone, {
-      style: { color: ZONE_STROKE, weight: 2, fillColor: ZONE_COLOR, fillOpacity: ZONE_ALPHA },
+      style: { color: ZONE_STROKE, weight: ZONE_WEIGHT, opacity: 1, fill: false },
       interactive: false,
     }).addTo(isoLayer);
     zoneBounds = zone.getBounds();
