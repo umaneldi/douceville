@@ -161,7 +161,10 @@ type Etablissement struct {
 	Secteur     string          `json:"secteur"`
 	Ouverture   *time.Time      `json:"ouverture"`
 	Nature      string          `json:"nature"`
-	Resultats   []Resultat      `json:"resultats"`
+	// Filieres sont les filières d'un lycée (valeurs de Filieres, plusieurs
+	// possibles) ; vide pour les autres établissements.
+	Filieres  []string   `json:"filieres,omitempty"`
+	Resultats []Resultat `json:"resultats"`
 	// Taux est le taux de réussite aux examens en % (Σadmis / Σprésents, vue
 	// etablissement_taux) ; null sans résultats ou hors recherche.
 	Taux *float64 `json:"taux,omitempty"`
@@ -203,16 +206,26 @@ var NaturesPrimaire = []string{"Maternelle", "Elementaire"}
 // Secteurs sont les secteurs d'établissement acceptés par les critères.
 var Secteurs = []string{"public", "privé", "hors contrat"}
 
+// NatureLycee est la seule nature dont les critères acceptent un filtre de
+// filières.
+const NatureLycee = "Lycée"
+
+// Filieres sont les filières de lycée acceptées par les critères (valeurs de
+// etablissement.filieres).
+var Filieres = []string{"Général", "Technologique", "Professionnel", "Agricole"}
+
 // Transports sont les profils OpenRouteService acceptés.
 var Transports = []string{"driving-car", "cycling-regular", "foot-walking"}
 
 // CritereNature décrit, pour une nature d'établissement, les établissements
-// retenus et leur isochrone : secteurs (vide : tous), plage de taux de
+// retenus et leur isochrone : secteurs (vide : tous), filières (lycées
+// seulement ; vide : pas de filtre, sinon au moins une en commun), plage de taux de
 // réussite en % (les établissements sans résultats ne sont pas filtrés),
 // temps de trajet Dist (secondes) et mode de transport Transp.
 type CritereNature struct {
 	Nature  string   `json:"nature"`
 	Secteur []string `json:"secteur"`
+	Filiere []string `json:"filiere,omitempty"`
 	TauxMin float64  `json:"taux_min"`
 	TauxMax float64  `json:"taux_max"`
 	Dist    float64  `json:"dist"`

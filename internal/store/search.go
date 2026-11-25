@@ -15,14 +15,14 @@ import (
 // etabColumnsE liste les colonnes d'un établissement (alias e) suivies de son
 // taux de réussite (alias t, vue etablissement_taux) : voir scanEtablissementTaux.
 const etabColumnsE = `e.id, e."UAI", e.nom, e.adresse, e.lieu_dit, e.code_postal, e.commune,
-	ST_AsGeoJSON(e.position) AS position, e.departement, e.academie, e.secteur, e.ouverture, e.nature, t.taux`
+	ST_AsGeoJSON(e.position) AS position, e.departement, e.academie, e.secteur, e.ouverture, e.nature, e.filieres, t.taux`
 
 // scanEtablissementTaux lit les colonnes etabColumnsE, suivies de extra.
 func scanEtablissementTaux(row pgx.Row, extra ...any) (*models.Etablissement, error) {
 	var e models.Etablissement
 	dest := []any{
 		&e.ID, &e.UAI, &e.Nom, &e.Adresse, &e.LieuDit, &e.CodePostal, &e.Commune,
-		&e.Position, &e.Departement, &e.Academie, &e.Secteur, &e.Ouverture, &e.Nature, &e.Taux,
+		&e.Position, &e.Departement, &e.Academie, &e.Secteur, &e.Ouverture, &e.Nature, &e.Filieres, &e.Taux,
 	}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
@@ -30,40 +30,44 @@ func scanEtablissementTaux(row pgx.Row, extra ...any) (*models.Etablissement, er
 	return &e, nil
 }
 
-// secteurSep sépare les secteurs d'un critère, transmis en une seule chaîne
+// secteurSep sépare les secteurs (et les filières) d'un critère, transmis en une seule chaîne
 // (PostgreSQL n'accepte pas de tableaux de tableaux de tailles différentes).
 const secteurSep = "|"
 
 // criteresCTE déclare la CTE c (une ligne par critère : nature, secteurs,
-// tmin, tmax, k) à partir des paramètres $n..$n+3 de criteresArgs.
+// filieres, tmin, tmax, k) à partir des paramètres $n..$n+4 de criteresArgs.
 func criteresCTE(n int) string {
 	return fmt.Sprintf(`c AS (
-		SELECT * FROM unnest($%d::text[], $%d::text[], $%d::float8[], $%d::float8[])
-			WITH ORDINALITY AS c(nature, secteurs, tmin, tmax, k)
-	)`, n, n+1, n+2, n+3)
+		SELECT * FROM unnest($%d::text[], $%d::text[], $%d::text[], $%d::float8[], $%d::float8[])
+			WITH ORDINALITY AS c(nature, secteurs, filieres, tmin, tmax, k)
+	)`, n, n+1, n+2, n+3, n+4)
 }
 
 // critereMatch est la condition « l'établissement e (taux t.taux) satisfait le
 // critère c » : même nature (une école primaire satisfait aussi les critères
 // maternelle et élémentaire), secteur parmi ceux du critère (tous si aucun),
+// au moins une filière parmi celles du critère (pas de filtre si aucune),
 // taux dans la plage du critère (non filtré si inconnu).
 var critereMatch = `(c.nature = e.nature OR (e.nature = '` + models.NaturePrimaire + `'
 		AND c.nature IN ('` + strings.Join(models.NaturesPrimaire, "', '") + `')))
 	AND (c.secteurs = '' OR e.secteur = ANY (string_to_array(c.secteurs, '` + secteurSep + `')))
+	AND (c.filieres = '' OR e.filieres && string_to_array(c.filieres, '` + secteurSep + `'))
 	AND (t.taux IS NULL OR t.taux BETWEEN c.tmin AND c.tmax)`
 
 // criteresArgs convertit les critères en tableaux parallèles pour criteresCTE.
 func criteresArgs(criteres []models.CritereNature) []any {
 	natures := make([]string, len(criteres))
 	secteurs := make([]string, len(criteres))
+	filieres := make([]string, len(criteres))
 	tmin := make([]float64, len(criteres))
 	tmax := make([]float64, len(criteres))
 	for i, c := range criteres {
 		natures[i] = c.Nature
 		secteurs[i] = strings.Join(c.Secteur, secteurSep)
+		filieres[i] = strings.Join(c.Filiere, secteurSep)
 		tmin[i], tmax[i] = c.TauxMin, c.TauxMax
 	}
-	return []any{natures, secteurs, tmin, tmax}
+	return []any{natures, secteurs, filieres, tmin, tmax}
 }
 
 // loadResultats charge les résultats de chaque établissement.
@@ -113,7 +117,7 @@ func (s *PgStore) SelectSourceEtablissements(ctx context.Context, centre [2]floa
 			CROSS JOIN LATERAL (SELECT e.taux) t
 			JOIN c ON ` + critereMatch + `
 		) s
-		WHERE s.rang <= $10
+		WHERE s.rang <= $11
 		ORDER BY s.k, s.rang`
 
 	args := append([]any{centre[0], centre[1], dLon, dLat, rayonM}, criteresArgs(criteres)...)
@@ -149,7 +153,7 @@ func (s *PgStore) SelectSourceEtablissements(ctx context.Context, centre [2]floa
 
 // etabColumnsSel relit, depuis la sous-requête s, les colonnes de etabColumnsE.
 const etabColumnsSel = `s.id, s."UAI", s.nom, s.adresse, s.lieu_dit, s.code_postal, s.commune,
-	s.position, s.departement, s.academie, s.secteur, s.ouverture, s.nature, s.taux`
+	s.position, s.departement, s.academie, s.secteur, s.ouverture, s.nature, s.filieres, s.taux`
 
 // FindEtablissementsInZone implémente Store.FindEtablissementsInZone.
 func (s *PgStore) FindEtablissementsInZone(ctx context.Context, polygonWKT string, criteres []models.CritereNature) ([]models.Etablissement, error) {

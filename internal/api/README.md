@@ -22,7 +22,9 @@ autres (`auth`, `billing`, `geo`, `mail`, `store`).
 - `Handlers` reçoit toutes ses dépendances par **interfaces**, assemblées dans
   `cmd/server/main.go`. `OIDC` et `Billing` valent `nil` quand la
   fonctionnalité est désactivée.
-- **Recherche** (`etablissementsInZone`) : validation (`validateCriteres`,
+- **Recherche** (`etablissementsInZone`) : validation (`validateCriteres` —
+  natures, secteurs, filières connues et réservées au critère `Lycée`, taux,
+  temps, transport —,
   `validateFiltres` ; `422`) → géocodage du centre → sources
   (`Store.SelectSourceEtablissements`, au plus `sourcesParNature` = 10 par
   critère, dans `rayonMaxKm` = 50 km) ; une nature sans source rend la zone

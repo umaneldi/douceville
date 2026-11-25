@@ -212,7 +212,9 @@ function pageQuery() {
   for (const c of collectCriteres()) {
     q.append(
       "critere",
-      [c.nature, c.dist / 60, TRANSP_CODES[c.transp] || c.transp, c.secteur.join("+"), `${c.taux_min}-${c.taux_max}`].join(","),
+      [c.nature, c.dist / 60, TRANSP_CODES[c.transp] || c.transp, c.secteur.join("+"), `${c.taux_min}-${c.taux_max}`]
+        .concat(c.filiere ? [c.filiere.join("+")] : [])
+        .join(","),
     );
   }
   const f = collectFiltres();
@@ -254,12 +256,13 @@ function applyQuery(params) {
     $("#rayon-val").textContent = $("#rayon").value;
   }
 
-  // Critères : « nature,minutes,transport,secteurs (+),tmin-tmax ».
+  // Critères : « nature,minutes,transport,secteurs (+),tmin-tmax[,filières (+)] »
+  // (filières absentes : toutes).
   const criteres = params.getAll("critere");
   if (criteres.length) {
     for (const row of document.querySelectorAll("#criteres .critere-row")) setCritere(row, null);
     for (const c of criteres) {
-      const [nature, min, transp, secteurs, taux] = c.split(",");
+      const [nature, min, transp, secteurs, taux, filieres] = c.split(",");
       const row = document.querySelector(`#criteres .critere-row[data-nature="${CSS.escape(nature || "")}"]`);
       if (!row) continue;
       const t = /^(\d+)-(\d+)$/.exec(taux || "");
@@ -268,6 +271,7 @@ function applyQuery(params) {
         transp: TRANSP_BY_CODE[transp] || transp,
         secteur: secteurs ? secteurs.split(/[+ ]/).filter(Boolean) : null,
         taux: t ? [parseInt(t[1], 10), parseInt(t[2], 10)] : null,
+        filiere: filieres ? filieres.split(/[+ ]/).filter(Boolean) : null,
       });
     }
   }
@@ -1703,13 +1707,15 @@ function drawQuartierRoutes(fiche, itineraires, current, refresh) {
 // ---------------------------------------------------------------------------
 const SOURCES_PAR_NATURE = 10; // même limite que le serveur
 const SECTEURS = ["public", "privé", "hors contrat"];
+// Filières d'un lycée (models.Filieres côté serveur).
+const FILIERES = ["Général", "Technologique", "Professionnel", "Agricole"];
 // Natures proposées (valeurs de etablissement.nature) et réglages par défaut ;
-// taux : la nature a des résultats d'examens.
+// taux : la nature a des résultats d'examens ; filieres : filtre par filière.
 const CRITERE_NATURES = [
   { nature: "Maternelle", label: "Maternelle", taux: false, min: 10, transp: "foot-walking" },
   { nature: "Elementaire", label: "Élémentaire", taux: false, min: 10, transp: "foot-walking" },
   { nature: "Collège", label: "Collège", taux: true, min: 15, transp: "foot-walking" },
-  { nature: "Lycée", label: "Lycée", taux: true, min: 20, transp: "driving-car" },
+  { nature: "Lycée", label: "Lycée", taux: true, filieres: true, min: 20, transp: "driving-car" },
 ];
 
 function natureLabel(nature) {
@@ -1725,6 +1731,7 @@ function buildCriteres() {
     row.querySelector(".critere-title").textContent = n.label;
     row.querySelector(".origin-dot").style.background = natureGroup(n.nature).color;
     row.querySelector(".critere-taux").hidden = !n.taux;
+    row.querySelector(".critere-filieres").hidden = !n.filieres;
     const range = row.querySelector(".critere-time");
     range.addEventListener("input", () => {
       row.querySelector(".origin-time-val").textContent = range.value;
@@ -1741,7 +1748,7 @@ function buildCriteres() {
   }
 }
 
-// Active (opts : {min, transp, secteur, taux: [min, max]}, champs absents :
+// Active (opts : {min, transp, secteur, taux: [min, max], filiere}, champs absents :
 // valeurs par défaut de la nature) ou désactive (opts null, réglages
 // conservés) un critère.
 function setCritere(row, opts) {
@@ -1759,12 +1766,16 @@ function setCritere(row, opts) {
   if ([...select.options].some((o) => o.value === transp)) select.value = transp;
   const secteurs = opts.secteur && opts.secteur.length ? opts.secteur : SECTEURS;
   row.querySelectorAll(".critere-secteurs input").forEach((cb) => (cb.checked = secteurs.includes(cb.value)));
+  const filieres = opts.filiere && opts.filiere.length ? opts.filiere : FILIERES;
+  row.querySelectorAll(".critere-filieres input").forEach((cb) => (cb.checked = filieres.includes(cb.value)));
   const [tmin, tmax] = opts.taux || [0, 100];
   row.querySelector(".taux-min").value = Math.min(100, Math.max(0, tmin));
   row.querySelector(".taux-max").value = Math.min(100, Math.max(0, tmax));
 }
 
-// Critères des natures cochées, au format de l'API.
+// Critères des natures cochées, au format de l'API. filiere n'est transmis que
+// si toutes les filières ne sont pas cochées (sinon pas de filtre : les lycées
+// sans filière connue restent retenus).
 function collectCriteres() {
   return Array.from(document.querySelectorAll("#criteres .critere-row"))
     .filter((row) => row.querySelector(".critere-on").checked)
@@ -1774,6 +1785,9 @@ function collectCriteres() {
         const v = parseFloat(row.querySelector(sel).value);
         return Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : def;
       };
+      const filiere = n.filieres
+        ? Array.from(row.querySelectorAll(".critere-filieres input:checked")).map((cb) => cb.value)
+        : [];
       return {
         nature: n.nature,
         dist: parseInt(row.querySelector(".critere-time").value, 10) * 60, // minutes → secondes
@@ -1781,6 +1795,7 @@ function collectCriteres() {
         secteur: Array.from(row.querySelectorAll(".critere-secteurs input:checked")).map((cb) => cb.value),
         taux_min: n.taux ? num(".taux-min", 0) : 0,
         taux_max: n.taux ? num(".taux-max", 100) : 100,
+        ...(n.filieres && filiere.length < FILIERES.length ? { filiere } : {}),
       };
     });
 }
@@ -1848,6 +1863,7 @@ $("#search-form").addEventListener("submit", async (e) => {
   if (!criteres.length) return fail("Cochez au moins une nature d'établissement.");
   for (const c of criteres) {
     if (!c.secteur.length) return fail(`${natureLabel(c.nature)} : cochez au moins un secteur.`);
+    if (c.filiere && !c.filiere.length) return fail(`${natureLabel(c.nature)} : cochez au moins une filière.`);
     if (c.taux_min > c.taux_max) return fail(`${natureLabel(c.nature)} : taux minimum supérieur au maximum.`);
   }
   const filtres = collectFiltres();
@@ -2246,7 +2262,7 @@ function esc(s) {
 
 function popupHtml(etab) {
   let html = `<div class="popup-title">${esc(etab.nom)}</div>`;
-  const meta = [etab.nature, etab.secteur].filter(Boolean).join(" · ");
+  const meta = [etab.nature, etab.secteur, (etab.filieres || []).join(", ")].filter(Boolean).join(" · ");
   const addr = [etab.adresse, etab.code_postal, etab.commune].filter(Boolean).join(", ");
   html += `<div class="popup-meta">${esc(meta)}<br/>${esc(addr)}`;
   if (etab.UAI) html += `<br/>UAI : ${esc(etab.UAI)}`;
@@ -2641,7 +2657,7 @@ function renderEtabList(ul, etabs, withRate, highlight = false) {
     if (highlight) li.classList.add(inRateSel(e) ? "selected" : "dimmed");
     li.tabIndex = 0;
     const rate = successRate(e);
-    const sub = [e.nature, e.commune].filter(Boolean).join(" · ");
+    const sub = [e.nature, (e.filieres || []).join(", "), e.commune].filter(Boolean).join(" · ");
     li.innerHTML =
       `<div class="etab-main"><div class="etab-name">${esc(e.nom)}</div>` +
       `<div class="etab-sub">${esc(sub)}</div></div>` +

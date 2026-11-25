@@ -768,7 +768,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .critere-head .critere-on { margin: 0; }
 .critere-body { display: flex; flex-direction: column; gap: 0.4rem; }
 .critere-body[hidden] { display: none; }
-.critere-secteurs { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; font-size: 0.82rem; }
+.critere-secteurs, .critere-filieres { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; font-size: 0.82rem; }
 .critere-taux, .zone-filter {
   display: flex;
   align-items: center;

@@ -31,7 +31,7 @@ const (
 )
 
 // validateCriteres vérifie et normalise les critères : nature connue et sans
-// doublon, secteurs connus, plage de taux dans [0, 100] (taux_max absent ou
+// doublon, secteurs connus, filières connues (critère Lycée seulement), plage de taux dans [0, 100] (taux_max absent ou
 // nul vaut 100) et,
 // si withIso, temps de trajet dans [distMin, distMax] et mode de transport
 // connu (driving-car par défaut). Le message d'erreur est destiné au client.
@@ -49,6 +49,14 @@ func validateCriteres(criteres []models.CritereNature, withIso bool) error {
 		for _, s := range c.Secteur {
 			if !slices.Contains(models.Secteurs, s) {
 				return fmt.Errorf("criteres[%d]: unknown secteur %q", i, s)
+			}
+		}
+		if len(c.Filiere) > 0 && c.Nature != models.NatureLycee {
+			return fmt.Errorf("criteres[%d]: filiere is only allowed for nature %q", i, models.NatureLycee)
+		}
+		for _, f := range c.Filiere {
+			if !slices.Contains(models.Filieres, f) {
+				return fmt.Errorf("criteres[%d]: unknown filiere %q", i, f)
 			}
 		}
 		if c.TauxMax == 0 { // absent : pas de borne haute

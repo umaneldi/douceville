@@ -38,7 +38,9 @@ documenté dans [`schema.md`](../../schema.md).
   de même forme.
 - **Critères** : ils sont passés en tableaux parallèles (`criteresArgs`) et
   dépliés par `unnest` dans la CTE `c` (`criteresCTE`) ; les secteurs d'un
-  critère sont joints par `|`. La condition commune est `critereMatch` : une
+  critère sont joints par `|`, de même que ses filières (vide : pas de
+  filtre ; sinon `etablissement.filieres` doit en avoir au moins une en
+  commun, opérateur `&&`). La condition commune est `critereMatch` : une
   école primaire (`models.NaturePrimaire`, voir migration 019) satisfait les
   critères des natures `models.NaturesPrimaire` (maternelle, élémentaire) ;
   `SelectSourceEtablissements` renseigne donc `Source.Critere` (nature du
@@ -94,6 +96,7 @@ DV_TEST_DSN=postgres://test:test@127.0.0.1:55432/test go test -cover ./internal/
 | `zone_integration_test.go` | Établissements de la zone (critères par nature, taux, résultats), communes (score, fiscalité), prix immobiliers, logements sociaux, `IntersectUnions` (union par groupe, intersection entre groupes). |
 | `search_integration_test.go` | Vue `etablissement_taux`, `SelectSourceEtablissements` (classement, rayon, critères par nature), `FilterZone` (chaque filtre, valeurs inconnues, prix de la commune à défaut de l'IRIS), cache d'isochrones (TTL, éviction LRU, remplacement), `QuartierProximite`. |
 | `primaire_integration_test.go` | Helper `ecoles` (maternelle, élémentaire et écoles « primaire » autour de (2.5, 48.5)) ; migration 019 (reclassement, idempotence), écoles primaires retenues par les critères maternelle et élémentaire (sources, zone, fiche d'un quartier), secteur appliqué, autres natures non concernées. |
+| `filieres_integration_test.go` | Helper `filieres` (filières des lycées de `seedZone` et `lycees`) ; migration 020 (idempotence, tableau vide par défaut), lecture de `filieres`, filtre de filières dans les sources, la zone et la fiche d'un quartier. |
 | `billing_integration_test.go` | Tarifs, débit / remboursement / ajustement, paiements idempotents, journal. |
 
 Toute nouvelle requête ou migration doit être exercée par un de ces tests.

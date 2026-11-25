@@ -16,13 +16,13 @@ import (
 
 // colonnes sélectionnées pour un établissement. position est émise en GeoJSON.
 const etabColumns = `id, "UAI", nom, adresse, lieu_dit, code_postal, commune,
-	ST_AsGeoJSON(position) AS position, departement, academie, secteur, ouverture, nature`
+	ST_AsGeoJSON(position) AS position, departement, academie, secteur, ouverture, nature, filieres`
 
 func scanEtablissement(row pgx.Row) (*models.Etablissement, error) {
 	var e models.Etablissement
 	err := row.Scan(
 		&e.ID, &e.UAI, &e.Nom, &e.Adresse, &e.LieuDit, &e.CodePostal, &e.Commune,
-		&e.Position, &e.Departement, &e.Academie, &e.Secteur, &e.Ouverture, &e.Nature,
+		&e.Position, &e.Departement, &e.Academie, &e.Secteur, &e.Ouverture, &e.Nature, &e.Filieres,
 	)
 	if err != nil {
 		return nil, err

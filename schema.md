@@ -33,6 +33,7 @@ La base contient **seize tables physiques**, une **vue matérialisée** (`securi
 │ departement             │  │       UNIQUE (diplome, annee,
 │ academie                │  │               etablissement_uai)
 │ secteur                 │  │
+│ filieres   (TEXT[])     │  │
 │ ouverture               │  │       ┌──────────────────────────┐
 │ nature                  │  │       │         commune          │
 └─────────────────────────┘  │       ├──────────────────────────┤
@@ -113,6 +114,7 @@ Relation : quartier (1) ──< (N) logement_social
 | `secteur`     | `VARCHAR`             | NOT NULL                        | Secteur (`public` / `privé` (sous contrat) / `hors contrat`). |
 | `ouverture`   | `TIMESTAMP`           | NULL                            | Date d'ouverture. |
 | `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement : `Maternelle`, `Elementaire`, `Primaire`, `Collège` ou `Lycée`. `Primaire` (nom contenant « primaire », sans distinction de casse : à l'import et par `migrations/019_etablissement_primaire.sql`, qui reclasse les établissements déjà importés) satisfait les critères de recherche `Maternelle` et `Elementaire` (`critereMatch` dans `internal/store/search.go`). |
+| `filieres`    | `TEXT[]`              | NOT NULL, défaut `'{}'`         | Filières d'un lycée, plusieurs possibles : `Général`, `Technologique`, `Professionnel`, `Agricole` (`migrations/020_etablissement_filieres.sql`) ; vide pour les autres natures. Déduites à l'import du code natureUAI (LEGT → général + technologique, polyvalent → les trois, LP / SEP → professionnel…) et du ministère de tutelle (Agriculture → `Agricole`). La migration ne les remplit pas : réimporter les établissements. Un critère `Lycée` avec filières retient les lycées ayant au moins une filière en commun (`critereMatch`). |
 
 **Relations** : un établissement a plusieurs `resultat` (FK `resultat.etablissement_uai` → `etablissement.UAI`, suppression en cascade) et appartient à une `commune` (FK `etablissement.code_commune` → `commune.code_commune`).
 

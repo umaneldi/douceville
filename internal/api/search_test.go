@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func searchHandlers(t *testing.T) (*Handlers, mockStore, *[]isoCall) {
 }
 
 const searchTwoNatures = `{"centre":"Toulouse","rayon_km":10,"criteres":[
-	{"nature":"Lycée","secteur":["public","privé"],"taux_min":85,"taux_max":100,"dist":1200,"transp":"driving-car"},
+	{"nature":"Lycée","secteur":["public","privé"],"filiere":["Général","Agricole"],"taux_min":85,"taux_max":100,"dist":1200,"transp":"driving-car"},
 	{"nature":"Collège","secteur":["public"],"dist":600,"transp":"foot-walking"}]}`
 
 // decodeSearch décode une réponse de recherche.
@@ -129,7 +130,8 @@ func TestSearch_Nominal(t *testing.T) {
 		t.Errorf("zone content = %+v", got)
 	}
 	// Critères normalisés transmis aux requêtes de zone.
-	if len(criteres) != 2 || criteres[0].TauxMin != 85 || criteres[1].TauxMax != 100 || criteres[1].Secteur[0] != "public" {
+	if len(criteres) != 2 || criteres[0].TauxMin != 85 || criteres[1].TauxMax != 100 || criteres[1].Secteur[0] != "public" ||
+		!slices.Equal(criteres[0].Filiere, []string{"Général", "Agricole"}) || len(criteres[1].Filiere) != 0 {
 		t.Errorf("criteres = %+v", criteres)
 	}
 }
@@ -257,6 +259,8 @@ func TestSearch_Validation(t *testing.T) {
 		"nature en double":     crit(`{"nature":"Lycée","dist":600},{"nature":"Lycée","dist":900}`),
 		"trop de critères":     crit(`{"nature":"Lycée","dist":600},{"nature":"Collège","dist":600},{"nature":"Maternelle","dist":600},{"nature":"Elementaire","dist":600},{"nature":"Lycée","dist":600}`),
 		"secteur inconnu":      crit(`{"nature":"Lycée","dist":600,"secteur":["confessionnel"]}`),
+		"filière inconnue":     crit(`{"nature":"Lycée","dist":600,"filiere":["Hôtellerie"]}`),
+		"filière hors lycée":   crit(`{"nature":"Collège","dist":600,"filiere":["Général"]}`),
 		"taux inversé":         crit(`{"nature":"Lycée","dist":600,"taux_min":90,"taux_max":80}`),
 		"taux > 100":           crit(`{"nature":"Lycée","dist":600,"taux_max":120}`),
 		"taux négatif":         crit(`{"nature":"Lycée","dist":600,"taux_min":-1,"taux_max":50}`),

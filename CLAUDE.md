@@ -108,9 +108,12 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   - la définition du taux de réussite (Σadmis / Σprésents) est dupliquée entre
     la vue `etablissement_taux` (`migrations/017_etablissement_taux.sql`) et
     `successRate()` dans `web/app.js` ;
-  - les natures, secteurs et modes de transport acceptés (`models.Natures`,
-    `Secteurs`, `Transports`) doivent correspondre à `CRITERE_NATURES`,
-    `SECTEURS` et au gabarit `critere-tpl` du frontend ; la limite de sources
+  - les natures, secteurs, filières et modes de transport acceptés
+    (`models.Natures`, `Secteurs`, `Filieres`, `Transports`) doivent
+    correspondre à `CRITERE_NATURES`, `SECTEURS`, `FILIERES` et au gabarit
+    `critere-tpl` du frontend, et `Filieres` aux constantes de
+    `scripts/import_etablissements_parquet.py` (qui seul attribue les
+    filières, d'après le code natureUAI et le ministère) ; la limite de sources
     par nature (`sourcesParNature` dans `internal/api/search.go`) à
     `SOURCES_PAR_NATURE` dans `web/app.js` ;
   - la nature `Primaire` (nom contenant « primaire ») est attribuée à la fois

@@ -10,7 +10,8 @@
 
 Douceville aide à choisir où habiter. L'utilisateur choisit un **centre** et un
 **rayon**, puis, pour chaque **nature d'établissement** scolaire (maternelle,
-élémentaire, collège, lycée), ses critères : secteurs, plage de taux de réussite,
+élémentaire, collège, lycée), ses critères : secteurs, filières (lycées : général,
+technologique, professionnel, agricole), plage de taux de réussite,
 temps de trajet et mode de transport. Les **10 meilleurs établissements** du
 rayon pour chaque nature donnent chacun une isochrone ; la **zone** affichée est
 l'intersection, entre natures, de l'**union** des isochrones de chaque nature (on
@@ -50,7 +51,7 @@ même sans filtre (tranches hors du filtre actif atténuées).
 L'état de la page (centre, critères, filtres, couches, onglet, tranches de taux
 sélectionnées) est reflété dans l'URL : un favori ou un lien partagé restaure
 la recherche. Exemple :
-`/?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100&prix=0-4000&securite=50&fiscalite=45&couche=prix&logements=1&onglet=list&taux=8,9`.
+`/?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100,Général+Technologique&prix=0-4000&securite=50&fiscalite=45&couche=prix&logements=1&onglet=list&taux=8,9`.
 
 ## Sommaire
 
@@ -218,7 +219,7 @@ douceville -d douceville"`), et la plupart `--dry-run`.
 | 3 | `import_contours_iris.py` | `quartier` | IGN, contours IRIS (WFS, ou fichier sauvegardé avec `--save`) |
 | 4 | `import_immobilier_dvf.py` | `immobilier` | DVF géolocalisées |
 | 5 | `import_logement_social.py` | `logement_social` | RPLS |
-| 6 | `import_etablissements_parquet.py` | `etablissement` (nature `Primaire` si le nom contient « primaire ») | Annuaire géolocalisé des établissements |
+| 6 | `import_etablissements_parquet.py` | `etablissement` (nature `Primaire` si le nom contient « primaire » ; `filieres` des lycées, à réimporter après la migration 020) | Annuaire géolocalisé des établissements |
 | 7 | `import_resultats_parquet.py` | `resultat` | Indicateurs de résultats lycées / collèges |
 | 8 | `import_securite_parquet.py` | `securite` (+ rafraîchit `securite_score`) | SSMSI, délinquance communale |
 | 9 | `import_fiscalite_parquet.py` | `fiscalite` | DGFiP, fiscalité locale des particuliers |
@@ -323,7 +324,10 @@ Corps de `POST /api/etablissements` : un centre (adresse), un rayon en km
 `Elementaire`, `Collège`, `Lycée`, sans doublon) et des filtres de zone
 facultatifs. Dans un critère, `dist` est un **temps en secondes** (60–3600),
 `transp` vaut `driving-car` (défaut), `cycling-regular` ou `foot-walking`,
-`secteur` (vide : tous) parmi `public`, `privé`, `hors contrat`, et
+`secteur` (vide : tous) parmi `public`, `privé`, `hors contrat`, `filiere`
+(critère `Lycée` seulement ; absent ou vide : pas de filtre, sinon au moins une
+filière en commun) parmi `Général`, `Technologique`, `Professionnel`,
+`Agricole`, et
 `taux_min`/`taux_max` en % (`taux_max` absent : 100). Paramètres invalides :
 `422`. `Primaire` n'est pas un critère : les écoles primaires sont retenues par
 les critères `Maternelle` et `Elementaire`.
@@ -333,7 +337,7 @@ les critères `Maternelle` et `Elementaire`.
   "centre": "Toulouse",
   "rayon_km": 10,
   "criteres": [
-    {"nature": "Lycée", "secteur": ["public", "privé"], "taux_min": 85, "taux_max": 100,
+    {"nature": "Lycée", "secteur": ["public", "privé"], "filiere": ["Général", "Technologique"], "taux_min": 85, "taux_max": 100,
      "dist": 1200, "transp": "driving-car"},
     {"nature": "Collège", "secteur": ["public"], "dist": 600, "transp": "foot-walking"}
   ],

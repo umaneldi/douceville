@@ -31,6 +31,13 @@ Maternelle and Elementaire search criteria (same rule as migration
 019_etablissement_primaire.sql).
 `secteur` is 'public', 'privé' (sous contrat) or 'hors contrat', the latter
 taken from `secteur_prive_libelle_type_contrat`.
+`filieres` lists the filières of a lycée (several possible, empty for other
+natures), from its natureUAI code: 300 LEGT and 335 section GT -> Général +
+Technologique; 301 -> Technologique; 302, 310 (climatique), 315
+(expérimental) -> Général; 306 polyvalent and 307 LEGTPA -> Général +
+Technologique + Professionnel; 320 LP, 332, 334 SEP -> Professionnel; plus
+Agricole when the ministry is Agriculture (`code_ministere` 03). The column
+comes from migration 020_etablissement_filieres.sql.
 Positions are stored with SRID 0 (see schema.md).
 `code_commune` links to the `commune` table (load it first with
 scripts/import_communes_csv.py): arrondissement codes of Paris, Marseille and
@@ -62,6 +69,22 @@ MATERNELLE, ELEMENTAIRE, COLLEGE, LYCEE, PRIMAIRE = (
     "Primaire",
 )
 PUBLIC, PRIVE, HORS_CONTRAT = "public", "privé", "hors contrat"
+# Filières of a lycée (models.Filieres in the Go code).
+GENERAL, TECHNO, PRO, AGRICOLE = "Général", "Technologique", "Professionnel", "Agricole"
+FILIERES_BY_CODE = {
+    300: (GENERAL, TECHNO),  # lycée d'enseignement général et technologique
+    301: (TECHNO,),  # lycée d'enseignement technologique
+    302: (GENERAL,),  # lycée d'enseignement général
+    306: (GENERAL, TECHNO, PRO),  # lycée polyvalent
+    307: (GENERAL, TECHNO, PRO),  # lycée général, techno et pro agricole
+    310: (GENERAL,),  # lycée climatique
+    315: (GENERAL,),  # lycée expérimental
+    320: (PRO,),  # lycée professionnel
+    332: (PRO,),  # école professionnelle spécialisée
+    334: (PRO,),  # section d'enseignement professionnel
+    335: (GENERAL, TECHNO),  # section d'enseignement général et technologique
+}
+MINISTERE_AGRICULTURE = "03"
 
 COLUMNS = [
     "numero_uai",
@@ -81,6 +104,7 @@ COLUMNS = [
     "coordonnee_y",
     "epsg",
     "nature_uai",
+    "code_ministere",
     "code_departement",
     "libelle_academie",
     "date_ouverture",
@@ -100,6 +124,17 @@ def nature_from_code(code: int | None) -> str | None:
     if 340 <= code < 400:  # collèges, SEGPA, EREA
         return COLLEGE
     return None
+
+
+def filieres_for(code: int | None, ministere: str | None, nature: str) -> list[str]:
+    """Filières of a lycée from its natureUAI code and ministry; empty for
+    other natures."""
+    if nature != LYCEE:
+        return []
+    filieres = list(FILIERES_BY_CODE.get(code, ()))
+    if (ministere or "").strip() == MINISTERE_AGRICULTURE:
+        filieres.append(AGRICOLE)
+    return filieres
 
 
 def nature_for(code: int | None, nom: str) -> str | None:
@@ -203,6 +238,7 @@ def extract(path: Path):
                 ),
                 r["date_ouverture"],
                 nature,
+                filieres_for(r["nature_uai"], r["code_ministere"], nature),
                 lon,
                 lat,
                 x,
@@ -228,6 +264,8 @@ def copy_field(v) -> str:
     """A value in COPY text format."""
     if v is None:
         return r"\N"
+    if isinstance(v, list):  # text[] literal, e.g. {"Général","Agricole"}
+        v = "{" + ",".join('"' + str(x).replace("\\", "\\\\").replace('"', '\\"') + '"' for x in v) + "}"
     return (
         str(v)
         .replace("\\", "\\\\")
@@ -270,7 +308,7 @@ def default_dsn() -> str:
 CREATE_TMP = """
 CREATE TEMP TABLE tmp_etab (
     uai TEXT, nom TEXT, adresse TEXT, lieu_dit TEXT, code_postal TEXT, commune TEXT, code_commune TEXT,
-    departement TEXT, academie TEXT, secteur TEXT, ouverture DATE, nature TEXT,
+    departement TEXT, academie TEXT, secteur TEXT, ouverture DATE, nature TEXT, filieres TEXT[],
     lon DOUBLE PRECISION, lat DOUBLE PRECISION,
     x DOUBLE PRECISION, y DOUBLE PRECISION, srid INTEGER
 ) ON COMMIT DROP
@@ -278,14 +316,14 @@ CREATE TEMP TABLE tmp_etab (
 
 UPSERT = """
 INSERT INTO etablissement ("UAI", nom, adresse, lieu_dit, code_postal, commune, code_commune, position,
-                           departement, academie, secteur, ouverture, nature)
+                           departement, academie, secteur, ouverture, nature, filieres)
 SELECT uai, nom, adresse, lieu_dit, code_postal, commune,
        (SELECT c.code_commune FROM commune c WHERE c.code_commune = t.code_commune),
        ST_SetSRID(
          CASE WHEN lon IS NOT NULL THEN ST_MakePoint(lon, lat)
               ELSE ST_Transform(ST_SetSRID(ST_MakePoint(x, y), srid), 4326) END,
          0),
-       departement, academie, secteur, ouverture, nature
+       departement, academie, secteur, ouverture, nature, filieres
 FROM tmp_etab t
 ON CONFLICT ("UAI") DO UPDATE SET
     nom          = EXCLUDED.nom,
@@ -299,7 +337,8 @@ ON CONFLICT ("UAI") DO UPDATE SET
     academie    = EXCLUDED.academie,
     secteur     = EXCLUDED.secteur,
     ouverture   = EXCLUDED.ouverture,
-    nature      = EXCLUDED.nature
+    nature      = EXCLUDED.nature,
+    filieres    = EXCLUDED.filieres
 RETURNING (xmax = 0) AS inserted
 """
 
