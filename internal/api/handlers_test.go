@@ -60,6 +60,8 @@ type mockStore struct {
 	sources []models.Source
 	// cache simule le cache d'isochrones (nil : toujours vide, écritures ignorées).
 	cache *isoCache
+	// parNature reçoit le plafond passé à SelectSourceEtablissements (si non nil).
+	parNature *int
 	// filterEmpty est renvoyé par FilterZone ; filterCalls compte ses appels.
 	filterEmpty bool
 	filterCalls *int
@@ -80,6 +82,9 @@ type isoCache struct {
 }
 
 func (m mockStore) SelectSourceEtablissements(ctx context.Context, centre [2]float64, rayonM float64, criteres []models.CritereNature, parNature int) ([]models.Source, error) {
+	if m.parNature != nil {
+		*m.parNature = parNature
+	}
 	return m.sources, m.err
 }
 func (m mockStore) GetCachedIsochrones(ctx context.Context, keys []models.IsochroneKey, maxAge time.Duration) (map[models.IsochroneKey][][2]float64, error) {

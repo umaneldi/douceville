@@ -30,7 +30,9 @@ is already in the file) are skipped. With --start-year YEAR, only rows whose
 annee is >= YEAR are imported.
 The file has millions of rows: it is read, sent and upserted in batches, all
 in a single transaction (nothing is committed if the import fails). The
-`securite_score` materialized view is refreshed at the end of the transaction.
+`securite_score` materialized view, then `securite_departement` (score relative
+to the département and ranking of the départements, built on it), are refreshed
+at the end of the transaction.
 """
 
 from __future__ import annotations
@@ -171,8 +173,13 @@ SELECT (SELECT count(*) FROM tmp_securite),
 FROM r
 """
 
-# The commune security score (migration 009) is derived from securite.
-REFRESH = "REFRESH MATERIALIZED VIEW securite_score"
+# The commune security score (migration 009) is derived from securite, and the
+# département-relative score and ranking (migration 022) from that score: refresh
+# them in this order.
+REFRESH = (
+    "REFRESH MATERIALIZED VIEW securite_score; "
+    "REFRESH MATERIALIZED VIEW securite_departement"
+)
 
 CHECK = """
 DO $$ BEGIN

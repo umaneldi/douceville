@@ -70,8 +70,9 @@ type Store interface {
 	// les établissements du polygone.
 	FindEtablissementsInZone(ctx context.Context, polygonWKT string, criteres []models.CritereNature) ([]models.Etablissement, error)
 	// SelectSourceEtablissements renvoie, pour chaque critère, au plus
-	// parNature établissements de sa nature situés à moins de rayonM mètres de
-	// centre ([lon, lat]) et satisfaisant le critère, classés par taux de
+	// parNature (sans plafond si parNature <= 0) établissements de sa nature
+	// situés à moins de rayonM mètres de centre ([lon, lat]) et satisfaisant
+	// le critère, classés par taux de
 	// réussite décroissant (inconnu en dernier) puis par distance au centre.
 	// Chaque source porte la nature (Critere), le temps et le mode de
 	// transport de son critère ; une école primaire peut être retenue pour

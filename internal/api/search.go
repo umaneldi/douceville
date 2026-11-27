@@ -18,9 +18,6 @@ import (
 )
 
 const (
-	// sourcesParNature est le nombre maximal d'établissements sources retenus
-	// par critère (chacun coûte une isochrone).
-	sourcesParNature = 10
 	// rayonMaxKm borne le rayon de recherche des établissements sources.
 	rayonMaxKm = 50
 	// distMin et distMax bornent le temps de trajet d'un critère (secondes).
@@ -105,7 +102,7 @@ func (h *Handlers) isoCacheTTL() time.Duration {
 }
 
 // isoGroup regroupe les isochrones manquantes de même temps et même mode
-// (une requête OpenRouteService par lot de positions).
+// (un appel au fournisseur de routage par groupe).
 type isoGroup struct {
 	dist   float64
 	transp string
@@ -113,20 +110,39 @@ type isoGroup struct {
 	pts    [][2]float64
 }
 
-// etablissementsInZone gère POST /etablissements. Les établissements sources
-// sont choisis autour du centre selon un critère par nature ; la zone est
-// l'intersection, entre critères, de l'union des isochrones des sources de
-// chaque critère (près d'au moins une source de chaque nature), restreinte
-// par les filtres.
-func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) {
+// searchPlan est la préparation d'une recherche, commune à la recherche et à
+// son estimation : corps validé, centre géocodé, sources, et isochrones en
+// cache ou à calculer.
+type searchPlan struct {
+	body   models.SearchRequest
+	centre [2]float64
+	// sources sont les établissements sources ; criteresVides les natures
+	// sans source (la zone est alors vide : rien d'autre n'est préparé).
+	sources       []models.Source
+	criteresVides []string
+	// keys[i] est la clé de cache de sources[i] ; unique les clés distinctes.
+	keys   []models.IsochroneKey
+	unique []models.IsochroneKey
+	// rings sont les isochrones trouvées en cache ; groups les manquantes,
+	// par temps et mode ; misses leur nombre.
+	rings  map[models.IsochroneKey][][2]float64
+	groups []*isoGroup
+	misses int
+}
+
+// prepareSearch décode et valide le corps d'une recherche, géocode le centre,
+// choisit les sources (au plus h.SourcesParNature par critère, sans plafond
+// si nul) et lit les isochrones en cache. op préfixe les journaux. En cas
+// d'erreur, la réponse est écrite et ok vaut false.
+func (h *Handlers) prepareSearch(w http.ResponseWriter, r *http.Request, op string) (plan *searchPlan, ok bool) {
 	log := logger(r.Context())
 	ctx := r.Context()
 
 	var body models.SearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		log.Warn("search: invalid JSON body", "error", err)
+		log.Warn(op+": invalid JSON body", "error", err)
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
+		return nil, false
 	}
 	body.Centre = strings.TrimSpace(body.Centre)
 	var verr error
@@ -143,91 +159,109 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if verr != nil {
-		log.Warn("search: invalid parameters", "error", verr)
+		log.Warn(op+": invalid parameters", "error", verr)
 		writeError(w, http.StatusUnprocessableEntity, verr.Error())
-		return
+		return nil, false
 	}
 
 	ban, err := h.Geocoder.Geocode(ctx, body.Centre)
 	if err != nil {
-		log.Error("search: geocoding failed", "centre", body.Centre, "error", err)
+		log.Error(op+": geocoding failed", "centre", body.Centre, "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())
-		return
+		return nil, false
 	}
-	centre := [2]float64{ban.Longitude, ban.Latitude}
+	plan = &searchPlan{body: body, centre: [2]float64{ban.Longitude, ban.Latitude}, sources: []models.Source{}, criteresVides: []string{}}
 
-	resp := models.ListeEtablissementsAvecIsochrone{
-		Centre:           models.Centre{Lon: centre[0], Lat: centre[1], RayonKm: body.RayonKm},
-		Sources:          []models.Source{},
-		CriteresVides:    []string{},
-		Etablissements:   []models.Etablissement{},
-		Communes:         []models.CommuneSecurite{},
-		Immobilier:       models.ImmobilierZone{Communes: []models.CommuneImmobilier{}, Quartiers: []models.QuartierImmobilier{}},
-		LogementsSociaux: []models.LogementSocialPosition{},
-	}
-
-	sources, err := h.Store.SelectSourceEtablissements(ctx, centre, body.RayonKm*1000, body.Criteres, sourcesParNature)
+	sources, err := h.Store.SelectSourceEtablissements(ctx, plan.centre, body.RayonKm*1000, body.Criteres, h.SourcesParNature)
 	if err != nil {
-		log.Error("search: source selection failed", "error", err)
+		log.Error(op+": source selection failed", "error", err)
 		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, false
 	}
 	if sources != nil {
-		resp.Sources = sources
+		plan.sources = sources
 	}
 	for _, c := range body.Criteres {
-		if !slices.ContainsFunc(resp.Sources, func(s models.Source) bool { return s.Critere == c.Nature }) {
-			resp.CriteresVides = append(resp.CriteresVides, c.Nature)
+		if !slices.ContainsFunc(plan.sources, func(s models.Source) bool { return s.Critere == c.Nature }) {
+			plan.criteresVides = append(plan.criteresVides, c.Nature)
 		}
 	}
-	if len(resp.CriteresVides) > 0 {
-		log.Info("search: no source for some criteres", "criteres_vides", resp.CriteresVides, "count_sources", len(resp.Sources))
-		writeJSON(w, http.StatusOK, resp)
-		return
+	if len(plan.criteresVides) > 0 {
+		return plan, true
 	}
 
 	// Clé de cache de chaque source.
-	keys := make([]models.IsochroneKey, len(resp.Sources))
-	for i, s := range resp.Sources {
+	plan.keys = make([]models.IsochroneKey, len(plan.sources))
+	for i, s := range plan.sources {
 		ll, ok := s.LonLat()
 		if !ok {
-			log.Error("search: source without valid position", "uai", s.UAI)
+			log.Error(op+": source without valid position", "uai", s.UAI)
 			writeError(w, http.StatusInternalServerError, "source "+s.UAI+" has no valid position")
-			return
+			return nil, false
 		}
-		keys[i] = models.NewIsochroneKey(ll, s.Dist, s.Transp)
+		plan.keys[i] = models.NewIsochroneKey(ll, s.Dist, s.Transp)
 	}
-	unique := slices.Compact(slices.SortedFunc(slices.Values(keys), compareKeys))
+	plan.unique = slices.Compact(slices.SortedFunc(slices.Values(plan.keys), compareKeys))
 
 	// Le cache n'est qu'une optimisation : une erreur de lecture est ignorée.
-	rings, err := h.Store.GetCachedIsochrones(ctx, unique, h.isoCacheTTL())
+	plan.rings, err = h.Store.GetCachedIsochrones(ctx, plan.unique, h.isoCacheTTL())
 	if err != nil {
-		log.Warn("search: isochrone cache read failed", "error", err)
-		rings = nil
+		log.Warn(op+": isochrone cache read failed", "error", err)
+		plan.rings = nil
 	}
-	if rings == nil {
-		rings = map[models.IsochroneKey][][2]float64{}
+	if plan.rings == nil {
+		plan.rings = map[models.IsochroneKey][][2]float64{}
 	}
-	var groups []*isoGroup
-	misses := 0
-	for i, k := range unique {
-		if _, ok := rings[k]; ok {
+	for _, k := range plan.unique {
+		if _, ok := plan.rings[k]; ok {
 			continue
 		}
-		misses++
+		plan.misses++
 		var g *isoGroup
-		for _, gg := range groups {
+		for _, gg := range plan.groups {
 			if gg.dist == float64(k.Dist) && gg.transp == k.Transp {
 				g = gg
 			}
 		}
 		if g == nil {
 			g = &isoGroup{dist: float64(k.Dist), transp: k.Transp}
-			groups = append(groups, g)
+			plan.groups = append(plan.groups, g)
 		}
-		g.keys = append(g.keys, unique[i])
+		g.keys = append(g.keys, k)
 		g.pts = append(g.pts, [2]float64{float64(k.LonE5) / 1e5, float64(k.LatE5) / 1e5})
 	}
+	return plan, true
+}
+
+// etablissementsInZone gère POST /etablissements. Les établissements sources
+// sont choisis autour du centre selon un critère par nature ; la zone est
+// l'intersection, entre critères, de l'union des isochrones des sources de
+// chaque critère (près d'au moins une source de chaque nature), restreinte
+// par les filtres.
+func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) {
+	log := logger(r.Context())
+	ctx := r.Context()
+
+	plan, ok := h.prepareSearch(w, r, "search")
+	if !ok {
+		return
+	}
+	body := plan.body
+	resp := models.ListeEtablissementsAvecIsochrone{
+		Centre:           models.Centre{Lon: plan.centre[0], Lat: plan.centre[1], RayonKm: body.RayonKm},
+		Sources:          plan.sources,
+		CriteresVides:    plan.criteresVides,
+		Etablissements:   []models.Etablissement{},
+		Communes:         []models.CommuneSecurite{},
+		Immobilier:       models.ImmobilierZone{Communes: []models.CommuneImmobilier{}, Quartiers: []models.QuartierImmobilier{}},
+		LogementsSociaux: []models.LogementSocialPosition{},
+	}
+	if len(resp.CriteresVides) > 0 {
+		log.Info("search: no source for some criteres", "criteres_vides", resp.CriteresVides, "count_sources", len(resp.Sources))
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	keys, unique, rings, groups, misses := plan.keys, plan.unique, plan.rings, plan.groups, plan.misses
 
 	// Seules les isochrones à calculer sont facturées, avant l'appel externe.
 	refund, ok := h.charge(w, r, fmt.Sprintf("Recherche (%d isochrone(s))", misses),
@@ -312,6 +346,45 @@ func (h *Handlers) etablissementsInZone(w http.ResponseWriter, r *http.Request) 
 	)
 	succeeded = true
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// estimateSearch gère POST /etablissements/estimation : même corps que
+// POST /etablissements, mais sans calcul ni débit. Elle renvoie le nombre de
+// sources et d'isochrones à calculer, et le coût de la recherche (nul si la
+// facturation est désactivée ou pour un administrateur), à confirmer par
+// l'interface au-delà de h.SearchCostWarningCents.
+func (h *Handlers) estimateSearch(w http.ResponseWriter, r *http.Request) {
+	log := logger(r.Context())
+	user, ok := currentUser(w, r)
+	if !ok {
+		return
+	}
+	plan, ok := h.prepareSearch(w, r, "estimate")
+	if !ok {
+		return
+	}
+	est := models.EstimationRecherche{
+		Sources:            len(plan.sources),
+		Isochrones:         len(plan.unique),
+		ACalculer:          plan.misses,
+		SoldeCents:         user.BalanceCents,
+		Gratuit:            !h.billingEnabled() || user.Perms == models.PermsAdmin,
+		AvertissementCents: h.SearchCostWarningCents,
+		CriteresVides:      plan.criteresVides,
+	}
+	if !est.Gratuit {
+		settings, err := h.Store.GetBillingSettings(r.Context())
+		if err != nil {
+			log.Error("estimate: could not read billing settings", "error", err)
+			writeError(w, http.StatusInternalServerError, "could not read billing settings")
+			return
+		}
+		est.PrixUnitaireCents = settings.PricePerOriginCents
+		est.CoutCents = settings.PricePerOriginCents * int64(est.ACalculer)
+	}
+	log.Info("search estimated", "centre", plan.body.Centre, "rayon_km", plan.body.RayonKm,
+		"count_sources", est.Sources, "isochrones", est.Isochrones, "a_calculer", est.ACalculer, "cout_cents", est.CoutCents)
+	writeJSON(w, http.StatusOK, est)
 }
 
 // compareKeys ordonne les clés de cache (pour les dédoublonner).
@@ -496,7 +569,7 @@ func (h *Handlers) itineraire(w http.ResponseWriter, r *http.Request) {
 
 	it, err := h.Routes.CalcItineraire(r.Context(), body.Depart, body.Arrivee, body.Transp)
 	if err != nil {
-		log.Error("itineraire: openrouteservice failed", "error", err)
+		log.Error("itineraire: routing failed", "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}

@@ -9,8 +9,8 @@ autres (`auth`, `billing`, `geo`, `mail`, `store`).
 | Fichier | Contenu |
 | ------- | ------- |
 | `router.go` | `NewRouter` : montage des routes chi (publiques, protégées par `auth.Middleware`, admin par `auth.RequireAdmin`), service de l'application monopage (`spaHandler`, injection de la version dans `index.html`), helpers `writeJSON` / `writeError`. |
-| `handlers.go` | Struct `Handlers` (dépendances, dont `IsoCacheTTL` / `IsoCacheMax`) et interfaces `Isochroner`, `RoutePlanner`, `Geocoder`, `AddressSuggester`, `OIDCProvider` ; détail d'un établissement, isochrone, profil, autocomplétion d'adresse. |
-| `search.go` | Recherche par établissements (`POST /etablissements`) : validation des critères par nature et des filtres de zone, sources, cache et calcul des isochrones (`computeIsochrones`), intersection, filtres, contenu de la zone (`fillZone`) ; fiche d'un quartier (`POST /quartiers/{iris}/proximite`) ; itinéraire (`POST /itineraire`). |
+| `handlers.go` | Struct `Handlers` (dépendances, dont `IsoCacheTTL` / `IsoCacheMax`, `SourcesParNature` et `SearchCostWarningCents`) et interfaces `Isochroner`, `RoutePlanner`, `Geocoder`, `AddressSuggester`, `OIDCProvider` ; détail d'un établissement, isochrone, profil, autocomplétion d'adresse. |
+| `search.go` | Préparation commune (`prepareSearch`, `searchPlan`) ; estimation d'une recherche (`POST /etablissements/estimation`, `estimateSearch`) ; recherche par établissements (`POST /etablissements`) : validation des critères par nature et des filtres de zone, sources, cache et calcul des isochrones (`computeIsochrones`), intersection, filtres, contenu de la zone (`fillZone`) ; fiche d'un quartier (`POST /quartiers/{iris}/proximite`) ; itinéraire (`POST /itineraire`). |
 | `auth_handlers.go` | Inscription, vérification d'e-mail, renvoi du lien, connexion, déconnexion, flux OIDC (config, redirection, callback). |
 | `user_handlers.go` | Profil (`PATCH /user`), changement d'e-mail et de mot de passe. |
 | `admin_handlers.go` | Gestion des comptes : liste, changement de niveau (avec e-mail d'approbation), suppression. |
@@ -26,8 +26,8 @@ autres (`auth`, `billing`, `geo`, `mail`, `store`).
   natures, secteurs, filières connues et réservées au critère `Lycée`, taux,
   temps, transport —,
   `validateFiltres` ; `422`) → géocodage du centre → sources
-  (`Store.SelectSourceEtablissements`, au plus `sourcesParNature` = 10 par
-  critère, dans `rayonMaxKm` = 50 km) ; une nature sans source rend la zone
+  (`Store.SelectSourceEtablissements`, au plus `Handlers.SourcesParNature`
+  par critère — 0 : sans plafond —, dans `rayonMaxKm` = 50 km) ; une nature sans source rend la zone
   vide (`criteres_vides`, ni calcul ni facturation) → lecture du cache
   (`Store.GetCachedIsochrones` ; une erreur est ignorée) → débit du prix des
   seules isochrones manquantes → calcul par lots de même temps et même mode
@@ -41,6 +41,12 @@ autres (`auth`, `billing`, `geo`, `mail`, `store`).
   (`Store.FilterZone`, seulement si un filtre est renseigné) → contenu de la
   zone (`fillZone`). Les sources de même position, temps et mode partagent une
   isochrone (clé `models.IsochroneKey`).
+- **Estimation** (`estimateSearch`) : les étapes jusqu'à la lecture du cache
+  sont partagées avec la recherche (`prepareSearch`, qui écrit lui-même les
+  erreurs `400` / `422` / `502` / `500`) ; ni calcul ni débit. Réponse
+  `models.EstimationRecherche` : sources, isochrones distinctes, à calculer,
+  coût (prix par isochrone × à calculer ; nul et `gratuit` si la facturation
+  est désactivée ou pour un administrateur), solde, seuil d'avertissement.
 - **Fiche d'un quartier** (`quartierProximite`) : code IRIS validé
   (`irisPattern`), critères validés sans temps ni mode, `Store.QuartierProximite`
   (`404` si l'IRIS est inconnu). Non facturée.
@@ -86,6 +92,7 @@ dans les fichiers de test :
 | `oidc_handlers_test.go` | Flux OIDC avec un `OIDCProvider` factice (`stubOIDC`). |
 | `admin_handlers_test.go` | `adminStore` ; gestion des comptes. |
 | `billing_mock_test.go` / `billing_handlers_test.go` | `fakeBill` (soldes en mémoire), `fakeProvider` (Mollie simulé), helpers `billed`, `threeSources` et la recherche `threeOrigins` (trois isochrones à calculer) ; facturation. |
+| `estimation_test.go` | Helper `estimate` ; estimation (comptes, cache partiel, coût, gratuité administrateur / facturation désactivée, critère sans source, erreurs, droits) ; plafond `SourcesParNature` transmis au store (0 et 10, 25 sources facturées) ; `search_warning_cents` de `GET /billing`. |
 | `failures_test.go` | `failingStore` (fait échouer une méthode nommée du `Store`), `callAs`, `failMailer`, `errProvider` ; chemins d'erreur de toutes les routes, remboursement après échec. |
 | `spa_test.go` | Service de l'application monopage. |
 

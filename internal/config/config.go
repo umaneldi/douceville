@@ -19,8 +19,26 @@ type Config struct {
 	PostgresUser     string
 	PostgresPassword string
 
-	ADDOKHost           string
+	ADDOKHost string
+
+	// RoutingProvider est le fournisseur d'isochrones et d'itinéraires :
+	// RoutingORS (OpenRouteService) ou RoutingValhalla (Valhalla auto-hébergé).
+	RoutingProvider string
+	// OpenRouteServiceKey et OpenRouteServiceURL configurent OpenRouteService
+	// (URL vide : API publique).
 	OpenRouteServiceKey string
+	OpenRouteServiceURL string
+	// ValhallaURL est l'URL du service Valhalla ; ValhallaConcurrency borne
+	// ses requêtes d'isochrones simultanées.
+	ValhallaURL         string
+	ValhallaConcurrency int
+	// SourcesParNature plafonne le nombre d'établissements sources par critère
+	// d'une recherche (0 : pas de plafond). Défaut : 10 avec OpenRouteService
+	// (quota de l'API publique), 0 avec Valhalla.
+	SourcesParNature int
+	// SearchCostWarningCents est le coût d'une recherche au-delà duquel
+	// l'interface demande confirmation (0 : jamais).
+	SearchCostWarningCents int64
 
 	// JWTSecret signe et valide les JWT émis par le backend (auth native).
 	JWTSecret string
@@ -67,6 +85,12 @@ type Config struct {
 	IsochroneCacheMax int
 }
 
+// Fournisseurs de routage acceptés par ROUTING_PROVIDER.
+const (
+	RoutingORS      = "ors"
+	RoutingValhalla = "valhalla"
+)
+
 // OIDCEnabled indique si la connexion OpenID Connect est configurée.
 func (c Config) OIDCEnabled() bool { return c.OIDCIssuerURL != "" }
 
@@ -89,6 +113,9 @@ func Load() (Config, error) {
 		PostgresPassword:    env("POSTGRES_PASSWORD", "douceville"),
 		ADDOKHost:           env("ADDOK_HOST", ""),
 		OpenRouteServiceKey: env("OPENROUTESERVICE_KEY", ""),
+		OpenRouteServiceURL: strings.TrimSpace(env("OPENROUTESERVICE_URL", "")),
+		RoutingProvider:     strings.ToLower(strings.TrimSpace(env("ROUTING_PROVIDER", RoutingORS))),
+		ValhallaURL:         strings.TrimSpace(env("VALHALLA_URL", "http://localhost:8002")),
 		JWTSecret:           env("JWT_SECRET", ""),
 		LogLevel:            env("LOGLEVEL", "INFO"),
 		ListenAddr:          env("LISTEN_ADDR", ":3566"),
@@ -122,6 +149,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	if err := c.loadRouting(); err != nil {
+		return Config{}, err
+	}
+
 	if c.JWTSecret == "" {
 		return Config{}, fmt.Errorf("JWT_SECRET is required")
 	}
@@ -148,6 +179,49 @@ func Load() (Config, error) {
 	}
 
 	return c, nil
+}
+
+// loadRouting lit et valide la configuration du routage et des recherches.
+func (c *Config) loadRouting() error {
+	switch c.RoutingProvider {
+	case RoutingORS:
+		c.SourcesParNature = 10
+	case RoutingValhalla:
+		c.SourcesParNature = 0
+	default:
+		return fmt.Errorf("ROUTING_PROVIDER must be %q or %q (got %q)", RoutingORS, RoutingValhalla, c.RoutingProvider)
+	}
+	for key, u := range map[string]string{"OPENROUTESERVICE_URL": c.OpenRouteServiceURL, "VALHALLA_URL": c.ValhallaURL} {
+		if u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			return fmt.Errorf("%s must be an http(s) URL (got %q)", key, u)
+		}
+	}
+	var err error
+	if c.ValhallaConcurrency, err = positiveInt("VALHALLA_CONCURRENCY", 8); err != nil {
+		return err
+	}
+	if c.SourcesParNature, err = nonNegativeInt("SOURCES_PAR_NATURE", c.SourcesParNature); err != nil {
+		return err
+	}
+	warn, err := nonNegativeInt("SEARCH_COST_WARNING_CENTS", 200)
+	if err != nil {
+		return err
+	}
+	c.SearchCostWarningCents = int64(warn)
+	return nil
+}
+
+// nonNegativeInt lit un entier positif ou nul (def si la variable est absente).
+func nonNegativeInt(key string, def int) (int, error) {
+	v := env(key, "")
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer (got %q)", key, v)
+	}
+	return n, nil
 }
 
 // positiveInt lit un entier strictement positif (def si la variable est absente).

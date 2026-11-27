@@ -16,7 +16,8 @@ import (
 	"github.com/umaneldi/douceville/internal/store"
 )
 
-// Isochroner calcule des isochrones (implémenté par geo.ORSClient).
+// Isochroner calcule des isochrones (implémenté par geo.ORSClient et
+// geo.ValhallaClient).
 type Isochroner interface {
 	// CalcIsochrone calcule l'isochrone d'une position (GET /isochrone).
 	CalcIsochrone(ctx context.Context, lonlat [2]float64, dist, interval float64, transp string) (models.Isochrone, error)
@@ -25,10 +26,11 @@ type Isochroner interface {
 	CalcIsochrones(ctx context.Context, lonlats [][2]float64, dist float64, transp string) ([]models.Isochrone, error)
 }
 
-// RoutePlanner calcule des itinéraires routiers (implémenté par geo.ORSClient).
+// RoutePlanner calcule des itinéraires routiers (implémenté par
+// geo.ORSClient et geo.ValhallaClient).
 type RoutePlanner interface {
 	// CalcItineraire calcule l'itinéraire de from à to ([lon, lat]) pour un
-	// profil de transport OpenRouteService.
+	// profil de transport (models.Transports).
 	CalcItineraire(ctx context.Context, from, to [2]float64, transp string) (models.Itineraire, error)
 }
 
@@ -77,6 +79,13 @@ type Handlers struct {
 	// limite si nul).
 	IsoCacheTTL time.Duration
 	IsoCacheMax int
+	// SourcesParNature plafonne le nombre d'établissements sources retenus par
+	// critère d'une recherche (chacun coûte une isochrone) ; 0 : pas de plafond.
+	SourcesParNature int
+	// SearchCostWarningCents est le coût d'une recherche au-delà duquel
+	// l'interface demande confirmation (0 : jamais), transmis par GET /billing
+	// et POST /etablissements/estimation.
+	SearchCostWarningCents int64
 }
 
 // readEtablissement gère GET /etablissement/{uai}.

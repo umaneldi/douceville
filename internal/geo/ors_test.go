@@ -55,7 +55,7 @@ func TestCalcIsochrone(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewORSClient("ors-key", redirect(srv))
+	c := NewORSClient("ors-key", "", redirect(srv))
 	iso, err := c.CalcIsochrone(context.Background(), [2]float64{2.35, 48.85}, 600, 300, "")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestCalcIsochrone_IntervalClamped(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewORSClient("k", redirect(srv))
+	c := NewORSClient("k", "", redirect(srv))
 	for _, interval := range []float64{0, -5, 5000} {
 		if _, err := c.CalcIsochrone(context.Background(), [2]float64{0, 0}, 900, interval, "foot-walking"); err != nil {
 			t.Fatal(err)
@@ -113,7 +113,7 @@ func TestCalcIsochrone_Errors(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer srv.Close()
-			if _, err := NewORSClient("k", redirect(srv)).CalcIsochrone(context.Background(), [2]float64{}, 600, 0, ""); err == nil {
+			if _, err := NewORSClient("k", "", redirect(srv)).CalcIsochrone(context.Background(), [2]float64{}, 600, 0, ""); err == nil {
 				t.Error("expected an error")
 			}
 		})
@@ -123,13 +123,13 @@ func TestCalcIsochrone_Errors(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	client := redirect(srv)
 	srv.Close()
-	if _, err := NewORSClient("k", client).CalcIsochrone(context.Background(), [2]float64{}, 600, 0, ""); err == nil {
+	if _, err := NewORSClient("k", "", client).CalcIsochrone(context.Background(), [2]float64{}, 600, 0, ""); err == nil {
 		t.Error("unreachable server: expected an error")
 	}
 }
 
 func TestNewORSClientDefaultHTTP(t *testing.T) {
-	if c := NewORSClient("k", nil); c.http != http.DefaultClient {
+	if c := NewORSClient("k", "", nil); c.http != http.DefaultClient {
 		t.Error("nil client should default to http.DefaultClient")
 	}
 }
@@ -164,7 +164,7 @@ func TestCalcIsochrones_Batches(t *testing.T) {
 	for i := range 7 {
 		lonlats = append(lonlats, [2]float64{float64(i), float64(10 + i)})
 	}
-	isos, err := NewORSClient("k", redirect(srv)).CalcIsochrones(context.Background(), lonlats, 600, "foot-walking")
+	isos, err := NewORSClient("k", "", redirect(srv)).CalcIsochrones(context.Background(), lonlats, 600, "foot-walking")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestCalcIsochrones_Batches(t *testing.T) {
 
 	// Aucune position : aucune requête.
 	bodies = nil
-	if isos, err := NewORSClient("k", redirect(srv)).CalcIsochrones(context.Background(), nil, 600, "foot-walking"); err != nil || len(isos) != 0 || len(bodies) != 0 {
+	if isos, err := NewORSClient("k", "", redirect(srv)).CalcIsochrones(context.Background(), nil, 600, "foot-walking"); err != nil || len(isos) != 0 || len(bodies) != 0 {
 		t.Errorf("no location = %v, %v (%d requests)", isos, err, len(bodies))
 	}
 }
@@ -209,7 +209,7 @@ func TestCalcIsochrones_Errors(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer srv.Close()
-			_, err := NewORSClient("k", redirect(srv)).CalcIsochrones(context.Background(), [][2]float64{{1, 2}, {3, 4}}, 600, "")
+			_, err := NewORSClient("k", "", redirect(srv)).CalcIsochrones(context.Background(), [][2]float64{{1, 2}, {3, 4}}, 600, "")
 			if err == nil {
 				t.Error("expected an error")
 			}
@@ -249,7 +249,7 @@ func TestCalcItineraire(t *testing.T) {
 	defer srv.Close()
 
 	from, to := [2]float64{1.44, 43.6}, [2]float64{1.46, 43.62}
-	it, err := NewORSClient("ors-key", redirect(srv)).CalcItineraire(context.Background(), from, to, "foot-walking")
+	it, err := NewORSClient("ors-key", "", redirect(srv)).CalcItineraire(context.Background(), from, to, "foot-walking")
 	if err != nil {
 		t.Fatalf("CalcItineraire: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestCalcItineraire(t *testing.T) {
 	}
 
 	// Profil par défaut.
-	if _, err := NewORSClient("k", redirect(srv)).CalcItineraire(context.Background(), from, to, ""); err != nil {
+	if _, err := NewORSClient("k", "", redirect(srv)).CalcItineraire(context.Background(), from, to, ""); err != nil {
 		t.Fatalf("CalcItineraire (default): %v", err)
 	}
 	if got.path != "/openrouteservice/v2/directions/driving-car/geojson" {
@@ -291,7 +291,7 @@ func TestCalcItineraire_Errors(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer srv.Close()
-			if _, err := NewORSClient("k", redirect(srv)).CalcItineraire(context.Background(), [2]float64{}, [2]float64{1, 1}, ""); err == nil {
+			if _, err := NewORSClient("k", "", redirect(srv)).CalcItineraire(context.Background(), [2]float64{}, [2]float64{1, 1}, ""); err == nil {
 				t.Error("expected an error")
 			}
 		})
@@ -301,7 +301,35 @@ func TestCalcItineraire_Errors(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	client := redirect(srv)
 	srv.Close()
-	if _, err := NewORSClient("k", client).CalcItineraire(context.Background(), [2]float64{}, [2]float64{1, 1}, ""); err == nil {
+	if _, err := NewORSClient("k", "", client).CalcItineraire(context.Background(), [2]float64{}, [2]float64{1, 1}, ""); err == nil {
 		t.Error("unreachable server: expected an error")
+	}
+}
+
+// Un ORS auto-hébergé : la racine configurée préfixe les chemins de l'API.
+func TestORSClientCustomBaseURL(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if strings.Contains(r.URL.Path, "/directions/") {
+			_, _ = w.Write([]byte(`{"features":[{"properties":{"summary":{"distance":1,"duration":2}},"geometry":{"coordinates":[[1,2],[3,4]]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"features":[{"properties":{"value":600},"geometry":{"coordinates":[[[1,2],[3,4],[1,2]]]}}]}`))
+	}))
+	defer srv.Close()
+	c := NewORSClient("k", srv.URL+"/ors/", nil)
+	if _, err := c.CalcIsochrone(context.Background(), [2]float64{1, 2}, 600, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CalcItineraire(context.Background(), [2]float64{1, 2}, [2]float64{3, 4}, "foot-walking"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/ors/v2/isochrones/driving-car", "/ors/v2/directions/foot-walking/geojson"}
+	if len(paths) != 2 || paths[0] != want[0] || paths[1] != want[1] {
+		t.Errorf("paths = %v, want %v", paths, want)
+	}
+	if NewORSClient("k", "", nil).baseURL != DefaultORSURL {
+		t.Error("empty base URL: want DefaultORSURL")
 	}
 }

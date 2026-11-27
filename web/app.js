@@ -600,14 +600,24 @@ function updateSearchCost() {
     el.classList.remove("err");
     return;
   }
-  // Au plus SOURCES_PAR_NATURE isochrones par nature ; celles déjà en cache
-  // (recherche récente sur les mêmes établissements) sont gratuites.
-  const n = SOURCES_PAR_NATURE * collectCriteres().length;
-  const cost = n * billing.price_per_origin_cents;
+  // Une isochrone par établissement source du rayon (le serveur peut les
+  // plafonner) ; celles déjà en cache (recherche récente sur les mêmes
+  // établissements) sont gratuites. Le coût exact est estimé au lancement.
   el.textContent =
-    `Coût : jusqu'à ${n} × ${fmtMoney(billing.price_per_origin_cents)} = ${fmtMoney(cost)}` +
-    ` (isochrones en cache gratuites) · solde ${fmtMoney(billing.balance_cents)}`;
-  el.classList.toggle("err", n > 0 && billing.price_per_origin_cents > billing.balance_cents);
+    `Coût : ${fmtMoney(billing.price_per_origin_cents)} par isochrone calculée (une par établissement ` +
+    `source du rayon ; isochrones en cache gratuites), estimé avant le lancement · ` +
+    `solde ${fmtMoney(billing.balance_cents)}`;
+  el.classList.toggle("err", billing.price_per_origin_cents > billing.balance_cents);
+}
+
+// Résumé d'une estimation de recherche : sources, isochrones à calculer et coût.
+function estimationText(est) {
+  if (est.criteres_vides && est.criteres_vides.length) {
+    return `aucun établissement source pour : ${est.criteres_vides.map(natureLabel).join(", ")}`;
+  }
+  const iso = `${est.a_calculer} isochrone(s) à calculer sur ${est.isochrones}`;
+  const cost = est.gratuit ? "gratuit" : fmtMoney(est.cout_cents);
+  return `${est.sources} établissement(s) source(s), ${iso} : ${cost}`;
 }
 
 // Ouvre les paramètres sur la section « Crédit », avec un message éventuel.
@@ -1050,7 +1060,10 @@ function securityLayerLabel() {
     `<strong>Indicateurs du score</strong>` +
     `<p>Taux pour 1 000 habitants (SSMSI, dernière année), classés par rapport à ` +
     `toutes les communes puis moyennés selon leur poids. Seuls les indicateurs ` +
-    `diffusés par la commune comptent.</p>${groups}</span></span>`
+    `diffusés par la commune comptent.</p>` +
+    `<p>La carte affiche le rang de la commune <strong>dans son département</strong> ` +
+    `(0 = la moins sûre du département, 100 = la plus sûre). Les départements sont ` +
+    `classés entre eux par le score national moyen de leurs communes.</p>${groups}</span></span>`
   );
 }
 
@@ -1071,13 +1084,47 @@ function communeStyle(feature) {
   };
 }
 
+// Nom d'un département de securite_departement : « Haute-Garonne (31) ».
+function depName(d) {
+  return d.nom ? `${d.nom} (${d.code})` : `Département ${d.code}`;
+}
+
+// Rang ordinal français : 1er, 2e…
+function ordinal(n) {
+  return n === 1 ? "1er" : `${n}e`;
+}
+
+// Classement national d'un département, en une ligne.
+function depRankLine(d) {
+  return (
+    `<strong>${esc(depName(d))}</strong> : ${ordinal(d.rang)} / ${d.nb_departements} départements` +
+    ` <span class="muted">(score moyen ${Math.round(d.score_moyen)}/100)</span>`
+  );
+}
+
+// Classement national des départements des communes données (distincts,
+// du plus sûr au moins sûr) ; vide sans données.
+function departementsRankHtml(communes) {
+  const deps = new Map();
+  for (const c of communes || []) {
+    if (c.departement) deps.set(c.departement.code, c.departement);
+  }
+  return [...deps.values()]
+    .sort((a, b) => a.rang - b.rang)
+    .map((d) => `<div>${depRankLine(d)}</div>`)
+    .join("");
+}
+
+// Infobulle d'une commune : score départemental (affiché par la carte), puis
+// score national.
 function communeTooltip(p) {
   const nom = `<strong>${esc(p.nom)}</strong>`;
   if (p.score == null) return `${nom}<br>Sécurité : pas de données diffusées`;
+  const dep = p.departement ? ` de ${esc(p.departement.nom || p.departement.code)}` : " du département";
   return (
-    `${nom}<br>Sécurité : <strong>${p.score}/100</strong>` +
-    `<br><span class="muted">plus sûre que ${p.score} % des communes` +
-    `<br>${p.annee}, ${p.nb_indicateurs}/15 indicateurs diffusés</span>`
+    `${nom}<br>Sécurité : <strong>${p.score}/100</strong> dans le département` +
+    `<br><span class="muted">plus sûre que ${p.score} % des communes${dep}` +
+    `<br>score national ${p.score_national}/100 · ${p.annee}, ${p.nb_indicateurs}/15 indicateurs diffusés</span>`
   );
 }
 
@@ -1100,7 +1147,8 @@ function securityLegend() {
       (c) => `<li><span class="swatch" style="background:${c.color}"></span>${c.label}</li>`,
     ).join("");
     div.innerHTML =
-      `<div class="legend-title">Score de sécurité</div><ul>${rows}` +
+      `<div class="legend-title">Sécurité (rang dans le département)</div>` +
+      `<div class="legend-deps"></div><ul>${rows}` +
       `<li><span class="swatch nodata"></span>Pas de données</li></ul>`;
     div.hidden = true; // affichée dès qu'une recherche renvoie des communes
     return div;
@@ -1118,12 +1166,18 @@ function renderCommunes(communes) {
       properties: {
         code_commune: c.code_commune,
         nom: c.nom,
-        score: c.score,
+        // Score affiché : rang dans le département ; le national est rappelé.
+        score: c.score_departement ?? null,
+        score_national: c.score,
+        departement: c.departement,
         annee: c.annee,
         nb_indicateurs: c.nb_indicateurs,
       },
     }));
   communeLayer.addData(features);
+  // Classement national des départements de la zone, en tête de la légende.
+  const deps = document.querySelector(".security-legend .legend-deps");
+  if (deps) deps.innerHTML = departementsRankHtml(communes);
   $(".security-legend").hidden = !features.length || !map.hasLayer(communeLayer);
 }
 
@@ -1595,11 +1649,15 @@ function placeCardHtml(quartier, proches, itineraires) {
 
   if (commune) {
     // Sécurité
+    // Classement du département en tête, puis score départemental et national.
+    const sd = commune.score_departement;
     const secu =
-      commune.score == null
+      commune.score == null || sd == null
         ? `<span class="muted">pas de données diffusées</span>`
-        : `Score : <strong>${commune.score}/100</strong>` +
-          `<div class="muted">plus sûre que ${commune.score} % des communes — ` +
+        : (commune.departement ? `<div>${depRankLine(commune.departement)}</div>` : "") +
+          `Score : <strong>${sd}/100</strong> dans le département` +
+          `<div class="muted">plus sûre que ${sd} % des communes du département — ` +
+          `score national ${commune.score}/100 — ` +
           `${commune.annee}, ${commune.nb_indicateurs}/15 indicateurs diffusés</div>`;
     html += placeSection("Sécurité", secu);
 
@@ -1806,12 +1864,11 @@ function drawQuartierRoutes(fiche, itineraires, current, refresh) {
 }
 
 // ---------------------------------------------------------------------------
-// Critères par nature : pour chaque nature cochée, les meilleurs
-// établissements du rayon donnent chacun une isochrone (temps et mode propres
+// Critères par nature : pour chaque nature cochée, les établissements du rayon
+// (tous, ou les meilleurs si le serveur plafonne les sources) donnent chacun une isochrone (temps et mode propres
 // à la nature) ; la zone est l'intersection, entre natures, de l'union des
 // isochrones de chaque nature (près d'au moins un établissement de chacune).
 // ---------------------------------------------------------------------------
-const SOURCES_PAR_NATURE = 10; // même limite que le serveur
 const SECTEURS = ["public", "privé", "hors contrat"];
 // Filières d'un lycée (models.Filieres côté serveur).
 const FILIERES = ["Général", "Technologique", "Professionnel", "Agricole"];
@@ -1977,11 +2034,25 @@ $("#search-form").addEventListener("submit", async (e) => {
     return fail("Prix au m² : minimum supérieur au maximum.");
   }
 
-  status.textContent = "Recherche en cours…";
   btn.disabled = true;
-
   const body = { centre, rayon_km: parseInt($("#rayon").value, 10), criteres, ...filtres };
   try {
+    // Estimation (gratuite) : nombre d'isochrones et coût, confirmation si le
+    // coût dépasse le seuil d'avertissement, arrêt si le solde ne suffit pas.
+    status.textContent = "Estimation du coût…";
+    const est = await api("/etablissements/estimation", { method: "POST", body: JSON.stringify(body) });
+    const resume = estimationText(est);
+    if (!est.gratuit && est.cout_cents > est.solde_cents) {
+      const err = new Error(`${resume} — crédit insuffisant (solde ${fmtMoney(est.solde_cents)}).`);
+      err.code = "insufficient_credit";
+      throw err;
+    }
+    if (!est.gratuit && est.avertissement_cents > 0 && est.cout_cents > est.avertissement_cents &&
+        !window.confirm(`Coût élevé : ${resume}.\nSolde : ${fmtMoney(est.solde_cents)}.\n\nLancer la recherche ?`)) {
+      status.textContent = `Recherche annulée (${resume}).`;
+      return;
+    }
+    status.textContent = `Recherche en cours… ${resume}`;
     const data = await api("/etablissements", {
       method: "POST",
       body: JSON.stringify(body),
@@ -2922,7 +2993,8 @@ function renderZoneCharts() {
   const f = lastFiltres || {};
   const fmtEur = (v) => `${v.toLocaleString("fr-FR")} €`;
 
-  renderHistogram($("#secu-chart"), communes.map((c) => c.score ?? null), {
+  $("#secu-deps").innerHTML = departementsRankHtml(communes);
+  renderHistogram($("#secu-chart"), communes.map((c) => c.score_departement ?? null), {
     lo: 0,
     hi: 100,
     step: 10,
@@ -2931,7 +3003,7 @@ function renderZoneCharts() {
     unit: "commune(s)",
     color: SECURITY_CLASSES[2].color,
     outside: f.securite_min != null ? (a, b) => b <= f.securite_min : null,
-    filtre: f.securite_min != null ? `score ≥ ${f.securite_min}` : "",
+    filtre: f.securite_min != null ? `score départemental ≥ ${f.securite_min}` : "",
   });
 
   renderHistogram($("#fisc-chart"), communes.map((c) => (c.fiscalite ? c.fiscalite.taux : null)), {

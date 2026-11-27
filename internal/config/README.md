@@ -19,6 +19,12 @@ reçoivent leurs paramètres explicitement (structs de config, arguments).
   le scope `openid` est ajouté s'il manque.
 - Si `BILLING_ENABLED` est vrai (`1`, `true`, `yes`, `on`) : `MOLLIE_API_KEY`
   doit commencer par `test_` ou `live_`.
+- `ROUTING_PROVIDER` vaut `ors` (défaut) ou `valhalla` (`RoutingORS`,
+  `RoutingValhalla`) ; `OPENROUTESERVICE_URL` et `VALHALLA_URL` doivent être des
+  URL `http(s)` ; `VALHALLA_CONCURRENCY` (défaut 8) un entier strictement
+  positif ; `SOURCES_PAR_NATURE` (défaut 10 avec `ors`, 0 — sans plafond — avec
+  `valhalla`) et `SEARCH_COST_WARNING_CENTS` (défaut 200) des entiers positifs
+  ou nuls (`nonNegativeInt`) — voir `loadRouting`.
 - `ISOCHRONE_CACHE_DAYS` (défaut 30, converti en `IsochroneCacheTTL`) et
   `ISOCHRONE_CACHE_MAX` (défaut 20 000, `IsochroneCacheMax`) doivent être des
   entiers strictement positifs (`positiveInt`).

@@ -42,6 +42,7 @@ func seedZone(t *testing.T, pool *pgxpool.Pool) {
 			('97411', 2024, 'Vols violents sans arme', 'victime', 1, 0.5, true),
 			('97411', 2024, 'Cambriolages de logement', 'logement', 1, 0.1, true)`,
 		`REFRESH MATERIALIZED VIEW securite_score`,
+		`REFRESH MATERIALIZED VIEW securite_departement`,
 		`INSERT INTO fiscalite (code_commune, year, taux_global_tfb, taux_plein_teom) VALUES
 			('75056', 2023, 10.0, 5.0),
 			('75056', 2024, 20.5, 6.25),

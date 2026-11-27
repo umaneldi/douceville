@@ -29,6 +29,12 @@ documenté dans [`schema.md`](../../schema.md).
 
 ## Points d'attention
 
+- **Sécurité** : le score lu pour l'interface et le filtre de zone est le
+  score départemental de la vue `securite_departement` (migration 022), joint
+  par `secuDepJoin` (avec le nom du département, table `departement`) ; ses
+  colonnes `secuDepColumns` sont lues par `secuDep` (`FindCommunesInZone`,
+  `QuartierProximite`). `seedZone` rafraîchit `securite_score` puis
+  `securite_departement`.
 - **Colonnes d'un établissement** : listées une seule fois par `etabCols`
   (préfixe d'alias, expression de la position) et `etabDest` (destinations de
   `Scan`, même ordre) ; `etabColumns`, `etabColumnsE` et `etabColumnsSel` en
@@ -106,6 +112,7 @@ DV_TEST_DSN=postgres://test:test@127.0.0.1:55432/test go test -cover ./internal/
 | `primaire_integration_test.go` | Helper `ecoles` (maternelle, élémentaire et écoles « primaire » autour de (2.5, 48.5)) ; migration 019 (reclassement, idempotence), écoles primaires retenues par les critères maternelle et élémentaire (sources, zone, fiche d'un quartier), secteur appliqué, autres natures non concernées. |
 | `filieres_integration_test.go` | Helper `filieres` (filières des lycées de `seedZone` et `lycees`) ; migration 020 (idempotence, tableau vide par défaut), lecture de `filieres`, filtre de filières dans les sources, la zone et la fiche d'un quartier. |
 | `annuaire_integration_test.go` | Helper `annuaire` (attributs de la migration 021 du lycée A de `seedZone`) ; migration 021 (idempotence), lecture des attributs par `GetEtablissementByUAI`, `FindEtablissementsInZone` et `SelectSourceEtablissements`, valeurs nulles et sections vides (non nil) par défaut. |
+| `securite_departement_integration_test.go` | Migration 022 : référentiel `departement` (101 lignes, idempotence), score départemental (rang centile dans le département, commune seule à 50), classement des départements (rang, score moyen, nombre), lecture par `FindCommunesInZone`, commune sans données. |
 | `billing_integration_test.go` | Tarifs, débit / remboursement / ajustement, paiements idempotents, journal. |
 
 Toute nouvelle requête ou migration doit être exercée par un de ces tests.

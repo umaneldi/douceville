@@ -483,6 +483,30 @@ func TestQuartierProximite(t *testing.T) {
 		t.Errorf("criteres = %+v", criteres)
 	}
 
+	// La sécurité porte le score départemental et le classement du département.
+	sd, nom := 72, "Haute-Garonne"
+	st.proximite.Securite = &models.SecuriteCommune{Annee: 2025, Score: 55, NbIndicateurs: 12, ScoreDepartement: &sd,
+		Departement: &models.DepartementSecurite{Code: "31", Nom: &nom, ScoreMoyen: 47.5, Rang: 62, NbDepartements: 101}}
+	rr = callAs(t, h, st, http.MethodPost, "/api/quartiers/315550101/proximite", `{"criteres":[]}`)
+	var secu struct {
+		Securite struct {
+			ScoreDepartement int `json:"score_departement"`
+			Departement      struct {
+				Code, Nom      string
+				ScoreMoyen     float64 `json:"score_moyen"`
+				Rang           int
+				NbDepartements int `json:"nb_departements"`
+			} `json:"departement"`
+		} `json:"securite"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &secu); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rr.Body.String())
+	}
+	if g := secu.Securite; g.ScoreDepartement != 72 || g.Departement.Code != "31" || g.Departement.Nom != nom ||
+		g.Departement.ScoreMoyen != 47.5 || g.Departement.Rang != 62 || g.Departement.NbDepartements != 101 {
+		t.Errorf("securite = %+v, want score_departement 72, Haute-Garonne 62e / 101 (47.5)", g)
+	}
+
 	// Corse (2A) accepté ; IRIS inconnu : 404.
 	st.proximite = nil
 	h.Store = st

@@ -74,11 +74,11 @@ func main() {
 	}
 
 	ban := geo.NewBANClient(cfg.ADDOKHost, nil)
-	ors := geo.NewORSClient(cfg.OpenRouteServiceKey, nil)
+	routing := newRouting(cfg)
 	handlers := &api.Handlers{
 		Store:     st,
-		Isochron:  ors,
-		Routes:    ors,
+		Isochron:  routing,
+		Routes:    routing,
 		Geocoder:  ban,
 		Suggester: ban,
 		JWTSecret: cfg.JWTSecret,
@@ -87,6 +87,9 @@ func main() {
 		// Cache des isochrones de recherche.
 		IsoCacheTTL: cfg.IsochroneCacheTTL,
 		IsoCacheMax: cfg.IsochroneCacheMax,
+		// Plafond de sources par critère et seuil d'avertissement du coût.
+		SourcesParNature:       cfg.SourcesParNature,
+		SearchCostWarningCents: cfg.SearchCostWarningCents,
 	}
 
 	if cfg.OIDCEnabled() {
@@ -157,4 +160,26 @@ func setupLogging(level string) {
 func fatal(step string, err error) {
 	slog.Error(step+" failed", "error", err)
 	os.Exit(1)
+}
+
+// routingClient regroupe les interfaces de routage (isochrones et
+// itinéraires) implémentées par les clients OpenRouteService et Valhalla.
+type routingClient interface {
+	api.Isochroner
+	api.RoutePlanner
+}
+
+// newRouting crée le client du fournisseur de routage configuré
+// (ROUTING_PROVIDER : OpenRouteService ou Valhalla).
+func newRouting(cfg config.Config) routingClient {
+	if cfg.RoutingProvider == config.RoutingValhalla {
+		slog.Info("routing provider: valhalla", "url", cfg.ValhallaURL, "concurrency", cfg.ValhallaConcurrency,
+			"sources_par_nature", cfg.SourcesParNature)
+		return geo.NewValhallaClient(cfg.ValhallaURL, cfg.ValhallaConcurrency, nil)
+	}
+	if cfg.OpenRouteServiceKey == "" && cfg.OpenRouteServiceURL == "" {
+		slog.Warn("OPENROUTESERVICE_KEY not set: isochrone and route requests to the public API will fail")
+	}
+	slog.Info("routing provider: openrouteservice", "url", cfg.OpenRouteServiceURL, "sources_par_nature", cfg.SourcesParNature)
+	return geo.NewORSClient(cfg.OpenRouteServiceKey, cfg.OpenRouteServiceURL, nil)
 }

@@ -42,3 +42,10 @@ __pycache__/
 node_modules/
 package-lock.json
 package.json
+
+# Analyses générées
+analyse_securite*.html
+
+# Valhalla : cache de tuiles du service et répertoire de construction
+.valhalla/
+.valhalla-build/

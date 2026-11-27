@@ -22,8 +22,11 @@ set +a
 # IPv6 loopback (::1) hangs on this host; force IPv4 unless overridden in .env.
 export POSTGRES_HOST="${POSTGRES_HOST:-127.0.0.1}"
 
+# The OpenRouteService key is only needed with the default routing provider.
+required=(JWT_SECRET POSTGRES_PASSWORD)
+[[ "${ROUTING_PROVIDER:-ors}" == valhalla ]] || required+=(OPENROUTESERVICE_KEY)
 missing=()
-for var in JWT_SECRET OPENROUTESERVICE_KEY POSTGRES_PASSWORD; do
+for var in "${required[@]}"; do
   [[ -n "${!var:-}" ]] || missing+=("$var")
 done
 if (( ${#missing[@]} )); then

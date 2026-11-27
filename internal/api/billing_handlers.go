@@ -111,13 +111,16 @@ type billingInfo struct {
 	Mode         string `json:"mode,omitempty"`
 	BalanceCents int64  `json:"balance_cents"`
 	// Free indique que le compte n'est pas facturé (administrateur).
-	Free                bool                       `json:"free"`
-	Currency            string                     `json:"currency,omitempty"`
-	PricePerOriginCents int64                      `json:"price_per_origin_cents"`
-	IsochronePriceCents int64                      `json:"isochrone_price_cents"`
-	MinTopupCents       int64                      `json:"min_topup_cents"`
-	MaxTopupCents       int64                      `json:"max_topup_cents"`
-	Transactions        []models.CreditTransaction `json:"transactions"`
+	Free                bool   `json:"free"`
+	Currency            string `json:"currency,omitempty"`
+	PricePerOriginCents int64  `json:"price_per_origin_cents"`
+	IsochronePriceCents int64  `json:"isochrone_price_cents"`
+	// SearchWarningCents est le coût d'une recherche au-delà duquel
+	// l'interface demande confirmation (0 : jamais).
+	SearchWarningCents int64                      `json:"search_warning_cents"`
+	MinTopupCents      int64                      `json:"min_topup_cents"`
+	MaxTopupCents      int64                      `json:"max_topup_cents"`
+	Transactions       []models.CreditTransaction `json:"transactions"`
 }
 
 // getBilling gère GET /billing : solde, tarifs et derniers mouvements.
@@ -149,6 +152,7 @@ func (h *Handlers) getBilling(w http.ResponseWriter, r *http.Request) {
 	info.Currency = settings.Currency
 	info.PricePerOriginCents = settings.PricePerOriginCents
 	info.IsochronePriceCents = settings.IsochronePriceCents
+	info.SearchWarningCents = h.SearchCostWarningCents
 	info.MinTopupCents = settings.MinTopupCents
 	info.MaxTopupCents = maxTopupCents
 	info.Transactions = txs

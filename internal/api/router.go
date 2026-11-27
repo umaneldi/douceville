@@ -39,6 +39,7 @@ func NewRouter(jwtSecret string, h *Handlers, users auth.UserLookup) http.Handle
 			protected.Use(auth.Middleware(jwtSecret, users))
 			protected.Get("/etablissement/{uai}", h.readEtablissement)
 			protected.Post("/etablissements", h.etablissementsInZone)
+			protected.Post("/etablissements/estimation", h.estimateSearch)
 			protected.Post("/quartiers/{iris}/proximite", h.quartierProximite)
 			protected.Post("/itineraire", h.itineraire)
 			protected.Get("/isochrone", h.isochrone)

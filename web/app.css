@@ -710,6 +710,11 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border: 1px solid #a8a29e;
 }
 .map-legend[hidden] { display: none; }
+/* Classement national des départements de la zone (légende et statistiques). */
+.map-legend .legend-deps { margin-bottom: 0.3rem; max-width: 16rem; }
+.map-legend .legend-deps:empty { display: none; }
+.dep-ranks { font-size: 0.8rem; margin: 0 0 0.4rem; line-height: 1.4; }
+.dep-ranks:empty { display: none; }
 /* Itinéraires du quartier sélectionné : texture qui avance le long du tracé
    (période = somme du dashArray « 1 11 »), figée si le mouvement est réduit. */
 .route-flow { animation: route-flow 0.8s linear infinite; }

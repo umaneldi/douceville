@@ -124,12 +124,19 @@ func TestSelectSourceEtablissementsIntegration(t *testing.T) {
 		t.Errorf("each source must carry its own critère: %+v / %+v", src[0], src[1])
 	}
 
-	// Sans critère ou sans place : rien.
+	// Sans critère : rien.
 	if src, err := s.SelectSourceEtablissements(ctx, centre, 20000, nil, 10); err != nil || len(src) != 0 {
 		t.Errorf("no critère = %v, %v", src, err)
 	}
-	if src, err := s.SelectSourceEtablissements(ctx, centre, 20000, []models.CritereNature{lycee}, 0); err != nil || len(src) != 0 {
-		t.Errorf("parNature 0 = %v, %v", src, err)
+	// Sans plafond (parNature <= 0) : toutes les sources du rayon, dans le
+	// même ordre ; au-delà de 20 km, G (100 %) s'ajoute en tête.
+	for _, parNature := range []int{0, -1} {
+		if src, err := s.SelectSourceEtablissements(ctx, centre, 20000, []models.CritereNature{lycee}, parNature); err != nil || sourceUAIs(src) != "[D E A F]" {
+			t.Errorf("parNature %d = %s, %v, want [D E A F]", parNature, sourceUAIs(src), err)
+		}
+	}
+	if src, err := s.SelectSourceEtablissements(ctx, centre, 40000, []models.CritereNature{lycee}, 0); err != nil || sourceUAIs(src) != "[G D E A F]" {
+		t.Errorf("no cap at 40 km = %s, %v, want [G D E A F]", sourceUAIs(src), err)
 	}
 }
 
@@ -145,9 +152,14 @@ func TestFilterZoneIntegration(t *testing.T) {
 		('999990001', '99999', 'Vide', 'H', ST_Multi(ST_GeomFromText('POLYGON((4 48,5 48,5 49,4 49,4 48))', 4326)))`)
 	const zone = "POLYGON((2 48,5 48,5 49,2 49,2 48))"
 
+	// Le filtre porte sur le score départemental : Paris, seule commune de son
+	// département, vaut 50.
 	var score float64
-	if err := pool.QueryRow(ctx, `SELECT score FROM securite_score WHERE code_commune = '75056' AND annee = 2024`).Scan(&score); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT score_departement FROM securite_departement WHERE code_commune = '75056' AND annee = 2024`).Scan(&score); err != nil {
 		t.Fatal(err)
+	}
+	if score != 50 {
+		t.Fatalf("score départemental de Paris = %v, want 50", score)
 	}
 	f := func(v float64) *float64 { return &v }
 	area := func(t *testing.T, fz models.FiltresZone) float64 {
@@ -288,7 +300,14 @@ func TestQuartierProximiteIntegration(t *testing.T) {
 		t.Errorf("prix = %+v, commune %+v", q.Prix, q.PrixCommune)
 	}
 	if q.Securite == nil || q.Securite.Annee != 2024 || q.Securite.NbIndicateurs != 2 {
-		t.Errorf("securite = %+v", q.Securite)
+		t.Fatalf("securite = %+v", q.Securite)
+	}
+	// Paris : seule commune de son département (score 50), département classé.
+	if sd := q.Securite.ScoreDepartement; sd == nil || *sd != 50 {
+		t.Errorf("score départemental = %v, want 50", sd)
+	}
+	if d := q.Securite.Departement; d == nil || d.Code != "75" || d.Nom == nil || *d.Nom != "Paris" || d.NbDepartements != 2 {
+		t.Errorf("département = %+v", d)
 	}
 	if q.Fiscalite == nil || q.Fiscalite.Taux != 26.75 {
 		t.Errorf("fiscalite = %+v", q.Fiscalite)

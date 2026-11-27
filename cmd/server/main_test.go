@@ -4,6 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+
+	"github.com/umaneldi/douceville/internal/config"
+	"github.com/umaneldi/douceville/internal/geo"
 )
 
 func TestSetupLogging(t *testing.T) {
@@ -23,6 +26,21 @@ func TestSetupLogging(t *testing.T) {
 		h := slog.Default().Handler()
 		if !h.Enabled(context.Background(), want) || (want > slog.LevelDebug && h.Enabled(context.Background(), want-1)) {
 			t.Errorf("setupLogging(%q): minimum level is not %v", level, want)
+		}
+	}
+}
+
+// newRouting choisit le client du fournisseur configuré.
+func TestNewRouting(t *testing.T) {
+	if _, ok := newRouting(config.Config{RoutingProvider: config.RoutingValhalla, ValhallaURL: "http://v:8002", ValhallaConcurrency: 2}).(*geo.ValhallaClient); !ok {
+		t.Error("valhalla: want *geo.ValhallaClient")
+	}
+	for _, cfg := range []config.Config{
+		{RoutingProvider: config.RoutingORS},
+		{RoutingProvider: config.RoutingORS, OpenRouteServiceKey: "k", OpenRouteServiceURL: "https://ors.example"},
+	} {
+		if _, ok := newRouting(cfg).(*geo.ORSClient); !ok {
+			t.Errorf("ors %+v: want *geo.ORSClient", cfg)
 		}
 	}
 }

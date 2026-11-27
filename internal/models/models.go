@@ -192,7 +192,28 @@ type Etablissement struct {
 	Taux *float64 `json:"taux,omitempty"`
 }
 
-// Isochrone décrit une zone d'accessibilité calculée par OpenRouteService.
+// EstimationRecherche est la réponse de POST /etablissements/estimation : le
+// coût d'une recherche avant de la lancer. Sources est le nombre
+// d'établissements sources, Isochrones le nombre d'isochrones distinctes et
+// ACalculer celles absentes du cache, seules facturées (PrixUnitaireCents
+// chacune, CoutCents au total). Gratuit vaut true si la facturation est
+// désactivée ou le compte administrateur (CoutCents nul). Une recherche dont
+// CoutCents dépasse AvertissementCents (non nul) demande confirmation.
+// CriteresVides liste les natures sans source (zone vide, rien à calculer).
+type EstimationRecherche struct {
+	Sources            int      `json:"sources"`
+	Isochrones         int      `json:"isochrones"`
+	ACalculer          int      `json:"a_calculer"`
+	PrixUnitaireCents  int64    `json:"prix_unitaire_cents"`
+	CoutCents          int64    `json:"cout_cents"`
+	SoldeCents         int64    `json:"solde_cents"`
+	Gratuit            bool     `json:"gratuit"`
+	AvertissementCents int64    `json:"avertissement_cents"`
+	CriteresVides      []string `json:"criteres_vides"`
+}
+
+// Isochrone décrit une zone d'accessibilité calculée par le fournisseur de
+// routage (OpenRouteService ou Valhalla).
 // geometry est l'anneau du polygone du temps maximal (dist), chaque point
 // étant [lon, lat] ; levels contient les isochrones emboîtées (par temps
 // croissant, la dernière étant celle de dist), absentes pour une isochrone de
@@ -236,7 +257,8 @@ const NatureLycee = "Lycée"
 // etablissement.filieres).
 var Filieres = []string{"Général", "Technologique", "Professionnel", "Agricole"}
 
-// Transports sont les profils OpenRouteService acceptés.
+// Transports sont les profils de transport acceptés (noms OpenRouteService,
+// traduits en modèles de coût par le client Valhalla).
 var Transports = []string{"driving-car", "cycling-regular", "foot-walking"}
 
 // CritereNature décrit, pour une nature d'établissement, les établissements
@@ -257,7 +279,8 @@ type CritereNature struct {
 
 // FiltresZone restreignent la zone de recherche aux quartiers IRIS dont le
 // prix au m² (médiane de l'IRIS, à défaut de la commune) est dans
-// [PrixM2Min, PrixM2Max] et dont la commune a un score de sécurité >=
+// [PrixM2Min, PrixM2Max] et dont la commune a un score de sécurité
+// départemental (rang centile dans son département) >=
 // SecuriteMin et un taux de fiscalité (TFB + TEOM) <= FiscaliteMax. Un champ
 // nul ne filtre pas ; une valeur inconnue exclut le quartier quand le filtre
 // correspondant est actif.
@@ -359,11 +382,28 @@ type Proche struct {
 }
 
 // SecuriteCommune est le score de sécurité d'une commune (dernière année de
-// securite_score).
+// securite_score) : Score est le rang centile national, ScoreDepartement le
+// rang centile parmi les communes de son département (vue
+// securite_departement), Departement le classement national de ce
+// département (nul si la vue n'a pas de ligne pour la commune).
 type SecuriteCommune struct {
-	Annee         int `json:"annee"`
-	Score         int `json:"score"`
-	NbIndicateurs int `json:"nb_indicateurs"`
+	Annee            int                  `json:"annee"`
+	Score            int                  `json:"score"`
+	NbIndicateurs    int                  `json:"nb_indicateurs"`
+	ScoreDepartement *int                 `json:"score_departement"`
+	Departement      *DepartementSecurite `json:"departement"`
+}
+
+// DepartementSecurite est le classement national d'un département (vue
+// securite_departement) : score national moyen de ses communes et rang parmi
+// les NbDepartements départements classés (1 = le plus sûr). Nom est nul si le
+// code est absent de la table departement.
+type DepartementSecurite struct {
+	Code           string  `json:"code"`
+	Nom            *string `json:"nom"`
+	ScoreMoyen     float64 `json:"score_moyen"`
+	Rang           int     `json:"rang"`
+	NbDepartements int     `json:"nb_departements"`
 }
 
 // QuartierProximite est la fiche d'un quartier IRIS : prix au m² (IRIS et
@@ -386,7 +426,7 @@ type QuartierProximite struct {
 }
 
 // ItineraireRequest est le corps de POST /itineraire : départ et arrivée
-// [lon, lat] et profil de transport OpenRouteService (voir Transports).
+// [lon, lat] et profil de transport (voir Transports).
 type ItineraireRequest struct {
 	Depart  [2]float64 `json:"depart"`
 	Arrivee [2]float64 `json:"arrivee"`
@@ -404,14 +444,19 @@ type Itineraire struct {
 // CommuneSecurite est une commune touchée par l'isochrone, avec son score de
 // sécurité (vue securite_score) et son contour GeoJSON (MultiPolygon, WGS84).
 // Annee, Score et NbIndicateurs sont nuls si aucun indicateur n'est diffusé.
+// ScoreDepartement est le score affiché par l'interface (rang centile dans le
+// département) et Departement le classement national du département ; nuls
+// eux aussi sans indicateur diffusé.
 type CommuneSecurite struct {
-	CodeCommune   string          `json:"code_commune"`
-	Nom           string          `json:"nom"`
-	Annee         *int            `json:"annee"`
-	Score         *int            `json:"score"`
-	NbIndicateurs *int            `json:"nb_indicateurs"`
-	Fiscalite     *Fiscalite      `json:"fiscalite"`
-	Contour       json.RawMessage `json:"contour"`
+	CodeCommune      string               `json:"code_commune"`
+	Nom              string               `json:"nom"`
+	Annee            *int                 `json:"annee"`
+	Score            *int                 `json:"score"`
+	NbIndicateurs    *int                 `json:"nb_indicateurs"`
+	ScoreDepartement *int                 `json:"score_departement"`
+	Departement      *DepartementSecurite `json:"departement"`
+	Fiscalite        *Fiscalite           `json:"fiscalite"`
+	Contour          json.RawMessage      `json:"contour"`
 }
 
 // Fiscalite est la fiscalité locale d'une commune (table fiscalite, dernier

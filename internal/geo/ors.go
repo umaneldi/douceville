@@ -1,5 +1,6 @@
 // Package geo regroupe les clients des services de géolocalisation externes :
-// OpenRouteService (isochrones) et addok/BAN (géocodage d'adresses).
+// routage (isochrones et itinéraires) par OpenRouteService ou Valhalla, et
+// addok/BAN (géocodage d'adresses).
 package geo
 
 import (
@@ -9,30 +10,34 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/umaneldi/douceville/internal/models"
 )
 
-// orsBaseURL est le point d'accès des isochrones : api.openrouteservice.org
-// répond désormais 410 Gone, l'API est servie par api.heigit.org.
-const orsBaseURL = "https://api.heigit.org/openrouteservice/v2/isochrones/"
+// DefaultORSURL est la racine de l'API OpenRouteService publique :
+// api.openrouteservice.org répond désormais 410 Gone, l'API est servie par
+// api.heigit.org.
+const DefaultORSURL = "https://api.heigit.org/openrouteservice"
 
-// orsDirectionsURL est le point d'accès des itinéraires (suivi du profil et
-// de « /geojson »).
-const orsDirectionsURL = "https://api.heigit.org/openrouteservice/v2/directions/"
-
-// ORSClient interroge l'API OpenRouteService.
+// ORSClient interroge l'API OpenRouteService (publique ou auto-hébergée).
 type ORSClient struct {
-	apiKey string
-	http   *http.Client
+	apiKey  string
+	baseURL string
+	http    *http.Client
 }
 
-// NewORSClient crée un client ORS.
-func NewORSClient(apiKey string, httpClient *http.Client) *ORSClient {
+// NewORSClient crée un client ORS pour la racine d'API baseURL
+// (DefaultORSURL si vide), à laquelle sont ajoutés /v2/isochrones/… et
+// /v2/directions/….
+func NewORSClient(apiKey, baseURL string, httpClient *http.Client) *ORSClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &ORSClient{apiKey: apiKey, http: httpClient}
+	if baseURL == "" {
+		baseURL = DefaultORSURL
+	}
+	return &ORSClient{apiKey: apiKey, baseURL: strings.TrimRight(baseURL, "/"), http: httpClient}
 }
 
 type orsResponse struct {
@@ -127,7 +132,7 @@ func (c *ORSClient) CalcIsochrones(ctx context.Context, lonlats [][2]float64, di
 // post envoie une requête d'isochrones pour le profil transp et décode la réponse.
 func (c *ORSClient) post(ctx context.Context, transp string, payload map[string]any) (orsResponse, error) {
 	var parsed orsResponse
-	err := c.do(ctx, orsBaseURL+transp, payload, &parsed)
+	err := c.do(ctx, c.baseURL+"/v2/isochrones/"+transp, payload, &parsed)
 	return parsed, err
 }
 
@@ -153,7 +158,7 @@ func (c *ORSClient) CalcItineraire(ctx context.Context, from, to [2]float64, tra
 		transp = "driving-car"
 	}
 	var parsed orsDirections
-	if err := c.do(ctx, orsDirectionsURL+transp+"/geojson", map[string]any{
+	if err := c.do(ctx, c.baseURL+"/v2/directions/"+transp+"/geojson", map[string]any{
 		"coordinates": [][2]float64{from, to},
 	}, &parsed); err != nil {
 		return models.Itineraire{}, err
@@ -193,24 +198,4 @@ func (c *ORSClient) do(ctx context.Context, url string, payload map[string]any, 
 		return fmt.Errorf("openrouteservice returned status %d", resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-// PolygonWKT construit la représentation WKT POLYGON((...)) de l'anneau de
-// l'isochrone, utilisable avec ST_GeomFromEWKT côté PostGIS.
-func PolygonWKT(iso models.Isochrone) string {
-	return RingWKT(iso.Geometry)
-}
-
-// RingWKT construit la représentation WKT POLYGON((...)) d'un anneau.
-func RingWKT(ring [][2]float64) string {
-	var b bytes.Buffer
-	b.WriteString("POLYGON((")
-	for i, pt := range ring {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		fmt.Fprintf(&b, "%f %f", pt[0], pt[1])
-	}
-	b.WriteString("))")
-	return b.String()
 }

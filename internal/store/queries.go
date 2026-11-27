@@ -474,17 +474,50 @@ func (s *PgStore) GetEtablissementByUAI(ctx context.Context, uai string) (*model
 	return etab, nil
 }
 
+// secuDepJoin joint, à une ligne s de securite_score, son score départemental
+// et le classement de son département (vue securite_departement, alias sd) et
+// le nom du département (table departement, alias dep).
+const secuDepJoin = `LEFT JOIN securite_departement sd ON sd.code_commune = s.code_commune
+			AND sd.annee = s.annee
+		LEFT JOIN departement dep ON dep.code = sd.departement`
+
+// secuDepColumns liste les colonnes de secuDepJoin lues par secuDep.dest.
+const secuDepColumns = `sd.score_departement, sd.departement, dep.nom, sd.dep_score_moyen, sd.dep_rang, sd.nb_departements`
+
+// secuDep reçoit les colonnes secuDepColumns (toutes nulles sans ligne dans
+// securite_departement).
+type secuDep struct {
+	score, rang, nb *int
+	code, nom       *string
+	moyen           *float64
+}
+
+// dest renvoie les destinations de Scan, dans l'ordre de secuDepColumns.
+func (d *secuDep) dest() []any {
+	return []any{&d.score, &d.code, &d.nom, &d.moyen, &d.rang, &d.nb}
+}
+
+// departement construit le classement du département (nil sans données).
+func (d *secuDep) departement() *models.DepartementSecurite {
+	if d.code == nil || d.moyen == nil || d.rang == nil || d.nb == nil {
+		return nil
+	}
+	return &models.DepartementSecurite{Code: *d.code, Nom: d.nom, ScoreMoyen: *d.moyen, Rang: *d.rang, NbDepartements: *d.nb}
+}
+
 // FindCommunesInZone implémente Store.FindCommunesInZone. Le WKT de
 // l'isochrone n'a pas de SRID : il est fixé à 4326 pour correspondre à
 // commune.contour. La fiscalité est celle du dernier exercice de la table
 // fiscalite (nulle si la commune n'y figure pas ou sans taux TFB).
 func (s *PgStore) FindCommunesInZone(ctx context.Context, polygonWKT string) ([]models.CommuneSecurite, error) {
 	const q = `SELECT c.code_commune, c.nom, s.annee, s.score, s.nb_indicateurs,
+			` + secuDepColumns + `,
 			f.year, f.taux_global_tfb, f.taux_plein_teom,
 			ST_AsGeoJSON(c.contour, 5)
 		FROM commune c
 		LEFT JOIN securite_score s ON s.code_commune = c.code_commune
 			AND s.annee = (SELECT max(annee) FROM securite_score)
+		` + secuDepJoin + `
 		LEFT JOIN fiscalite f ON f.code_commune = c.code_commune
 			AND f.year = (SELECT max(year) FROM fiscalite)
 		WHERE c.contour IS NOT NULL
@@ -503,10 +536,12 @@ func (s *PgStore) FindCommunesInZone(ctx context.Context, polygonWKT string) ([]
 		var contour string
 		var fYear *int
 		var tfb, teom *float64
-		if err := rows.Scan(&c.CodeCommune, &c.Nom, &c.Annee, &c.Score, &c.NbIndicateurs,
-			&fYear, &tfb, &teom, &contour); err != nil {
+		var dep secuDep
+		if err := rows.Scan(append(append([]any{&c.CodeCommune, &c.Nom, &c.Annee, &c.Score, &c.NbIndicateurs},
+			dep.dest()...), &fYear, &tfb, &teom, &contour)...); err != nil {
 			return nil, err
 		}
+		c.ScoreDepartement, c.Departement = dep.score, dep.departement()
 		if fYear != nil && tfb != nil {
 			f := models.Fiscalite{Annee: *fYear, TauxTFB: *tfb, TauxTEOM: teom, Taux: *tfb}
 			if teom != nil {

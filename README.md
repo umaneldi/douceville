@@ -12,11 +12,15 @@ Douceville aide à choisir où habiter. L'utilisateur choisit un **centre** et u
 **rayon**, puis, pour chaque **nature d'établissement** scolaire (maternelle,
 élémentaire, collège, lycée), ses critères : secteurs, filières (lycées : général,
 technologique, professionnel, agricole), plage de taux de réussite,
-temps de trajet et mode de transport. Les **10 meilleurs établissements** du
-rayon pour chaque nature donnent chacun une isochrone ; la **zone** affichée est
+temps de trajet et mode de transport. Les **établissements du rayon** de
+chaque nature (tous avec Valhalla, les 10 meilleurs avec OpenRouteService :
+plafond `SOURCES_PAR_NATURE`) donnent chacun une isochrone ; le **coût** de la
+recherche est estimé et affiché avant son lancement, avec une demande de
+confirmation au-delà d'un seuil ; la **zone** affichée est
 l'intersection, entre natures, de l'**union** des isochrones de chaque nature (on
 y est près d'au moins un établissement retenu de chaque nature), restreinte
-par des **filtres de zone** (prix au m², score de sécurité, fiscalité). La carte
+par des **filtres de zone** (prix au m², score de sécurité relatif au
+département, fiscalité). La carte
 montre ce qu'elle contient :
 
 - les **établissements scolaires** ; leur fiche (popup de la carte) liste les
@@ -25,7 +29,12 @@ montre ce qu'elle contient :
   métiers, sections — et leurs coordonnées (téléphone, e-mail, site web et
   fiche ONISEP cliquables), puis le taux de réussite et, repliés par défaut,
   les résultats aux examens (bac, brevet) ;
-- la **sécurité** des communes (score de délinquance SSMSI) et leur **fiscalité
+- la **sécurité** des communes (score de délinquance SSMSI) : la carte affiche
+  le **rang de la commune dans son département** (0 = la moins sûre du
+  département, 100 = la plus sûre ; le score national est rappelé dans
+  l'infobulle et la fiche), et le **classement national** de chaque département
+  de la zone (score national moyen de ses communes) apparaît en tête de la
+  légende, de l'histogramme et de la fiche du quartier ; et leur **fiscalité
   locale** (taxe foncière, TEOM) ;
 - le **prix de l'immobilier** au m² (ventes DVF) par commune et par quartier IRIS
   (les quartiers hors du filtre de prix ne sont pas colorés) ;
@@ -57,7 +66,8 @@ Les statistiques générales comprennent :
   légende avec effectifs et parts) ;
 - l'histogramme des taux de réussite. La sélection de tranches est mise en
   avant sur la carte et dans les listes d'établissements ;
-- les histogrammes de la **sécurité** et de la **fiscalité** des communes et du
+- les histogrammes de la **sécurité** (score départemental, précédé du
+  classement des départements de la zone) et de la **fiscalité** des communes et du
   **prix au m²** des quartiers IRIS. Ils sont affichés même sans filtre, avec
   les tranches hors du filtre actif atténuées.
 
@@ -127,6 +137,7 @@ la recherche. Exemple :
   - [Facturation (crédit prépayé, Mollie)](#facturation-crédit-prépayé-mollie)
   - [Développement](#développement)
   - [Déploiement](#déploiement)
+    - [Valhalla (isochrones et itinéraires auto-hébergés)](#valhalla-isochrones-et-itinéraires-auto-hébergés)
   - [Sources de données](#sources-de-données)
 
 ## Architecture
@@ -139,7 +150,9 @@ navigateur ──► / (UI statique embarquée, web/)
            └─► /api (API JSON, internal/api)
                     │
                     ├── PostgreSQL + PostGIS (internal/store)
-                    ├── OpenRouteService : isochrones (internal/geo)
+                    ├── routage : isochrones et itinéraires (internal/geo)
+                    │     OpenRouteService ou Valhalla (ROUTING_PROVIDER)
+                    │     Valhalla ── tuiles lues à la demande sur un stockage S3
                     ├── addok / Base Adresse Nationale : géocodage (internal/geo)
                     ├── SMTP : e-mails transactionnels (internal/mail)
                     ├── fournisseur OpenID Connect, optionnel (internal/auth)
@@ -159,8 +172,9 @@ navigateur ──► / (UI statique embarquée, web/)
 ### Déroulement d'une recherche (`POST /api/etablissements`)
 
 1. Le centre est géocodé (BAN).
-2. Pour chaque critère (une nature), PostGIS retient au plus 10 établissements
-   **sources** dans le rayon : ceux de la nature, des secteurs et de la plage de
+2. Pour chaque critère (une nature), PostGIS retient les établissements
+   **sources** du rayon (au plus `SOURCES_PAR_NATURE` par critère : 10 par
+   défaut avec OpenRouteService, sans plafond avec Valhalla) : ceux de la nature, des secteurs et de la plage de
    taux de réussite demandés (taux = Σadmis / Σprésents, vue
    `etablissement_taux` ; un établissement sans résultats n'est retenu que si
    la plage est complète, 0–100 %, faute de pouvoir vérifier qu'il y entre),
@@ -170,8 +184,12 @@ navigateur ──► / (UI statique embarquée, web/)
    aucune source, la zone est vide (`criteres_vides`).
 3. Les isochrones des sources (temps et mode du critère de leur nature) sont lues
    dans le **cache** (`isochrone_cache`) ; les manquantes sont **facturées**
-   (débit d'avance, remboursé en cas d'échec), calculées par OpenRouteService
-   (5 positions par requête) puis mises en cache.
+   (débit d'avance, remboursé en cas d'échec), calculées par le fournisseur de
+   routage (OpenRouteService : 5 positions par requête ; Valhalla : une requête
+   par position, `VALHALLA_CONCURRENCY` en parallèle) puis mises en cache.
+   L'interface appelle d'abord `POST /api/etablissements/estimation` (mêmes
+   étapes 1 à 3, sans calcul ni débit) pour afficher le nombre d'isochrones et
+   le coût, et demander confirmation au-delà de `SEARCH_COST_WARNING_CENTS`.
 4. PostGIS unit les isochrones des sources de chaque critère, puis calcule
    l'**intersection** de ces unions (`zone_brute`), puis la restreint aux quartiers IRIS qui respectent les
    filtres de zone (`zone`).
@@ -188,7 +206,7 @@ navigateur ──► / (UI statique embarquée, web/)
 | [`internal/auth/`](internal/auth/README.md) | JWT, middleware d'authentification, mots de passe, jetons de vérification, OpenID Connect. |
 | [`internal/billing/`](internal/billing/README.md) | Prestataires de paiement (Mollie) pour le crédit prépayé. |
 | [`internal/config/`](internal/config/README.md) | Lecture et validation des variables d'environnement. |
-| [`internal/geo/`](internal/geo/README.md) | Clients OpenRouteService (isochrones) et addok/BAN (géocodage, autocomplétion). |
+| [`internal/geo/`](internal/geo/README.md) | Clients de routage OpenRouteService et Valhalla (isochrones, itinéraires) et addok/BAN (géocodage, autocomplétion). |
 | [`internal/mail/`](internal/mail/README.md) | Envoi des e-mails (SMTP, ou simple journalisation en développement). |
 | [`internal/models/`](internal/models/README.md) | Structures de données échangées par l'API et entre paquets. |
 | [`internal/store/`](internal/store/README.md) | Accès PostgreSQL/PostGIS et migrations SQL embarquées. |
@@ -198,6 +216,7 @@ navigateur ──► / (UI statique embarquée, web/)
 | [`CLAUDE.md`](CLAUDE.md) | Consignes pour les agents de code (et règles de maintenance de la documentation). |
 | `Dockerfile`, `docker-compose.yml` | Image de production et pile Docker (PostGIS + application). |
 | `launch_server.sh`, `restart.sh`, `import.sh` | Lancement local du serveur, de la base, et import complet des données. |
+| [`analyse_securite.py`](analyse_securite.py) | Analyse nationale du score de sécurité (distribution, moyenne, écart-type ; plotly). |
 
 ## Démarrage rapide
 
@@ -230,8 +249,8 @@ cp sample.env .env          # puis renseigner les valeurs
 ./launch_server.sh          # charge .env et lance `go run ./cmd/server`
 ```
 
-`launch_server.sh` exige `JWT_SECRET`, `OPENROUTESERVICE_KEY` et
-`POSTGRES_PASSWORD` dans `.env`. Sans le script :
+`launch_server.sh` exige `JWT_SECRET` et `POSTGRES_PASSWORD` dans `.env`, et
+`OPENROUTESERVICE_KEY` sauf si `ROUTING_PROVIDER=valhalla`. Sans le script :
 
 ```bash
 JWT_SECRET=dev-secret POSTGRES_HOST=127.0.0.1 go run ./cmd/server
@@ -250,7 +269,9 @@ JWT_SECRET=dev-secret POSTGRES_HOST=127.0.0.1 go run ./cmd/server
    d'établissement (temps de trajet, mode, secteurs, taux de réussite propres à
    chacune), éventuellement des filtres de zone, puis **Rechercher**.
 
-> La recherche nécessite un `OPENROUTESERVICE_KEY` (isochrones) et des données
+> La recherche nécessite un fournisseur de routage (`OPENROUTESERVICE_KEY`, ou
+> un service Valhalla avec `ROUTING_PROVIDER=valhalla` : voir
+> [Valhalla](#valhalla-isochrones-et-itinéraires-auto-hébergés)) et des données
 > chargées en base (voir ci-dessous). Le géocodage utilise l'API publique de la
 > BAN si `ADDOK_HOST` est vide. L'inscription, la connexion et l'interface
 > fonctionnent sans ces éléments.
@@ -272,7 +293,7 @@ douceville -d douceville"`), et la plupart `--dry-run`.
 | 5 | `import_logement_social.py` | `logement_social` | RPLS |
 | 6 | `import_etablissements_parquet.py` | `etablissement` (nature `Primaire` pour une école à la fois maternelle et élémentaire ou dont le nom contient « primaire » ; `filieres` des lycées d'après leurs voies ; éducation prioritaire, services, sections et contact, à réimporter après la migration 021) | Annuaire de l'éducation (`annuaire-de-leducation.parquet`) |
 | 7 | `import_resultats_parquet.py` | `resultat` | Indicateurs de résultats lycées / collèges |
-| 8 | `import_securite_parquet.py` | `securite` (+ rafraîchit `securite_score`) | SSMSI, délinquance communale |
+| 8 | `import_securite_parquet.py` | `securite` (+ rafraîchit `securite_score` puis `securite_departement`) | SSMSI, délinquance communale |
 | 9 | `import_fiscalite_parquet.py` | `fiscalite` | DGFiP, fiscalité locale des particuliers |
 
 Les communes doivent être chargées **en premier** (les autres tables y font
@@ -288,6 +309,20 @@ Autres scripts :
   serveur connecté avec un tel rôle **saute les migrations** au démarrage (le
   schéma doit déjà être à jour).
 
+Analyse (à la racine du dépôt) :
+
+- [`analyse_securite.py`](analyse_securite.py) — analyse nationale du score de
+  sécurité national (vue `securite_score` ; la carte affiche désormais le rang
+  dans le département, `securite_departement`), dernière année par
+  défaut, `--annee` pour une autre) : distribution par point de score (aux
+  couleurs des classes de la carte) avec une courbe de densité, moyenne et
+  écart-type (±1σ), médiane et quartiles, communes par classe et communes sans
+  donnée. Figure [plotly](https://plotly.com/python/) écrite dans
+  `analyse_securite.html` (`--out`, `--show` pour l'ouvrir) ; mêmes options de
+  connexion `--dsn` / `--psql` que les scripts d'import. Lancement :
+  `uv run analyse_securite.py`. Le score étant un rang centile, sa distribution
+  est presque uniforme par construction (moyenne ≈ 50, écart-type ≈ 28,9).
+
 ## Configuration
 
 Copiez [`sample.env`](sample.env) en `.env` et renseignez les valeurs. Variables
@@ -302,7 +337,13 @@ lues par le backend ([`internal/config`](internal/config/README.md)) :
 | `POSTGRES_USER`        | `douceville`  | Utilisateur PostgreSQL.                            |
 | `POSTGRES_PASSWORD`    | `douceville`  | Mot de passe PostgreSQL.                           |
 | `ADDOK_HOST`           | — (vide)      | Hôte d'une instance addok (`http://<hôte>:7878`). Vide : API publique BAN (`data.geopf.fr`). |
-| `OPENROUTESERVICE_KEY` | — (vide)      | Clé API OpenRouteService.                          |
+| `ROUTING_PROVIDER`     | `ors`         | Fournisseur des isochrones et itinéraires : `ors` (OpenRouteService) ou `valhalla` (auto-hébergé). |
+| `OPENROUTESERVICE_KEY` | — (vide)      | Clé API OpenRouteService (fournisseur `ors`).      |
+| `OPENROUTESERVICE_URL` | — (vide)      | Racine d'un OpenRouteService auto-hébergé. Vide : API publique (`https://api.heigit.org/openrouteservice`). |
+| `VALHALLA_URL`         | `http://localhost:8002` | URL du service Valhalla (fournisseur `valhalla` ; `http://valhalla:8002` dans `docker-compose.yml`). |
+| `VALHALLA_CONCURRENCY` | `8`           | Requêtes d'isochrones Valhalla simultanées (une par source).    |
+| `SOURCES_PAR_NATURE`   | `10` (ors) / `0` (valhalla) | Plafond d'établissements sources par critère d'une recherche ; `0` : pas de plafond (tous les établissements du rayon). Avec l'API publique OpenRouteService (20 requêtes/min, 500/jour), un plafond est indispensable. |
+| `SEARCH_COST_WARNING_CENTS` | `200`    | Coût d'une recherche (centimes) au-delà duquel l'interface demande confirmation ; `0` : jamais. |
 | `LISTEN_ADDR`          | `:3566`       | Adresse d'écoute du serveur HTTP.                  |
 | `LOGLEVEL`             | `INFO`        | `DEBUG`, `INFO`, `WARN`, `ERROR`.                  |
 | `PUBLIC_URL`           | `http://localhost:3566` | URL publique : base des liens envoyés par e-mail et des URL de retour (OIDC, Mollie). |
@@ -364,8 +405,9 @@ exigent un header `Authorization: Bearer <token>` **et** un compte de niveau
 | Méthode | Route | Auth | Description |
 | ------- | ----- | :--: | ----------- |
 | `POST` | `/api/etablissements` | ✓ | Recherche par établissements (payante : isochrones calculées). |
+| `POST` | `/api/etablissements/estimation` | ✓ | Estimation gratuite d'une recherche (même corps) : `{sources, isochrones, a_calculer, prix_unitaire_cents, cout_cents, solde_cents, gratuit, avertissement_cents, criteres_vides}`. |
 | `POST` | `/api/quartiers/{iris}/proximite` | ✓ | Fiche d'un quartier IRIS et établissement le plus proche par critère (gratuite). |
-| `POST` | `/api/itineraire` | ✓ | Itinéraire OpenRouteService entre deux positions (gratuit). |
+| `POST` | `/api/itineraire` | ✓ | Itinéraire entre deux positions (OpenRouteService ou Valhalla ; gratuit). |
 | `GET` | `/api/etablissement/{uai}` | ✓ | Détail d'un établissement et de ses résultats. |
 | `GET` | `/api/isochrone` | ✓ | Isochrone depuis des coordonnées (`lat`, `lon`, `dist`, `transp`) (payante). |
 | `GET` | `/api/address/suggest?q=…` | ✓ | Autocomplétion d'adresse (5 suggestions, à partir de 3 caractères ; gratuite). |
@@ -396,18 +438,25 @@ les critères `Maternelle` et `Elementaire`.
 }
 ```
 
+`securite_min` porte sur le **score départemental** (rang de la commune dans son
+département, 0–100, vue `securite_departement`), celui qu'affiche la carte.
+
 La réponse contient `centre` (`{lon, lat, rayon_km}`), `sources` (établissements
 retenus, avec `taux`, la nature `critere` du critère qui les a retenus — elle
 diffère de `nature` pour une école primaire, qui peut figurer une fois par
 critère —, `dist`, `transp` et leur anneau `isochrone`),
 `criteres_vides` (natures sans source), `zone_brute` (intersection,
 entre natures, des unions d'isochrones) et `zone` (après filtres) en GeoJSON — `null` si vides —,
-`etablissements`, `communes` (contour, score de sécurité, fiscalité),
+`etablissements`, `communes` (contour, score de sécurité national `score`,
+score départemental `score_departement` et classement de son département
+`departement` : `code`, `nom`, `score_moyen`, `rang`, `nb_departements` ;
+fiscalité),
 `immobilier` (prix au m² par commune et par IRIS) et `logements_sociaux`.
 
 `POST /api/quartiers/{iris}/proximite` reçoit `{"criteres": [...]}` (mêmes
 critères ; `dist` et `transp` ignorés) et renvoie le prix au m² de l'IRIS et de
-sa commune, la sécurité et la fiscalité de la commune, et `proches` : pour
+sa commune, la sécurité (avec `score_departement` et `departement`, comme pour
+`communes`) et la fiscalité de la commune, et `proches` : pour
 chaque critère, l'établissement le plus proche qui le satisfait (sans limite de
 rayon), avec sa distance **à vol d'oiseau** en mètres (`distance_m`, `null` si
 aucun) et sa position (`lon`, `lat`) depuis un point intérieur du quartier,
@@ -417,7 +466,7 @@ lui aussi renvoyé (`lon`, `lat`). IRIS inconnu : `404`.
 "transp": "foot-walking"}` (`transp` obligatoire : `driving-car`,
 `cycling-regular` ou `foot-walking`) et renvoie `{geometry, distance_m,
 duree_s}` (tracé `[[lon, lat], …]`, mètres, secondes). Paramètres invalides :
-`422` ; erreur d'OpenRouteService : `502`.
+`422` ; erreur du fournisseur de routage : `502`.
 
 Les structures sont décrites dans [`internal/models`](internal/models/README.md).
 
@@ -425,7 +474,7 @@ Les structures sont décrites dans [`internal/models`](internal/models/README.md
 
 | Méthode | Route | Auth | Description |
 | ------- | ----- | :--: | ----------- |
-| `GET` | `/api/billing` | ✓ | `{enabled, mode, balance_cents, free, currency, price_per_origin_cents, isochrone_price_cents, min_topup_cents, max_topup_cents, transactions}`. |
+| `GET` | `/api/billing` | ✓ | `{enabled, mode, balance_cents, free, currency, price_per_origin_cents, isochrone_price_cents, search_warning_cents, min_topup_cents, max_topup_cents, transactions}`. |
 | `POST` | `/api/billing/topup` | ✓ | Crée un paiement Mollie (`{amount_cents}`) ; renvoie `{checkout_url, payment_id}`. |
 | `POST` | `/api/billing/sync` | ✓ | Relit auprès de Mollie les paiements en cours du compte (retour de la page de paiement). |
 | `POST` | `/api/billing/webhook/mollie` | — | Notification Mollie (`id=tr_…`) ; le statut est relu auprès de l'API Mollie. |
@@ -510,8 +559,13 @@ par [Mollie](https://www.mollie.com) depuis *Paramètres du compte → Crédit*.
 - `POST /api/etablissements` coûte *prix par isochrone × nombre d'isochrones
   calculées* (réglage `price_per_origin_cents`) : les isochrones déjà en cache
   sont gratuites, une recherche entièrement en cache ne coûte rien. `GET
-  /api/isochrone` a son propre prix. La fiche d'un quartier, ses itinéraires et
-  l'autocomplétion d'adresse sont gratuits.
+  /api/isochrone` a son propre prix. La fiche d'un quartier, ses itinéraires,
+  l'autocomplétion d'adresse et l'estimation d'une recherche sont gratuits.
+- Sans plafond de sources (Valhalla), une recherche peut calculer des centaines
+  d'isochrones : l'interface l'**estime** d'abord (`POST
+  /api/etablissements/estimation`), affiche le nombre d'isochrones et le coût,
+  refuse de lancer la recherche si le solde ne suffit pas et demande
+  **confirmation** si le coût dépasse `SEARCH_COST_WARNING_CENTS`.
 - Le prix est débité **avant** les appels externes, de façon atomique (le solde
   ne peut pas devenir négatif) ; si la requête échoue, il est remboursé. Solde
   insuffisant : `402`, `code=insufficient_credit`.
@@ -607,7 +661,68 @@ docker run -p 3566:3566 \
   base `geotestdb` (PostGIS, données dans `.test_db/`) et l'application `app`
   (profil `app` : `docker compose --profile app up -d`), sur le réseau Traefik
   externe `$TRAEFIK_NETWORK`. Le conteneur écoute sur `3566` et sert l'UI
-  **et** l'API.
+  **et** l'API. Le service `valhalla` (profil `valhalla`) est décrit
+  ci-dessous.
+
+### Valhalla (isochrones et itinéraires auto-hébergés)
+
+L'API publique OpenRouteService est limitée (20 requêtes d'isochrones par
+minute, 500 par jour) : elle impose un plafond de 10 sources par nature. Avec
+`ROUTING_PROVIDER=valhalla`, Douceville interroge un service
+[Valhalla](https://github.com/valhalla/valhalla) auto-hébergé, sans quota, et
+toutes les sources du rayon sont gardées.
+
+Le service ne **construit** rien : il **lit à la demande** les tuiles de routage
+(graphe routier issu d'OpenStreetMap, découpé en carreaux) sur un **stockage S3
+compatible** quelconque (`mjolnir.tile_url`), les garde dans `./.valhalla/tiles`
+et borne leur cache mémoire. Une machine modeste suffit (≈ 1–2 Go de RAM pour la
+France, quelques Go de disque pour les seules régions interrogées).
+
+1. **Construire et déposer les tuiles**, sur une machine de build (pas dans
+   l'image de prod), avec
+   [`scripts/build_valhalla_tiles.sh`](scripts/build_valhalla_tiles.sh) :
+   ```bash
+   AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_DEFAULT_REGION=… \
+     scripts/build_valhalla_tiles.sh --drom \
+       --upload s3://mon-seau/valhalla/fr --endpoint https://s3.mon-fournisseur.example
+   ```
+   Le script télécharge les extraits Geofabrik (France ; `--drom` : outre-mer),
+   construit les tuiles dans un conteneur `ghcr.io/valhalla/valhalla` (≈ 8–16 Go
+   de RAM, 25–30 Go de disque, 1 à 3 h pour la France ; `--region URL` pour un
+   petit extrait de test), puis les synchronise vers le S3 (`aws s3 sync`, dans
+   le conteneur `amazon/aws-cli`). Il affiche la valeur de `VALHALLA_TILE_URL`.
+   `--help` détaille les options (`--skip-build`, `--dry-run`, `--public-url`,
+   `--docker-network`…).
+2. **Rendre les tuiles lisibles** : le seau (ou le préfixe) doit être en
+   **lecture publique** HTTP, ou servi par un proxy (authentification basique
+   possible avec `VALHALLA_TILE_URL_USER_PW`) : Valhalla ne signe pas les
+   requêtes S3. Les tuiles sont des données OpenStreetMap (licence ODbL).
+3. **Lancer le service** et basculer Douceville :
+   ```bash
+   VALHALLA_TILE_URL='https://s3.mon-fournisseur.example/mon-seau/valhalla/fr/{tilePath}' \
+     docker compose --profile valhalla up -d valhalla
+   # puis, pour l'application : ROUTING_PROVIDER=valhalla (VALHALLA_URL=http://valhalla:8002)
+   ```
+
+| Variable du service `valhalla` | Défaut | Rôle |
+| ------------------------------ | ------ | ---- |
+| `VALHALLA_TILE_URL`            | — (requis) | URL HTTP publique des tuiles, terminée par `/{tilePath}`. |
+| `VALHALLA_TILE_URL_USER_PW`    | — (vide)   | `utilisateur:motdepasse` d'un proxy à authentification basique. |
+| `VALHALLA_CACHE_BYTES`         | `300000000` | Taille maximale du cache mémoire des tuiles décodées. |
+| `VALHALLA_THREADS`             | `4`        | Fils de calcul du service. |
+| `VALHALLA_IMAGE`               | `ghcr.io/valhalla/valhalla:3.9.3` | Image du service **et** du script : la même version doit construire et lire les tuiles (leur format change entre versions). |
+
+- **Mise à jour** (mensuelle, par exemple) : relancer le script, puis **vider
+  `./.valhalla/tiles`** et recréer le service
+  (`docker compose --profile valhalla up -d --force-recreate valhalla`), sinon
+  les anciennes tuiles en cache restent servies. Les isochrones en cache de
+  Douceville (`ISOCHRONE_CACHE_DAYS`) expirent d'elles-mêmes.
+- La **carte de connectivité** de Valhalla est désactivée
+  (`loki.use_connectivity`) : construite au démarrage à partir des seules
+  tuiles locales, elle ferait rejeter tous les itinéraires d'un cache vide
+  (« unconnected regions »).
+- Le service n'écoute que sur `127.0.0.1:8002` (et sur le réseau compose pour
+  l'application).
 
 ## Sources de données
 
@@ -621,4 +736,5 @@ docker run -p 3566:3566 \
 - Immobilier : [demandes de valeurs foncières géolocalisées](https://www.data.gouv.fr/datasets/demandes-de-valeurs-foncieres-geolocalisees?resource_id=d7933994-2c66-4131-a4da-cf7cd18040a4)
 - Fiscalité : [fiscalité locale des particuliers](https://www.data.gouv.fr/datasets/fiscalite-locale-des-particuliers?resource_id=f48d0fcc-f732-445d-ba2d-886ec4952bce)
 - Logements sociaux : [RPLS, données détaillées au logement](https://www.data.gouv.fr/datasets/donnees-detaillees-au-logement-du-repertoire-des-logements-locatifs-des-bailleurs-sociaux-rpls)
+- Routage (Valhalla) : [extraits OpenStreetMap de Geofabrik](https://download.geofabrik.de/europe/france.html) (© contributeurs OpenStreetMap, ODbL)
 - Revenus (pas encore importés) : [revenus et pauvreté des ménages (Filosofi)](https://www.data.gouv.fr/datasets/revenus-et-pauvrete-des-menages-aux-niveaux-national-et-local-revenus-localises-sociaux-et-fiscaux)

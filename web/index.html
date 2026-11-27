@@ -117,7 +117,9 @@
                 €
               </div>
               <label class="zone-filter"><span>Sécurité min.</span>
-                <input id="securite-min" type="number" min="0" max="100" step="1" placeholder="0–100" /> /100</label>
+                <input id="securite-min" type="number" min="0" max="100" step="1" placeholder="0–100"
+                  aria-label="Score de sécurité minimal, relatif au département (0–100)"
+                  title="Rang de la commune dans son département (0 = la moins sûre, 100 = la plus sûre)" /> /100</label>
               <label class="zone-filter"><span>Fiscalité max.</span>
                 <input id="fiscalite-max" type="number" min="0" step="0.5" placeholder="TFB+TEOM" /> %</label>
             </fieldset>
@@ -141,7 +143,8 @@
               <h3 class="section-title">Taux de réussite</h3>
               <div id="rate-chart" class="card chart-card"></div>
 
-              <h3 class="section-title">Sécurité des communes</h3>
+              <h3 class="section-title">Sécurité des communes <span class="muted">(rang dans le département)</span></h3>
+              <div id="secu-deps" class="dep-ranks"></div>
               <div id="secu-chart" class="card chart-card"></div>
 
               <h3 class="section-title">Fiscalité des communes <span class="muted">(TFB + TEOM)</span></h3>

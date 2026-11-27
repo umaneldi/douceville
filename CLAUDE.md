@@ -7,7 +7,7 @@ Consignes pour les agents de code (Claude Code…) travaillant sur ce dépôt.
 Douceville est un service web monolithique en Go : un seul binaire sert l'API
 JSON (`/api`) et l'interface web statique (`/`, embarquée depuis `web/`). Il
 calcule la zone atteignable depuis un ou plusieurs points de départ
-(isochrones OpenRouteService, géocodage BAN) et affiche les établissements
+(isochrones OpenRouteService ou Valhalla, géocodage BAN) et affiche les établissements
 scolaires, la sécurité, la fiscalité, les prix immobiliers et les logements
 sociaux de cette zone. Données dans PostgreSQL + PostGIS.
 
@@ -24,6 +24,7 @@ DV_TEST_DSN=postgres://user:pass@localhost:5432/postgres go test -cover ./...   
 go test -coverprofile=/tmp/cov.out ./... && go tool cover -func=/tmp/cov.out    # couverture par fonction
 ./restart.sh                         # (re)lance PostGIS en local (docker compose)
 ./launch_server.sh                   # lance le serveur avec les variables de .env
+scripts/build_valhalla_tiles.sh --help   # tuiles Valhalla : construction + dépôt S3 (machine de build)
 ```
 
 Pour les tests d'intégration, une base PostGIS jetable suffit (chaque test y
@@ -52,12 +53,13 @@ sur GHCR que pour un tag `v*`.
 | `internal/auth` | JWT, middleware Bearer, mots de passe PBKDF2, jetons de vérification, OIDC. |
 | `internal/billing` | Interface `PaymentProvider` et client Mollie. |
 | `internal/config` | Variables d'environnement → `config.Config` (avec validation). |
-| `internal/geo` | Clients OpenRouteService (isochrones) et addok/BAN (géocodage). |
+| `internal/geo` | Clients de routage OpenRouteService et Valhalla (isochrones, itinéraires ; choix par `ROUTING_PROVIDER`) et addok/BAN (géocodage). |
 | `internal/mail` | Interface `Sender` : SMTP ou journalisation. |
 | `internal/models` | Structures JSON échangées par l'API et entre paquets. |
 | `internal/store` | Interface `Store`, implémentation pgx `PgStore`, migrations SQL embarquées. |
 | `web/` | Frontend HTML/CSS/JS sans build (Leaflet), embarqué via `//go:embed`. |
-| `scripts/` | Scripts Python (`uv run`) d'import de données et d'administration. |
+| `scripts/` | Scripts Python (`uv run`) d'import de données et d'administration ; `build_valhalla_tiles.sh` (bash) construit les tuiles Valhalla et les dépose sur S3, sur une machine de build. |
+| `analyse_securite.py` | Script Python (`uv run`, plotly) : analyse nationale du score de sécurité affiché par la carte. |
 
 Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
 `mail`, `store`) → `models`. `models` ne dépend d'aucun autre paquet interne ;
@@ -110,6 +112,17 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   - les poids des indicateurs de sécurité sont dupliqués entre
     `internal/store/migrations/009_securite_score.sql` et `SECURITY_INDICATORS`
     dans `web/app.js` ;
+  - le score de sécurité **affiché** (carte, infobulle, fiche, histogramme) et
+    filtré (`securite_min`, `FilterZone`) est le score départemental de la vue
+    `securite_departement` (`migrations/022_securite_departement.sql`),
+    construite sur `securite_score` avec la même règle des ex aequo : elle se
+    rafraîchit **après** `securite_score` (`REFRESH` de
+    `scripts/import_securite_parquet.py`, `seedZone` dans les tests) ; ses
+    colonnes sont lues par `secuDepJoin` / `secuDepColumns` / `secuDep`
+    (`internal/store/queries.go`) ;
+  - les classes et couleurs du score de sécurité (`SECURITY_CLASSES`,
+    `NO_DATA_COLOR` de `web/app.js`) sont recopiées dans `analyse_securite.py`,
+    qui analyse le score **national** (`securite_score`, dernière année) ;
   - la définition du taux de réussite (Σadmis / Σprésents) est dupliquée entre
     la vue `etablissement_taux` (`migrations/017_etablissement_taux.sql`) et
     `successRate()` dans `web/app.js` ;
@@ -119,9 +132,9 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
     `critere-tpl` du frontend, et `Filieres` aux constantes de
     `scripts/import_etablissements_parquet.py` (qui seul attribue les
     filières, d'après les voies `Voie_*` de l'annuaire, à défaut le code
-    natureUAI, et `Lycee_Agricole` / le ministère) ; la limite de sources
-    par nature (`sourcesParNature` dans `internal/api/search.go`) à
-    `SOURCES_PAR_NATURE` dans `web/app.js` ;
+    natureUAI, et `Lycee_Agricole` / le ministère) ; les modes de transport
+    (`models.Transports`, noms OpenRouteService) à leur traduction en modèles
+    de coût Valhalla (`valhallaCosting`, `internal/geo/valhalla.go`) ;
   - la nature `Primaire` est attribuée par
     `scripts/import_etablissements_parquet.py` (école à la fois maternelle et
     élémentaire selon l'annuaire, ou nom contenant « primaire ») et par
@@ -141,6 +154,16 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   bas ; un appel de niveau supérieur ne doit pas utiliser une variable
   `let`/`const` déclarée plus bas (erreur « Cannot access … before
   initialization » qui interrompt tout le script).
+- **Routage** : deux fournisseurs interchangeables (`ROUTING_PROVIDER` : `ors`
+  ou `valhalla`) derrière `Isochroner` / `RoutePlanner` ; tout changement de
+  comportement s'applique aux deux clients. Le plafond de sources par critère
+  vient de la configuration (`SOURCES_PAR_NATURE`, `Handlers.SourcesParNature`,
+  0 = sans plafond) : le frontend n'en connaît pas la valeur et passe par
+  `POST /api/etablissements/estimation` pour afficher le coût. La construction
+  des tuiles Valhalla (`scripts/build_valhalla_tiles.sh`) ne doit **jamais**
+  entrer dans l'image de prod ni dans le service compose `valhalla`, qui ne
+  fait que lire les tuiles sur S3 ; service et script utilisent la même
+  version d'image (`VALHALLA_IMAGE`).
 - **Secrets** : ne jamais committer `.env` ni de clé (Mollie, ORS, OIDC…) ;
   `sample.env` ne contient que des valeurs d'exemple.
 

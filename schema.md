@@ -8,12 +8,13 @@ Ce document décrit le schéma de la base de données du projet **Douceville**.
 - **Création du schéma** : les tables sont créées par le **runner de migrations Go** au démarrage du serveur. Il applique, dans l'ordre lexical, les fichiers SQL idempotents embarqués dans le binaire (`//go:embed internal/store/migrations/*.sql`, voir `internal/store/migrate.go`). Il n'y a pas d'ORM.
 - **Chaîne de connexion** : `postgres://<user>:<password>@<host>:<port>/<db>` construite dans `internal/config/config.go` à partir des variables `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`.
 
-La base contient **seize tables physiques**, une **vue matérialisée** (`securite_score`) et une **vue** (`etablissement_taux`), toutes créées par les migrations Go :
+La base contient **dix-sept tables physiques**, deux **vues matérialisées** (`securite_score`, `securite_departement`) et une **vue** (`etablissement_taux`), toutes créées par les migrations Go :
 
 - **Données géographiques et scolaires** (créées vides, chargées par les scripts `scripts/import_*.py`, enchaînés par `import.sh`) : `commune` (`import_communes_csv.py`, contours par `import_contours_communes.py`), `quartier` (IRIS, `import_contours_iris.py`), `etablissement` (`import_etablissements_parquet.py`), `resultat` (`import_resultats_parquet.py`), `securite` (`import_securite_parquet.py`), `fiscalite` (`import_fiscalite_parquet.py`), `immobilier` (ventes DVF, `import_immobilier_dvf.py`) et `logement_social` (RPLS, `import_logement_social.py`).
 - **Comptes et authentification** (gérées par le backend) : `utilisateur`, `email_verification`, `revoked_token` et `oidc_identity`.
 - **Facturation** (gérées par le backend) : `billing_settings`, `credit_transaction` et `payment`.
-- **Cache** (géré par le backend) : `isochrone_cache` (isochrones OpenRouteService des recherches).
+- **Cache** (géré par le backend) : `isochrone_cache` (isochrones des recherches, calculées par OpenRouteService ou Valhalla).
+- **Référentiel statique** (rempli par sa migration) : `departement` (codes et noms des 101 départements).
 
 ## Diagramme relationnel
 
@@ -159,7 +160,7 @@ Taux de réussite aux examens de chaque établissement, en % (`internal/store/mi
 | `uai`   | `TEXT`             | Code UAI de l'établissement (`resultat.etablissement_uai`). |
 | `taux`  | `DOUBLE PRECISION` | Taux de réussite, 0–100. |
 
-Elle sert au choix des établissements sources de la recherche (`SelectSourceEtablissements` : 10 meilleurs taux par nature dans le rayon), au filtrage des établissements de la zone (`FindEtablissementsInZone`) et à la fiche d'un quartier (`QuartierProximite`).
+Elle sert au choix des établissements sources de la recherche (`SelectSourceEtablissements` : établissements du rayon classés par taux puis distance, au plus `SOURCES_PAR_NATURE` par critère, sans plafond si 0), au filtrage des établissements de la zone (`FindEtablissementsInZone`) et à la fiche d'un quartier (`QuartierProximite`).
 
 ## Table `commune`
 
@@ -256,7 +257,7 @@ Taux de fiscalité locale des particuliers, par commune et exercice (DGFiP, « f
 
 ## Vue matérialisée `securite_score`
 
-Score de sécurité par commune et par année, de 0 (moins sûre) à 100 (plus sûre). Créée par `internal/store/migrations/009_securite_score.sql` ; **rafraîchie** (`REFRESH MATERIALIZED VIEW securite_score`) à la fin de `scripts/import_securite_parquet.py`.
+Score de sécurité **national** par commune et par année, de 0 (moins sûre) à 100 (plus sûre). Créée par `internal/store/migrations/009_securite_score.sql` ; **rafraîchie** (`REFRESH MATERIALIZED VIEW securite_score`, puis `securite_departement` qui en dépend) à la fin de `scripts/import_securite_parquet.py`. L'interface n'affiche plus ce score directement mais le score départemental de `securite_departement` (le national est rappelé dans l'infobulle et la fiche) ; `analyse_securite.py` analyse le score national.
 
 Calcul :
 1. pour chaque (année, indicateur), rang centile du `taux_pour_mille` de la commune parmi les communes ayant **diffusé** cet indicateur ; les ex aequo (très nombreux à 0) reçoivent le rang moyen `(percent_rank + cume_dist) / 2` ;
@@ -273,6 +274,31 @@ Une commune sans aucun indicateur diffusé est absente de la vue (score inconnu,
 | `nb_indicateurs` | `INTEGER` | Nombre d'indicateurs diffusés pris en compte (sur 15). |
 
 **Index unique** : `(code_commune, annee)`.
+
+## Vue matérialisée `securite_departement`
+
+Score de sécurité **relatif au département** et classement national des départements, par commune et par année. Créée par `internal/store/migrations/022_securite_departement.sql` à partir de `securite_score` ; à **rafraîchir après** celle-ci (`scripts/import_securite_parquet.py` le fait). C'est le score qu'affiche l'interface (choroplèthe, infobulle, fiche du quartier, histogramme) et qu'utilise le filtre de zone `securite_min` (`FilterZone`).
+
+| Colonne             | Type SQL           | Description |
+|---------------------|--------------------|-------------|
+| `code_commune`      | `TEXT`             | Code INSEE de la commune. |
+| `annee`             | `INTEGER`          | Année des faits. |
+| `departement`       | `TEXT`             | Code du département, déduit du code commune (3 caractères pour l'outre-mer `97x`, 2 sinon, dont `2A` / `2B`). |
+| `score_departement` | `INTEGER`          | Rang centile du score national de la commune parmi les communes de son département, × 100, ex aequo au rang moyen `(percent_rank + cume_dist) / 2` (même règle que `securite_score`) : « plus sûre que N % des communes du département ». Une commune seule dans son département (Paris) vaut 50. |
+| `dep_score_moyen`   | `DOUBLE PRECISION` | Moyenne des scores nationaux des communes du département (arrondie à 0,1). |
+| `dep_rang`          | `INTEGER`          | Rang du département parmi ceux de l'année, par `dep_score_moyen` décroissant (1 = le plus sûr ; ex aequo au même rang). |
+| `nb_departements`   | `INTEGER`          | Nombre de départements classés cette année-là. |
+
+**Index unique** : `(code_commune, annee)`.
+
+## Table `departement`
+
+Référentiel statique des 101 départements (métropole, `2A` / `2B`, `971` à `976`), créé **et rempli** par `internal/store/migrations/022_securite_departement.sql` (`INSERT … ON CONFLICT (code) DO UPDATE`, rejouable). Sert à nommer les départements du classement de sécurité.
+
+| Colonne | Type SQL | Contraintes | Description |
+|---------|----------|-------------|-------------|
+| `code`  | `TEXT`   | **PK**      | Code INSEE du département (ex. `31`, `2A`, `974`). |
+| `nom`   | `TEXT`   | NOT NULL    | Nom (ex. `Haute-Garonne`). |
 
 ## Table `utilisateur`
 
@@ -344,13 +370,13 @@ Paiements de rechargement auprès de Mollie (`migrations/016_billing.sql`). Le p
 
 ## Table `isochrone_cache`
 
-Cache des isochrones OpenRouteService des recherches (`migrations/018_isochrone_cache.sql`), une par position, temps et mode de transport. Une isochrone créée il y a plus de `ISOCHRONE_CACHE_DAYS` jours (défaut 30) est ignorée puis recalculée ; à chaque écriture, les entrées expirées sont purgées et, au-delà de `ISOCHRONE_CACHE_MAX` lignes (défaut 20 000), les moins récemment utilisées sont supprimées.
+Cache des isochrones des recherches, calculées par le fournisseur de routage (OpenRouteService ou Valhalla ; `migrations/018_isochrone_cache.sql`), une par position, temps et mode de transport. Une isochrone créée il y a plus de `ISOCHRONE_CACHE_DAYS` jours (défaut 30) est ignorée puis recalculée ; à chaque écriture, les entrées expirées sont purgées et, au-delà de `ISOCHRONE_CACHE_MAX` lignes (défaut 20 000), les moins récemment utilisées sont supprimées.
 
 | Colonne        | Type SQL      | Description |
 |----------------|---------------|-------------|
 | `lon_e5`, `lat_e5` | `INTEGER` | Position de l'établissement source, en 1e-5 degré (arrondie). |
 | `dist`         | `INTEGER`     | Temps de trajet (secondes). |
-| `transp`       | `TEXT`        | Profil OpenRouteService (`driving-car`, `cycling-regular`, `foot-walking`). |
+| `transp`       | `TEXT`        | Profil de transport (`driving-car`, `cycling-regular`, `foot-walking` ; noms OpenRouteService, traduits pour Valhalla). |
 | `ring`         | `JSONB`       | Anneau du polygone : tableau de `[lon, lat]`. |
 | `created_at`   | `TIMESTAMPTZ` | Calcul de l'isochrone (index, pour la purge). |
 | `last_used_at` | `TIMESTAMPTZ` | Dernière lecture (index, pour l'éviction LRU). |
@@ -399,8 +425,8 @@ Structures Go d'échange API (`internal/models/models.go`), sans table associée
 - `DvUser` / `UserRecord` — profil public / interne (hash du mot de passe, jamais sérialisé).
 - `Credentials`, `AuthResponse` — corps des requêtes `/api/auth/*` et réponse `{token, user}`.
 - `Etablissement`, `Resultat` — projections lues depuis la base.
-- `Isochrone` — zone d'accessibilité (géométrie `POLYGON`) calculée par OpenRouteService ; les isochrones des recherches sont mises en cache dans `isochrone_cache`.
-- `CommuneSecurite` — commune touchée par la zone : code, nom, `score` / `annee` / `nb_indicateurs` (dernière année de `securite_score`, `null` sans données) et `contour` GeoJSON ; renvoyée dans le champ `communes` de `POST /api/etablissements`.
+- `Isochrone` — zone d'accessibilité (géométrie `POLYGON`) calculée par le fournisseur de routage (OpenRouteService ou Valhalla) ; les isochrones des recherches sont mises en cache dans `isochrone_cache`.
+- `CommuneSecurite` — commune touchée par la zone : code, nom, `score` / `annee` / `nb_indicateurs` (dernière année de `securite_score`, `null` sans données), `score_departement` et `departement` (classement national du département : `code`, `nom`, `score_moyen`, `rang`, `nb_departements` ; vue `securite_departement`) et `contour` GeoJSON ; renvoyée dans le champ `communes` de `POST /api/etablissements`.
 - `LogementSocialPosition`, `LogementSocialGroupe` — logements sociaux de `logement_social` contenus dans la zone, regroupés par position (bâtiment) puis par caractéristiques identiques ; renvoyés dans le champ `logements_sociaux` de `POST /api/etablissements`.
 - `ListeEtablissementsAvecIsochrone`, `SearchRequest` (`CritereNature`, `FiltresZone`), `Source`, `Centre` — réponse/requête de `POST /api/etablissements`.
 - `QuartierProximite`, `Proche`, `ProximiteRequest` — fiche d'un quartier IRIS (`POST /api/quartiers/{iris}/proximite`).

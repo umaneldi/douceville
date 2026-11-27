@@ -78,6 +78,8 @@ func clearEnv(t *testing.T) {
 		"OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_PROVIDER_NAME", "OIDC_SCOPES",
 		"OIDC_REDIRECT_URL", "OIDC_DEFAULT_PERMS", "BILLING_ENABLED", "MOLLIE_API_KEY", "MOLLIE_WEBHOOK_URL",
 		"ISOCHRONE_CACHE_DAYS", "ISOCHRONE_CACHE_MAX",
+		"ROUTING_PROVIDER", "OPENROUTESERVICE_URL", "VALHALLA_URL", "VALHALLA_CONCURRENCY",
+		"SOURCES_PAR_NATURE", "SEARCH_COST_WARNING_CENTS",
 	} {
 		t.Setenv(k, "")
 	}
@@ -150,5 +152,54 @@ func TestLoadSMTP(t *testing.T) {
 	t.Setenv("SMTP_FROM", "Douceville <no-reply@example.com>")
 	if c, err := Load(); err != nil || c.SMTPHost != "smtp.example.com" || c.SMTPPort != "587" {
 		t.Errorf("smtp = %+v, %v", c, err)
+	}
+}
+
+func TestLoadRouting(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("JWT_SECRET", "s")
+
+	// Défauts : OpenRouteService public, plafond de 10 sources.
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RoutingProvider != RoutingORS || c.OpenRouteServiceURL != "" || c.ValhallaURL != "http://localhost:8002" ||
+		c.ValhallaConcurrency != 8 || c.SourcesParNature != 10 || c.SearchCostWarningCents != 200 {
+		t.Errorf("defaults = provider %q, ors %q, valhalla %q (%d), sources %d, warning %d",
+			c.RoutingProvider, c.OpenRouteServiceURL, c.ValhallaURL, c.ValhallaConcurrency, c.SourcesParNature, c.SearchCostWarningCents)
+	}
+
+	// Valhalla : pas de plafond par défaut.
+	t.Setenv("ROUTING_PROVIDER", " Valhalla ")
+	t.Setenv("VALHALLA_URL", "http://valhalla:8002")
+	t.Setenv("VALHALLA_CONCURRENCY", "4")
+	if c, err := Load(); err != nil || c.RoutingProvider != RoutingValhalla || c.SourcesParNature != 0 ||
+		c.ValhallaURL != "http://valhalla:8002" || c.ValhallaConcurrency != 4 {
+		t.Errorf("valhalla = %+v, %v; want no cap", c, err)
+	}
+
+	// Valeurs explicites, y compris 0 (pas de plafond, pas d'avertissement).
+	t.Setenv("SOURCES_PAR_NATURE", "25")
+	t.Setenv("SEARCH_COST_WARNING_CENTS", "0")
+	t.Setenv("OPENROUTESERVICE_URL", "https://ors.example/ors")
+	if c, err := Load(); err != nil || c.SourcesParNature != 25 || c.SearchCostWarningCents != 0 || c.OpenRouteServiceURL != "https://ors.example/ors" {
+		t.Errorf("explicit = %+v, %v", c, err)
+	}
+
+	for _, tc := range []struct{ key, value string }{
+		{"ROUTING_PROVIDER", "google"},
+		{"VALHALLA_URL", "valhalla:8002"},
+		{"OPENROUTESERVICE_URL", "ftp://ors"},
+		{"VALHALLA_CONCURRENCY", "0"},
+		{"SOURCES_PAR_NATURE", "-1"},
+		{"SEARCH_COST_WARNING_CENTS", "cher"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("%s=%q: err = %v, want an error naming the variable", tc.key, tc.value, err)
+			}
+		})
 	}
 }

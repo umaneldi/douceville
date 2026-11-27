@@ -88,7 +88,7 @@ const metresParDegre = 110000.0
 // La boîte englobante (en degrés, sur etablissement.position en SRID 0) sert
 // l'index GiST ; ST_DWithin sur geography donne le disque exact.
 func (s *PgStore) SelectSourceEtablissements(ctx context.Context, centre [2]float64, rayonM float64, criteres []models.CritereNature, parNature int) ([]models.Source, error) {
-	if len(criteres) == 0 || parNature <= 0 {
+	if len(criteres) == 0 {
 		return []models.Source{}, nil
 	}
 	dLat := rayonM / metresParDegre
@@ -115,7 +115,7 @@ func (s *PgStore) SelectSourceEtablissements(ctx context.Context, centre [2]floa
 			CROSS JOIN LATERAL (SELECT e.taux) t
 			JOIN c ON ` + critereMatch + `
 		) s
-		WHERE s.rang <= $11
+		WHERE $11::int <= 0 OR s.rang <= $11
 		ORDER BY s.k, s.rang`
 
 	args := append([]any{centre[0], centre[1], dLon, dLat, rayonM}, criteresArgs(criteres)...)
@@ -190,7 +190,8 @@ const prixMedian = `percentile_cont(0.5) WITHIN GROUP (ORDER BY i.valeur_foncier
 
 // FilterZone implémente Store.FilterZone. Le prix d'un IRIS sans vente est
 // celui de sa commune (toutes ses ventes) ; sécurité et fiscalité sont celles
-// de la dernière année disponible.
+// de la dernière année disponible, la sécurité étant le score départemental
+// (vue securite_departement), celui qu'affiche l'interface.
 func (s *PgStore) FilterZone(ctx context.Context, polygonWKT string, f models.FiltresZone) (string, json.RawMessage, bool, error) {
 	const q = `WITH z AS (SELECT ST_SetSRID(ST_GeomFromText($1), 4326) AS g),
 		qz AS (
@@ -212,11 +213,13 @@ func (s *PgStore) FilterZone(ctx context.Context, polygonWKT string, f models.Fi
 			LEFT JOIN pc ON pc.code_commune = qz.code_commune
 			LEFT JOIN securite_score s ON s.code_commune = qz.code_commune
 				AND s.annee = (SELECT max(annee) FROM securite_score)
+			LEFT JOIN securite_departement sd ON sd.code_commune = s.code_commune
+				AND sd.annee = s.annee
 			LEFT JOIN fiscalite f ON f.code_commune = qz.code_commune
 				AND f.year = (SELECT max(year) FROM fiscalite)
 			WHERE ($2::float8 IS NULL OR coalesce(pi.prix, pc.prix) >= $2)
 				AND ($3::float8 IS NULL OR coalesce(pi.prix, pc.prix) <= $3)
-				AND ($4::float8 IS NULL OR s.score >= $4)
+				AND ($4::float8 IS NULL OR sd.score_departement >= $4)
 				AND ($5::float8 IS NULL OR f.taux_global_tfb + coalesce(f.taux_plein_teom, 0) <= $5)
 		),
 		r AS (
@@ -325,7 +328,7 @@ func (s *PgStore) PutCachedIsochrones(ctx context.Context, entries map[models.Is
 func (s *PgStore) QuartierProximite(ctx context.Context, iris string, criteres []models.CritereNature) (*models.QuartierProximite, error) {
 	const qInfo = `SELECT q.iris, q.nom_iris, q.code_commune, c.nom, ST_X(pt.g), ST_Y(pt.g),
 			pi.prix, pi.ventes, pc.prix, pc.ventes,
-			s.annee, s.score, s.nb_indicateurs,
+			s.annee, s.score, s.nb_indicateurs, ` + secuDepColumns + `,
 			f.year, f.taux_global_tfb, f.taux_plein_teom
 		FROM quartier q
 		JOIN commune c ON c.code_commune = q.code_commune
@@ -341,6 +344,7 @@ func (s *PgStore) QuartierProximite(ctx context.Context, iris string, criteres [
 		) pc
 		LEFT JOIN securite_score s ON s.code_commune = q.code_commune
 			AND s.annee = (SELECT max(annee) FROM securite_score)
+		` + secuDepJoin + `
 		LEFT JOIN fiscalite f ON f.code_commune = q.code_commune
 			AND f.year = (SELECT max(year) FROM fiscalite)
 		WHERE q.iris = $1`
@@ -354,8 +358,10 @@ func (s *PgStore) QuartierProximite(ctx context.Context, iris string, criteres [
 		fYear               *int
 		tfb, teom           *float64
 	)
-	err := s.pool.QueryRow(ctx, qInfo, iris).Scan(&out.Iris, &out.Nom, &out.CodeCommune, &out.Commune, &lon, &lat,
-		&prixI, &ventesI, &prixC, &ventesC, &sAnnee, &sScore, &sNb, &fYear, &tfb, &teom)
+	var dep secuDep
+	dest := append([]any{&out.Iris, &out.Nom, &out.CodeCommune, &out.Commune, &lon, &lat,
+		&prixI, &ventesI, &prixC, &ventesC, &sAnnee, &sScore, &sNb}, dep.dest()...)
+	err := s.pool.QueryRow(ctx, qInfo, iris).Scan(append(dest, &fYear, &tfb, &teom)...)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -369,7 +375,8 @@ func (s *PgStore) QuartierProximite(ctx context.Context, iris string, criteres [
 		out.PrixCommune = &models.PrixM2{PrixM2: *prixC, Ventes: ventesC}
 	}
 	if sAnnee != nil && sScore != nil && sNb != nil {
-		out.Securite = &models.SecuriteCommune{Annee: *sAnnee, Score: *sScore, NbIndicateurs: *sNb}
+		out.Securite = &models.SecuriteCommune{Annee: *sAnnee, Score: *sScore, NbIndicateurs: *sNb,
+			ScoreDepartement: dep.score, Departement: dep.departement()}
 	}
 	if fYear != nil && tfb != nil {
 		f := models.Fiscalite{Annee: *fYear, TauxTFB: *tfb, TauxTEOM: teom, Taux: *tfb}
