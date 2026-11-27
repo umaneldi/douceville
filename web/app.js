@@ -2373,6 +2373,41 @@ function esc(s) {
   );
 }
 
+// Lien externe (http/https uniquement), libellé échappé.
+function extLink(url, label) {
+  if (!url || !/^https?:\/\//i.test(url)) return "";
+  return `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>`;
+}
+
+// Attributs de l'annuaire de l'éducation : services, offre pédagogique et
+// contact ; une ligne n'est affichée que si elle a un contenu.
+function annuaireHtml(etab) {
+  const services = [
+    etab.education_prioritaire,
+    etab.restauration && "Cantine",
+    etab.hebergement && "Internat",
+    etab.ulis && "ULIS",
+    etab.segpa && "SEGPA",
+  ].filter(Boolean);
+  const offre = [
+    (etab.sections || []).length ? `Sections : ${etab.sections.join(", ")}` : "",
+    etab.apprentissage && "Apprentissage",
+    etab.post_bac && "Post-bac",
+    etab.lycee_des_metiers && "Lycée des métiers",
+  ].filter(Boolean);
+  const contact = [
+    etab.telephone ? `☎ ${esc(etab.telephone)}` : "",
+    etab.mail ? `<a href="mailto:${esc(etab.mail)}">${esc(etab.mail)}</a>` : "",
+    extLink(etab.site_web, "Site web"),
+    extLink(etab.fiche_onisep, "Fiche ONISEP"),
+  ].filter(Boolean);
+  const lines = [];
+  if (services.length) lines.push(esc(services.join(" · ")));
+  if (offre.length) lines.push(esc(offre.join(" · ")));
+  if (contact.length) lines.push(contact.join(" · "));
+  return lines.length ? `<div class="popup-meta">${lines.join("<br/>")}</div>` : "";
+}
+
 function popupHtml(etab) {
   let html = `<div class="popup-title">${esc(etab.nom)}</div>`;
   const meta = [etab.nature, etab.secteur, (etab.filieres || []).join(", ")].filter(Boolean).join(" · ");
@@ -2380,6 +2415,7 @@ function popupHtml(etab) {
   html += `<div class="popup-meta">${esc(meta)}<br/>${esc(addr)}`;
   if (etab.UAI) html += `<br/>UAI : ${esc(etab.UAI)}`;
   html += `</div>`;
+  html += annuaireHtml(etab);
 
   const res = etab.resultats || [];
   const rate = successRate(etab);

@@ -14,17 +14,40 @@ import (
 	"github.com/umaneldi/douceville/internal/models"
 )
 
+// etabCols liste les colonnes d'un établissement, préfixées par alias (« e. »,
+// « s. » ou vide), dans l'ordre de etabDest ; position est remplacée par
+// l'expression pos (GeoJSON).
+func etabCols(alias, pos string) string {
+	cols := []string{`id`, `"UAI"`, `nom`, `adresse`, `lieu_dit`, `code_postal`, `commune`, ``,
+		`departement`, `academie`, `secteur`, `ouverture`, `nature`, `filieres`,
+		`education_prioritaire`, `restauration`, `hebergement`, `ulis`, `segpa`, `apprentissage`,
+		`post_bac`, `lycee_des_metiers`, `sections`, `telephone`, `mail`, `site_web`, `fiche_onisep`}
+	for i, c := range cols {
+		if c == `` {
+			cols[i] = pos
+		} else {
+			cols[i] = alias + c
+		}
+	}
+	return strings.Join(cols, ", ")
+}
+
+// etabDest renvoie les destinations de Scan des colonnes de etabCols.
+func etabDest(e *models.Etablissement) []any {
+	return []any{
+		&e.ID, &e.UAI, &e.Nom, &e.Adresse, &e.LieuDit, &e.CodePostal, &e.Commune,
+		&e.Position, &e.Departement, &e.Academie, &e.Secteur, &e.Ouverture, &e.Nature, &e.Filieres,
+		&e.EducationPrioritaire, &e.Restauration, &e.Hebergement, &e.ULIS, &e.SEGPA, &e.Apprentissage,
+		&e.PostBac, &e.LyceeDesMetiers, &e.Sections, &e.Telephone, &e.Mail, &e.SiteWeb, &e.FicheOnisep,
+	}
+}
+
 // colonnes sélectionnées pour un établissement. position est émise en GeoJSON.
-const etabColumns = `id, "UAI", nom, adresse, lieu_dit, code_postal, commune,
-	ST_AsGeoJSON(position) AS position, departement, academie, secteur, ouverture, nature, filieres`
+var etabColumns = etabCols("", "ST_AsGeoJSON(position) AS position")
 
 func scanEtablissement(row pgx.Row) (*models.Etablissement, error) {
 	var e models.Etablissement
-	err := row.Scan(
-		&e.ID, &e.UAI, &e.Nom, &e.Adresse, &e.LieuDit, &e.CodePostal, &e.Commune,
-		&e.Position, &e.Departement, &e.Academie, &e.Secteur, &e.Ouverture, &e.Nature, &e.Filieres,
-	)
-	if err != nil {
+	if err := row.Scan(etabDest(&e)...); err != nil {
 		return nil, err
 	}
 	return &e, nil

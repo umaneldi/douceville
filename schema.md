@@ -96,7 +96,7 @@ Relation : quartier (1) ──< (N) logement_social
 
 ## Table `etablissement`
 
-Établissement scolaire (lycée, collège, etc.). Créée par `internal/store/migrations/003_etablissement_resultat.sql`.
+Établissement scolaire (lycée, collège, etc.). Créée par `internal/store/migrations/003_etablissement_resultat.sql`, chargée par `scripts/import_etablissements_parquet.py` depuis l'annuaire de l'éducation (`annuaire-de-leducation.parquet`). Les colonnes ajoutées par une migration (`filieres`, attributs de la migration 021) ne sont remplies qu'en réimportant les établissements. `lieu_dit` est la 2ᵉ ligne d'adresse de l'annuaire, sauf boîte postale (BP, CS, TSA).
 
 | Colonne       | Type SQL              | Contraintes                     | Description |
 |---------------|-----------------------|---------------------------------|-------------|
@@ -113,8 +113,21 @@ Relation : quartier (1) ──< (N) logement_social
 | `academie`    | `VARCHAR`             | NULL                            | Académie de rattachement. |
 | `secteur`     | `VARCHAR`             | NOT NULL                        | Secteur (`public` / `privé` (sous contrat) / `hors contrat`). |
 | `ouverture`   | `TIMESTAMP`           | NULL                            | Date d'ouverture. |
-| `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement : `Maternelle`, `Elementaire`, `Primaire`, `Collège` ou `Lycée`. `Primaire` (nom contenant « primaire », sans distinction de casse : à l'import et par `migrations/019_etablissement_primaire.sql`, qui reclasse les établissements déjà importés) satisfait les critères de recherche `Maternelle` et `Elementaire` (`critereMatch` dans `internal/store/search.go`). |
-| `filieres`    | `TEXT[]`              | NOT NULL, défaut `'{}'`         | Filières d'un lycée, plusieurs possibles : `Général`, `Technologique`, `Professionnel`, `Agricole` (`migrations/020_etablissement_filieres.sql`) ; vide pour les autres natures. Déduites à l'import du code natureUAI (LEGT → général + technologique, polyvalent → les trois, LP / SEP → professionnel…) et du ministère de tutelle (Agriculture → `Agricole`). La migration ne les remplit pas : réimporter les établissements. Un critère `Lycée` avec filières retient les lycées ayant au moins une filière en commun (`critereMatch`). |
+| `nature`      | `VARCHAR`             | NOT NULL                        | Nature de l'établissement : `Maternelle`, `Elementaire`, `Primaire`, `Collège` ou `Lycée`. `Primaire` (à l'import : école à la fois maternelle et élémentaire d'après les drapeaux `Ecole_maternelle` / `Ecole_elementaire` de l'annuaire, ou nom contenant « primaire », sans distinction de casse ; la règle du nom est aussi appliquée par `migrations/019_etablissement_primaire.sql`, qui reclasse les établissements déjà importés) satisfait les critères de recherche `Maternelle` et `Elementaire` (`critereMatch` dans `internal/store/search.go`). |
+| `filieres`    | `TEXT[]`              | NOT NULL, défaut `'{}'`         | Filières d'un lycée, plusieurs possibles : `Général`, `Technologique`, `Professionnel`, `Agricole` (`migrations/020_etablissement_filieres.sql`) ; vide pour les autres natures. Déduites à l'import des voies de l'annuaire (`Voie_generale`, `Voie_technologique`, `Voie_professionnelle`) ou, si aucune n'est vraie, du code natureUAI (LEGT → général + technologique, polyvalent → les trois, LP / SEP → professionnel…) ; `Agricole` si `Lycee_Agricole` est vrai ou si le ministère de tutelle est l'Agriculture. La migration ne les remplit pas : réimporter les établissements. Un critère `Lycée` avec filières retient les lycées ayant au moins une filière en commun (`critereMatch`). |
+| `education_prioritaire` | `TEXT`        | NULL                            | `REP` ou `REP+` (`migrations/021_etablissement_annuaire.sql`, comme les colonnes suivantes) ; NULL hors éducation prioritaire. |
+| `restauration` | `BOOLEAN`            | NULL                            | Restauration scolaire (cantine). NULL : inconnu, comme pour les autres booléens. |
+| `hebergement` | `BOOLEAN`             | NULL                            | Hébergement (internat). |
+| `ulis`        | `BOOLEAN`             | NULL                            | Unité localisée pour l'inclusion scolaire. |
+| `segpa`       | `BOOLEAN`             | NULL                            | Section d'enseignement général et professionnel adapté (collèges). |
+| `apprentissage` | `BOOLEAN`           | NULL                            | Formations en apprentissage (second degré). |
+| `post_bac`    | `BOOLEAN`             | NULL                            | Formations post-bac (BTS, CPGE…). |
+| `lycee_des_metiers` | `BOOLEAN`       | NULL                            | Label « lycée des métiers ». |
+| `sections`    | `TEXT[]`              | NOT NULL, défaut `'{}'`         | Sections proposées : `Européenne`, `Internationale`, `Sport`, `Arts`, `Cinéma`, `Théâtre`. |
+| `telephone`   | `TEXT`                | NULL                            | Téléphone. |
+| `mail`        | `TEXT`                | NULL                            | Adresse électronique. |
+| `site_web`    | `TEXT`                | NULL                            | Site web. |
+| `fiche_onisep` | `TEXT`               | NULL                            | URL de la fiche ONISEP. |
 
 **Relations** : un établissement a plusieurs `resultat` (FK `resultat.etablissement_uai` → `etablissement.UAI`, suppression en cascade) et appartient à une `commune` (FK `etablissement.code_commune` → `commune.code_commune`).
 

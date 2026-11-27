@@ -7,7 +7,7 @@ uv run scripts/import_contours_communes.py --psql 'docker exec -i douceville_go-
 uv run scripts/import_contours_iris.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' --save .parquet/contours_iris.json.gz
 uv run scripts/import_immobilier_dvf.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/demandes-de-valeurs-foncieres-geolocalisees.csv.gz
 uv run scripts/import_logement_social.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/Donnees-detaillees-au-logement-du-repertoire-des-logements-locatifs-des-bailleurs-sociau.2025-01.csv
-uv run scripts/import_etablissements_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/fr-en-adresse-et-geolocalisation-etablissements-premier-et-second-degre.parquet
+uv run scripts/import_etablissements_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/annuaire-de-leducation.parquet
 uv run scripts/import_resultats_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' --dir .parquet
 uv run scripts/import_securite_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/donnee-comm-data.gouv-parquet-2025-geographie2026-produit-le2026-06-25.parquet --start-year 2024
 uv run scripts/import_fiscalite_parquet.py --psql 'docker exec -i douceville_go-geotestdb-1 psql -U douceville -d douceville' .parquet/fiscalite-locale-des-particuliers-geo.parquet --start-year 2024

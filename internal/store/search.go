@@ -14,16 +14,12 @@ import (
 
 // etabColumnsE liste les colonnes d'un établissement (alias e) suivies de son
 // taux de réussite (alias t, vue etablissement_taux) : voir scanEtablissementTaux.
-const etabColumnsE = `e.id, e."UAI", e.nom, e.adresse, e.lieu_dit, e.code_postal, e.commune,
-	ST_AsGeoJSON(e.position) AS position, e.departement, e.academie, e.secteur, e.ouverture, e.nature, e.filieres, t.taux`
+var etabColumnsE = etabCols("e.", "ST_AsGeoJSON(e.position) AS position") + ", t.taux"
 
 // scanEtablissementTaux lit les colonnes etabColumnsE, suivies de extra.
 func scanEtablissementTaux(row pgx.Row, extra ...any) (*models.Etablissement, error) {
 	var e models.Etablissement
-	dest := []any{
-		&e.ID, &e.UAI, &e.Nom, &e.Adresse, &e.LieuDit, &e.CodePostal, &e.Commune,
-		&e.Position, &e.Departement, &e.Academie, &e.Secteur, &e.Ouverture, &e.Nature, &e.Filieres, &e.Taux,
-	}
+	dest := append(etabDest(&e), &e.Taux)
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
 	}
@@ -154,8 +150,7 @@ func (s *PgStore) SelectSourceEtablissements(ctx context.Context, centre [2]floa
 }
 
 // etabColumnsSel relit, depuis la sous-requête s, les colonnes de etabColumnsE.
-const etabColumnsSel = `s.id, s."UAI", s.nom, s.adresse, s.lieu_dit, s.code_postal, s.commune,
-	s.position, s.departement, s.academie, s.secteur, s.ouverture, s.nature, s.filieres, s.taux`
+var etabColumnsSel = etabCols("s.", "s.position") + ", s.taux"
 
 // FindEtablissementsInZone implémente Store.FindEtablissementsInZone.
 func (s *PgStore) FindEtablissementsInZone(ctx context.Context, polygonWKT string, criteres []models.CritereNature) ([]models.Etablissement, error) {

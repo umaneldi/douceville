@@ -102,6 +102,11 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   (`syncUrl` / `applyQuery` dans `app.js`) : un nouveau filtre ou une nouvelle
   couche doit y être ajouté.
 - **Couplages à surveiller** :
+  - les colonnes d'un établissement sont listées une seule fois, par
+    `etabCols` / `etabDest` (`internal/store/queries.go`) : une nouvelle colonne
+    s'y ajoute (même ordre dans les deux), à `models.Etablissement`, à
+    l'`UPSERT` de `scripts/import_etablissements_parquet.py` et, si elle est
+    affichée, à `popupHtml` / `annuaireHtml` (`web/app.js`) ;
   - les poids des indicateurs de sécurité sont dupliqués entre
     `internal/store/migrations/009_securite_score.sql` et `SECURITY_INDICATORS`
     dans `web/app.js` ;
@@ -113,12 +118,14 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
     correspondre à `CRITERE_NATURES`, `SECTEURS`, `FILIERES` et au gabarit
     `critere-tpl` du frontend, et `Filieres` aux constantes de
     `scripts/import_etablissements_parquet.py` (qui seul attribue les
-    filières, d'après le code natureUAI et le ministère) ; la limite de sources
+    filières, d'après les voies `Voie_*` de l'annuaire, à défaut le code
+    natureUAI, et `Lycee_Agricole` / le ministère) ; la limite de sources
     par nature (`sourcesParNature` dans `internal/api/search.go`) à
     `SOURCES_PAR_NATURE` dans `web/app.js` ;
-  - la nature `Primaire` (nom contenant « primaire ») est attribuée à la fois
-    par `scripts/import_etablissements_parquet.py` et par
-    `migrations/019_etablissement_primaire.sql` ; les natures de critère
+  - la nature `Primaire` est attribuée par
+    `scripts/import_etablissements_parquet.py` (école à la fois maternelle et
+    élémentaire selon l'annuaire, ou nom contenant « primaire ») et par
+    `migrations/019_etablissement_primaire.sql` (nom seul) ; les natures de critère
     qu'elle satisfait (`models.NaturesPrimaire`) sont utilisées par
     `critereMatch` (`internal/store/search.go`), et sa couleur est dans
     `NATURE_GROUPS` (`web/app.js`).

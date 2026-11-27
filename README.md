@@ -19,7 +19,9 @@ y est près d'au moins un établissement retenu de chaque nature), restreinte
 par des **filtres de zone** (prix au m², score de sécurité, fiscalité). La carte
 montre ce qu'elle contient :
 
-- les **établissements scolaires** et leurs résultats aux examens (bac, brevet) ;
+- les **établissements scolaires**, leurs résultats aux examens (bac, brevet)
+  et, dans leur fiche, l'éducation prioritaire (REP / REP+), les services
+  (cantine, internat, ULIS, SEGPA), les sections et les coordonnées ;
 - la **sécurité** des communes (score de délinquance SSMSI) et leur **fiscalité
   locale** (taxe foncière, TEOM) ;
 - le **prix de l'immobilier** au m² (ventes DVF) par commune et par quartier IRIS
@@ -265,7 +267,7 @@ douceville -d douceville"`), et la plupart `--dry-run`.
 | 3 | `import_contours_iris.py` | `quartier` | IGN, contours IRIS (WFS, ou fichier sauvegardé avec `--save`) |
 | 4 | `import_immobilier_dvf.py` | `immobilier` | DVF géolocalisées |
 | 5 | `import_logement_social.py` | `logement_social` | RPLS |
-| 6 | `import_etablissements_parquet.py` | `etablissement` (nature `Primaire` si le nom contient « primaire » ; `filieres` des lycées, à réimporter après la migration 020) | Annuaire géolocalisé des établissements |
+| 6 | `import_etablissements_parquet.py` | `etablissement` (nature `Primaire` pour une école à la fois maternelle et élémentaire ou dont le nom contient « primaire » ; `filieres` des lycées d'après leurs voies ; éducation prioritaire, services, sections et contact, à réimporter après la migration 021) | Annuaire de l'éducation (`annuaire-de-leducation.parquet`) |
 | 7 | `import_resultats_parquet.py` | `resultat` | Indicateurs de résultats lycées / collèges |
 | 8 | `import_securite_parquet.py` | `securite` (+ rafraîchit `securite_score`) | SSMSI, délinquance communale |
 | 9 | `import_fiscalite_parquet.py` | `fiscalite` | DGFiP, fiscalité locale des particuliers |
@@ -606,7 +608,7 @@ docker run -p 3566:3566 \
 
 ## Sources de données
 
-- Établissements : [adresse et géolocalisation des établissements du premier et second degré](https://data.education.gouv.fr/explore/dataset/fr-en-adresse-et-geolocalisation-etablissements-premier-et-second-degre/information)
+- Établissements : [annuaire de l'éducation](https://www.data.gouv.fr/datasets/annuaire-de-leducation?resource_id=b22f04bf-64a8-495d-b8bb-d84dbc4c7983) (export Parquet, mis à jour quotidiennement)
 - Résultats : [lycées GT](https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-gt_v2/) ([ancienne série](https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-denseignement-general-et-technologique/)),
   [lycées professionnels](https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-pro_v2/) ([ancienne série](https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-de-resultat-des-lycees-denseignement-professionnels/)),
   [collèges](https://data.education.gouv.fr/explore/assets/fr-en-indicateurs-valeur-ajoutee-colleges/)

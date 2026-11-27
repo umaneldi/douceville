@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -352,6 +353,46 @@ func TestReadEtablissement_Found(t *testing.T) {
 	}
 	if got.UAI != "X42Y" {
 		t.Errorf("UAI = %q, want X42Y", got.UAI)
+	}
+}
+
+// Les attributs de l'annuaire sont sérialisés quand ils sont renseignés et
+// omis quand ils sont nuls (via le routeur, en tant qu'utilisateur autorisé).
+func TestReadEtablissement_Annuaire(t *testing.T) {
+	rep, tel, vrai := "REP+", "0102030405", true
+	plein := &models.Etablissement{UAI: "A", Nom: "Lycée A", EducationPrioritaire: &rep,
+		Restauration: &vrai, Sections: []string{"Européenne"}, Telephone: &tel}
+	for _, tc := range []struct {
+		name string
+		etab *models.Etablissement
+		want map[string]any
+	}{
+		{"renseignés", plein, map[string]any{
+			"education_prioritaire": "REP+", "restauration": true,
+			"sections": []any{"Européenne"}, "telephone": "0102030405"}},
+		{"nuls", &models.Etablissement{UAI: "B", Nom: "Collège B"}, map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := alice(t, true) // niveau granted
+			st.etab = tc.etab
+			rr := call(t, &Handlers{Store: st}, http.MethodGet, "/api/etablissement/"+tc.etab.UAI, "")
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", rr.Code, rr.Body)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			for _, k := range []string{"education_prioritaire", "restauration", "hebergement", "ulis",
+				"segpa", "apprentissage", "post_bac", "lycee_des_metiers", "sections",
+				"telephone", "mail", "site_web", "fiche_onisep"} {
+				want, ok := tc.want[k]
+				g, present := got[k]
+				if present != ok || (ok && fmt.Sprint(g) != fmt.Sprint(want)) {
+					t.Errorf("%s = %v (présent %v), want %v (présent %v)", k, g, present, want, ok)
+				}
+			}
+		})
 	}
 }
 

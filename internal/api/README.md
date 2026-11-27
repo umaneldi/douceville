@@ -79,7 +79,7 @@ dans les fichiers de test :
 
 | Fichier | Contenu |
 | ------- | ------- |
-| `handlers_test.go` | `mockStore` (implémentation complète de `store.Store`, avec `isoCache`, cache d'isochrones en mémoire), `mockIso` (journal des appels `isoCall`), `mockRoute` (journal des appels `routeCall`), `mockGeo`, `mockSuggest` ; détail d'un établissement, isochrone, autocomplétion. |
+| `handlers_test.go` | `mockStore` (implémentation complète de `store.Store`, avec `isoCache`, cache d'isochrones en mémoire), `mockIso` (journal des appels `isoCall`), `mockRoute` (journal des appels `routeCall`), `mockGeo`, `mockSuggest` ; détail d'un établissement (dont la sérialisation des attributs de l'annuaire, omis quand ils sont nuls), isochrone, autocomplétion. |
 | `search_test.go` | Helpers `source`, `primaire`, `searchHandlers`, `decodeSearch` ; école primaire source de deux critères ; recherche par établissements (critères par nature, cache, facturation des seules isochrones calculées, validation, droits, erreurs des dépendances, zones vides, filtres), fiche d'un quartier et itinéraire (nominal, validation, droits, `502`). |
 | `user_handlers_test.go` | Helpers `alice` (compte de test), `call` (requête authentifiée à travers le routeur), `decodeMap` ; profil, e-mail, mot de passe. |
 | `auth_handlers_test.go` | `fakeMailer` ; inscription, connexion, vérification, déconnexion. |

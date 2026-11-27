@@ -9,7 +9,7 @@ documenté dans [`schema.md`](../../schema.md).
 | Fichier | Contenu |
 | ------- | ------- |
 | `store.go` | Interface `Store` (toutes les opérations utilisées par l'API), implémentation `PgStore` (`New(pool)`), erreur `ErrEmailTaken`. |
-| `queries.go` | Comptes (création, profil, niveaux, suppression), vérification d'e-mail et changement d'adresse, révocation de tokens, identités OIDC ; requêtes spatiales de la zone (communes, prix immobiliers, logements sociaux, union/intersection des isochrones). |
+| `queries.go` | Comptes (création, profil, niveaux, suppression), vérification d'e-mail et changement d'adresse, révocation de tokens, identités OIDC ; colonnes d'un établissement (`etabCols`, `etabDest`, partagées avec `search.go`) ; requêtes spatiales de la zone (communes, prix immobiliers, logements sociaux, union/intersection des isochrones). |
 | `search.go` | Recherche par établissements : sources par critère (`SelectSourceEtablissements`), établissements de la zone selon les critères (`FindEtablissementsInZone`), filtres de zone (`FilterZone`), cache d'isochrones (`GetCachedIsochrones`, `PutCachedIsochrones`), fiche d'un quartier (`QuartierProximite` : point intérieur du quartier et, par critère, établissement le plus proche avec sa position). |
 | `billing.go` | Tarifs, débit / remboursement / ajustement du crédit, journal des mouvements, paiements. Erreurs `ErrInsufficientCredit`, `ErrNotFound`. |
 | `migrate.go` | `Migrate` (applique les migrations embarquées) et `CanMigrate` (le rôle connecté peut-il modifier le schéma ?). |
@@ -29,6 +29,10 @@ documenté dans [`schema.md`](../../schema.md).
 
 ## Points d'attention
 
+- **Colonnes d'un établissement** : listées une seule fois par `etabCols`
+  (préfixe d'alias, expression de la position) et `etabDest` (destinations de
+  `Scan`, même ordre) ; `etabColumns`, `etabColumnsE` et `etabColumnsSel` en
+  dérivent. Une nouvelle colonne s'ajoute aux deux fonctions.
 - **SRID** : `etablissement.position` et `logement_social.position` sont en
   SRID 0, alors que `commune.contour` et `quartier.contour` sont en 4326 ; les
   WKT de zone (sans SRID) sont adaptés en conséquence dans chaque requête.
@@ -101,6 +105,7 @@ DV_TEST_DSN=postgres://test:test@127.0.0.1:55432/test go test -cover ./internal/
 | `search_integration_test.go` | Vue `etablissement_taux`, `SelectSourceEtablissements` (classement, rayon, critères par nature), `FilterZone` (chaque filtre, valeurs inconnues, prix de la commune à défaut de l'IRIS), cache d'isochrones (TTL, éviction LRU, remplacement), `QuartierProximite`. |
 | `primaire_integration_test.go` | Helper `ecoles` (maternelle, élémentaire et écoles « primaire » autour de (2.5, 48.5)) ; migration 019 (reclassement, idempotence), écoles primaires retenues par les critères maternelle et élémentaire (sources, zone, fiche d'un quartier), secteur appliqué, autres natures non concernées. |
 | `filieres_integration_test.go` | Helper `filieres` (filières des lycées de `seedZone` et `lycees`) ; migration 020 (idempotence, tableau vide par défaut), lecture de `filieres`, filtre de filières dans les sources, la zone et la fiche d'un quartier. |
+| `annuaire_integration_test.go` | Helper `annuaire` (attributs de la migration 021 du lycée A de `seedZone`) ; migration 021 (idempotence), lecture des attributs par `GetEtablissementByUAI`, `FindEtablissementsInZone` et `SelectSourceEtablissements`, valeurs nulles et sections vides (non nil) par défaut. |
 | `billing_integration_test.go` | Tarifs, débit / remboursement / ajustement, paiements idempotents, journal. |
 
 Toute nouvelle requête ou migration doit être exercée par un de ces tests.

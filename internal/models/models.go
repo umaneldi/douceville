@@ -163,8 +163,30 @@ type Etablissement struct {
 	Nature      string          `json:"nature"`
 	// Filieres sont les filières d'un lycée (valeurs de Filieres, plusieurs
 	// possibles) ; vide pour les autres établissements.
-	Filieres  []string   `json:"filieres,omitempty"`
-	Resultats []Resultat `json:"resultats"`
+	Filieres []string `json:"filieres,omitempty"`
+	// EducationPrioritaire vaut « REP » ou « REP+ » pour un établissement de
+	// l'éducation prioritaire ; null sinon.
+	EducationPrioritaire *string `json:"education_prioritaire,omitempty"`
+	// Restauration, Hebergement (internat), ULIS, SEGPA, Apprentissage,
+	// PostBac et LyceeDesMetiers viennent de l'annuaire de l'éducation ; null
+	// si l'information est inconnue.
+	Restauration    *bool `json:"restauration,omitempty"`
+	Hebergement     *bool `json:"hebergement,omitempty"`
+	ULIS            *bool `json:"ulis,omitempty"`
+	SEGPA           *bool `json:"segpa,omitempty"`
+	Apprentissage   *bool `json:"apprentissage,omitempty"`
+	PostBac         *bool `json:"post_bac,omitempty"`
+	LyceeDesMetiers *bool `json:"lycee_des_metiers,omitempty"`
+	// Sections sont les sections proposées (Européenne, Internationale,
+	// Sport, Arts, Cinéma, Théâtre) ; vide si aucune.
+	Sections []string `json:"sections,omitempty"`
+	// Telephone, Mail, SiteWeb et FicheOnisep sont les coordonnées de
+	// l'établissement (null si inconnues).
+	Telephone   *string    `json:"telephone,omitempty"`
+	Mail        *string    `json:"mail,omitempty"`
+	SiteWeb     *string    `json:"site_web,omitempty"`
+	FicheOnisep *string    `json:"fiche_onisep,omitempty"`
+	Resultats   []Resultat `json:"resultats"`
 	// Taux est le taux de réussite aux examens en % (Σadmis / Σprésents, vue
 	// etablissement_taux) ; null sans résultats ou hors recherche.
 	Taux *float64 `json:"taux,omitempty"`
