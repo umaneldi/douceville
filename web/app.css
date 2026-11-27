@@ -752,6 +752,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .popup-table th:first-child, .popup-table td:first-child { text-align: left; }
 .popup-table th { background: #f1f5f9; }
 .popup-scroll { max-height: 14rem; overflow-y: auto; }
+/* Informations de l'annuaire : libellé / valeur sur deux colonnes. */
+.popup-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.6rem;
+  margin: 0 0 0.4rem;
+}
+.popup-dl dt { color: #475569; }
+.popup-dl dd { margin: 0; overflow-wrap: anywhere; }
+/* Résultats repliés : la popup est sur fond clair (pas de --muted). */
+.popup-fold > summary { color: #475569; font-size: 0.8rem; margin: 0.3rem 0; }
+.popup-fold > summary:hover { color: #0f172a; }
 
 /* Zones repliables du panneau de gauche */
 .fold > summary {

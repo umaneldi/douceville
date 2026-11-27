@@ -961,6 +961,17 @@ function initMap() {
     syncUrl();
   });
   // Niveau de détail : communes de loin, quartiers IRIS de près.
+  // Leaflet ne recalcule pas la taille d'une popup quand un pli <details>
+  // (résultats d'un établissement) s'ouvre ou se ferme : on la recale.
+  map.on("popupopen", (e) => {
+    const el = e.popup.getElement();
+    if (!el) return;
+    for (const d of el.querySelectorAll("details")) {
+      if (d.dataset.popupFit) continue; // contenu réutilisé : un seul écouteur
+      d.dataset.popupFit = "1";
+      d.addEventListener("toggle", () => e.popup.update());
+    }
+  });
   map.on("zoomend", () => {
     if (immoData && immoLevelForZoom() !== immoLevel) buildImmobilier();
   });
@@ -2373,39 +2384,51 @@ function esc(s) {
   );
 }
 
-// Lien externe (http/https uniquement), libellé échappé.
+// Lien externe (http/https uniquement ; https:// ajouté à une adresse sans
+// schéma, ex. « www.exemple.fr »), libellé échappé.
 function extLink(url, label) {
-  if (!url || !/^https?:\/\//i.test(url)) return "";
+  url = (url || "").trim();
+  if (url && !/^[a-z][a-z0-9+.-]*:/i.test(url)) url = "https://" + url;
+  if (!/^https?:\/\/[^\s]+$/i.test(url)) return "";
   return `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>`;
 }
 
-// Attributs de l'annuaire de l'éducation : services, offre pédagogique et
-// contact ; une ligne n'est affichée que si elle a un contenu.
+// Nom d'hôte d'une URL, sans « www. » (l'URL elle-même si elle est invalide).
+function hostLabel(url) {
+  try {
+    const u = new URL(/^https?:\/\//i.test(url) ? url : "https://" + url);
+    return u.hostname.replace(/^www\./i, "");
+  } catch (_) {
+    return url;
+  }
+}
+
+// Attributs de l'annuaire de l'éducation, en liste libellée : une ligne par
+// information présente (booléen non nul : « Oui » / « Non »). Téléphone,
+// e-mail, site web et fiche ONISEP sont cliquables.
 function annuaireHtml(etab) {
-  const services = [
-    etab.education_prioritaire,
-    etab.restauration && "Cantine",
-    etab.hebergement && "Internat",
-    etab.ulis && "ULIS",
-    etab.segpa && "SEGPA",
-  ].filter(Boolean);
-  const offre = [
-    (etab.sections || []).length ? `Sections : ${etab.sections.join(", ")}` : "",
-    etab.apprentissage && "Apprentissage",
-    etab.post_bac && "Post-bac",
-    etab.lycee_des_metiers && "Lycée des métiers",
-  ].filter(Boolean);
-  const contact = [
-    etab.telephone ? `☎ ${esc(etab.telephone)}` : "",
-    etab.mail ? `<a href="mailto:${esc(etab.mail)}">${esc(etab.mail)}</a>` : "",
-    extLink(etab.site_web, "Site web"),
-    extLink(etab.fiche_onisep, "Fiche ONISEP"),
-  ].filter(Boolean);
-  const lines = [];
-  if (services.length) lines.push(esc(services.join(" · ")));
-  if (offre.length) lines.push(esc(offre.join(" · ")));
-  if (contact.length) lines.push(contact.join(" · "));
-  return lines.length ? `<div class="popup-meta">${lines.join("<br/>")}</div>` : "";
+  const rows = [];
+  const add = (label, html) => {
+    if (html) rows.push(`<dt>${esc(label)}</dt><dd>${html}</dd>`);
+  };
+  const yesNo = (v) => (v == null ? "" : v ? "Oui" : "Non");
+  add("Éducation prioritaire", esc(etab.education_prioritaire || ""));
+  add("Restauration", yesNo(etab.restauration));
+  add("Internat", yesNo(etab.hebergement));
+  add("ULIS", yesNo(etab.ulis));
+  add("SEGPA", yesNo(etab.segpa));
+  add("Apprentissage", yesNo(etab.apprentissage));
+  add("Post-bac", yesNo(etab.post_bac));
+  add("Lycée des métiers", yesNo(etab.lycee_des_metiers));
+  add("Sections", esc((etab.sections || []).join(", ")));
+  if (etab.telephone) {
+    const tel = etab.telephone.replace(/[^\d+]/g, "");
+    add("Téléphone", tel ? `<a href="tel:${esc(tel)}">${esc(etab.telephone)}</a>` : esc(etab.telephone));
+  }
+  if (etab.mail) add("E-mail", `<a href="mailto:${esc(etab.mail.trim())}">${esc(etab.mail)}</a>`);
+  if (etab.site_web) add("Site web", extLink(etab.site_web, hostLabel(etab.site_web.trim())));
+  add("Fiche ONISEP", extLink(etab.fiche_onisep, "Voir la fiche"));
+  return rows.length ? `<dl class="popup-dl">${rows.join("")}</dl>` : "";
 }
 
 function popupHtml(etab) {
@@ -2423,6 +2446,9 @@ function popupHtml(etab) {
     html += `<div class="popup-meta">Taux de réussite : <strong>${rate.toFixed(1)} %</strong></div>`;
   }
   if (res.length) {
+    // Résultats repliés par défaut (la popup est recalée à l'ouverture du pli,
+    // voir l'écouteur « popupopen »).
+    html += `<details class="subfold popup-fold"><summary>Résultats aux examens (${Math.min(res.length, 8)})</summary>`;
     html += `<table class="popup-table"><thead><tr>
       <th>Diplôme</th><th>Année</th><th>Présents</th><th>Admis</th><th>Mentions</th>
       </tr></thead><tbody>`;
@@ -2430,7 +2456,7 @@ function popupHtml(etab) {
       html += `<tr><td>${esc(r.diplome)}</td><td>${esc(r.annee)}</td>
         <td>${esc(r.presents)}</td><td>${esc(r.admis)}</td><td>${esc(r.mentions)}</td></tr>`;
     }
-    html += `</tbody></table>`;
+    html += `</tbody></table></details>`;
   } else {
     html += `<em>Aucun résultat d'examen disponible.</em>`;
   }

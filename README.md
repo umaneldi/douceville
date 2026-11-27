@@ -19,9 +19,12 @@ y est près d'au moins un établissement retenu de chaque nature), restreinte
 par des **filtres de zone** (prix au m², score de sécurité, fiscalité). La carte
 montre ce qu'elle contient :
 
-- les **établissements scolaires**, leurs résultats aux examens (bac, brevet)
-  et, dans leur fiche, l'éducation prioritaire (REP / REP+), les services
-  (cantine, internat, ULIS, SEGPA), les sections et les coordonnées ;
+- les **établissements scolaires** ; leur fiche (popup de la carte) liste les
+  informations de l'annuaire présentes — éducation prioritaire (REP / REP+),
+  restauration, internat, ULIS, SEGPA, apprentissage, post-bac, lycée des
+  métiers, sections — et leurs coordonnées (téléphone, e-mail, site web et
+  fiche ONISEP cliquables), puis le taux de réussite et, repliés par défaut,
+  les résultats aux examens (bac, brevet) ;
 - la **sécurité** des communes (score de délinquance SSMSI) et leur **fiscalité
   locale** (taxe foncière, TEOM) ;
 - le **prix de l'immobilier** au m² (ventes DVF) par commune et par quartier IRIS
