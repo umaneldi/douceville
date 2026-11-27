@@ -328,11 +328,46 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 290px minmax(0, 1fr) 320px;
+  position: relative;
+  grid-template-columns: var(--panel-w, 340px) minmax(0, 1fr);
   gap: 1rem;
   min-height: 0;
   padding: 0 1rem 1rem 0;
 }
+
+/* Poignée de largeur du volet, centrée dans l'espace entre volet et carte. */
+.panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 1rem;
+  left: calc(var(--panel-w, 340px) + 0.5rem - 4px);
+  z-index: 500;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.panel-resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 48px;
+  margin-top: -24px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.15s, height 0.15s, margin-top 0.15s;
+}
+.panel-resizer:hover::after, .panel-resizer:focus-visible::after, .resizing .panel-resizer::after {
+  top: 0;
+  height: 100%;
+  margin-top: 0;
+  background: var(--accent);
+}
+.panel-resizer:focus-visible { outline: none; }
+/* Pendant le glissement : pas de sélection de texte, curseur partout. */
+.resizing { cursor: col-resize; user-select: none; }
+.resizing .map-wrap { pointer-events: none; }
 
 .card {
   background: var(--panel);
@@ -345,10 +380,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
   overflow-x: hidden;
   overflow-y: auto;
 }
-.panel, .insights { scrollbar-width: thin; scrollbar-color: #2e3442 transparent; }
-.insights { padding-right: 2px; }
+.panel { scrollbar-width: thin; scrollbar-color: #2e3442 transparent; }
 .panel-title { margin: 0 0 0.7rem; font-size: 0.95rem; font-weight: 600; }
-.sep { border: 0; border-top: 1px dashed var(--border); margin: 1.1rem 0; }
 
 .map-wrap {
   position: relative;
@@ -431,47 +464,58 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 .leaflet-touch .leaflet-bar { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 
 /* ---------- Panneau de droite ---------- */
-.insights { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
-.tabs { display: flex; gap: 0.4rem; margin-bottom: 0.6rem; }
-.tab {
-  padding: 0.45rem 0.95rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-.tab:hover { background: var(--panel-2); }
-.tab.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .section-title { margin: 1rem 0 0.55rem; font-size: 0.92rem; font-weight: 600; }
 .chart-card { padding: 1rem; }
 .empty { margin: 0; color: var(--muted); font-size: 0.85rem; }
 
-.donut-wrap { display: flex; align-items: center; gap: 1rem; }
-.donut { width: 104px; height: 104px; flex: none; }
-.donut-num { fill: var(--text); font-size: 26px; font-weight: 600; text-anchor: middle; }
-.donut-sub { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+/* Répartition par nature : chiffre vedette (chiffres proportionnels) et barre
+   segmentée fine, 2 px de surface entre les parts. */
+.stat { display: flex; align-items: baseline; gap: 0.4rem; margin-bottom: 0.6rem; }
+.stat-num { font-size: 1.75rem; font-weight: 600; line-height: 1; }
+.stat-unit { color: var(--muted); font-size: 0.8rem; }
+.segbar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  margin-bottom: 0.7rem;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.seg { flex-basis: 0; min-width: 2px; }
+.seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .chart-legend { list-style: none; margin: 0; padding: 0; flex: 1; font-size: 0.84rem; }
 .chart-legend li { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0; }
 .chart-legend .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .chart-legend .lg-name { flex: 1; }
 .chart-legend .lg-val { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart-legend .lg-pct { min-width: 3.2em; text-align: right; }
 
-.bars-head, .bars-axis {
+.bars-head {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
   font-size: 0.72rem;
 }
+/* Le filet du haut marque la hauteur « max » annoncée dans l'en-tête. */
 .bars {
   display: flex;
   align-items: flex-end;
   gap: 4px;
   height: 120px;
-  margin: 0.5rem 0 0.35rem;
-  border-bottom: 1px solid var(--border);
+  margin: 0.35rem 0 0.35rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid #3a4150;
 }
+.bars-axis {
+  position: relative;
+  height: 1.1rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+.bars-axis .tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.bars-axis .tick.first { transform: none; }
+.bars-axis .tick.last { transform: translateX(-100%); }
 .bar-slot {
   flex: 1;
   height: 100%;
@@ -505,6 +549,30 @@ input:focus, select:focus { outline: 2px solid var(--accent); border-color: tran
 }
 .bars-clear[hidden] { display: none; }
 .chart-note { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.75rem; }
+.bar-slot.static:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+/* Infobulle partagée des graphiques (survol et focus clavier). */
+.chart-tip {
+  position: fixed;
+  z-index: 2000;
+  max-width: 16rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 0.75rem;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Vue tableau d'un graphique. */
+.chart-table { margin-top: 0.5rem; font-size: 0.75rem; }
+.chart-table summary { color: var(--muted); cursor: pointer; }
+.chart-table table { width: 100%; margin-top: 0.35rem; border-collapse: collapse; }
+.chart-table th, .chart-table td { padding: 0.15rem 0.25rem; border-bottom: 1px solid var(--border); text-align: left; }
+.chart-table th { color: var(--muted); font-weight: 500; }
+.chart-table td:last-child, .chart-table th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 
 .etab-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .etab-item {
@@ -642,6 +710,30 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border: 1px solid #a8a29e;
 }
 .map-legend[hidden] { display: none; }
+/* Itinéraires du quartier sélectionné : texture qui avance le long du tracé
+   (période = somme du dashArray « 1 11 »), figée si le mouvement est réduit. */
+.route-flow { animation: route-flow 0.8s linear infinite; }
+@keyframes route-flow {
+  from { stroke-dashoffset: 12; }
+  to { stroke-dashoffset: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-flow { animation: none; }
+}
+/* Établissements sur la carte : pastille ronde de la couleur de la nature,
+   initiale de la nature, anneau blanc de 2 px (voir etabIcon) ; source :
+   24 px au lieu de 20. */
+.etab-pin span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0, 0, 0, 0.4);
+  font: 700 11px/1 system-ui, sans-serif;
+}
+.etab-pin.source span { font-size: 13px; }
 .immo-legend .legend-hint {
   margin-top: 0.3rem;
   max-width: 13rem;
@@ -681,25 +773,56 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .fold:not([open]) > summary { margin-bottom: 0; }
 .fold + .fold { margin-top: 1.1rem; padding-top: 1.1rem; border-top: 1px dashed var(--border); }
 
-/* Quartier sélectionné (clic sur une choroplèthe) */
-.quartier-info { font-size: 0.85rem; }
-.quartier-info .muted { color: var(--muted); font-size: 0.9em; }
-.quartier-head { display: flex; align-items: flex-start; gap: 0.5rem; }
-.quartier-head .popup-title { flex: 1; min-width: 0; }
-.quartier-clear {
-  flex: none;
-  width: 1.6rem;
-  height: 1.6rem;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: transparent;
+/* Sous-blocs repliables (statistiques, établissements d'un quartier). */
+.subfold > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.4rem 0;
   color: var(--muted);
-  font-size: 1rem;
-  line-height: 1;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.subfold > summary::-webkit-details-marker { display: none; }
+.subfold > summary::before { content: "▸"; font-size: 0.8em; transition: transform 0.15s; }
+.subfold[open] > summary::before { transform: rotate(90deg); }
+.subfold > summary:hover { color: var(--text); }
+#stats-fold > .section-title:first-of-type { margin-top: 0.4rem; }
+
+/* Arbre des quartiers : un nœud déplié à la fois (= quartier sélectionné). */
+.qt-tree { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.qt-node { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.qt-node.open { border-color: #3a4150; background: var(--panel-2); }
+.qt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
-.quartier-clear:hover { color: var(--text); }
+.qt-head::before { content: "▸"; color: var(--muted); font-size: 0.75em; transition: transform 0.15s; }
+.qt-head[aria-expanded="true"]::before { transform: rotate(90deg); }
+.qt-head:hover { background: var(--panel-2); }
+.qt-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.qt-name { flex: 1; min-width: 0; font-size: 0.86rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qt-commune { display: block; color: var(--muted); font-size: 0.74rem; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.qt-meta { display: flex; flex-direction: column; align-items: flex-end; flex: none; font-size: 0.74rem; font-variant-numeric: tabular-nums; }
+.qt-prix { color: var(--text); }
+.qt-body:empty { display: none; }
+.qt-body { padding: 0 0.6rem 0.6rem; font-size: 0.85rem; }
+.qt-body .muted { color: var(--muted); font-size: 0.9em; }
+.qt-card > .place-section:first-child { margin-top: 0; }
+.qt-tree > .empty { color: var(--muted); }
 .place-section { margin-top: 0.45rem; padding-top: 0.35rem; border-top: 1px solid var(--border); }
 .place-section-title { font-weight: 600; margin-bottom: 0.15rem; }
 .place-times { list-style: none; margin: 0; padding: 0; }
@@ -827,31 +950,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 
 /* ---------- Responsive ---------- */
-.tabs { flex-wrap: wrap; }
 .info-tip .tip-body { max-width: calc(100vw - 2rem); }
 .popup-scroll { max-width: 70vw; overflow-x: auto; }
-
-/* Tablette : filtres | carte, panneau d'analyse en dessous. */
-@media (max-width: 1180px) {
-  .layout {
-    grid-template-columns: 270px minmax(0, 1fr);
-    grid-template-rows: minmax(420px, 70vh) auto;
-    grid-template-rows: minmax(420px, 70dvh) auto;
-  }
-  .insights { grid-column: 1 / -1; overflow: visible; }
-  .main { overflow-y: auto; }
-  .tab-pane[data-pane="overview"]:not([hidden]) {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 1rem;
-  }
-  /* Titre + graphique par colonne ; la liste « meilleurs taux » sur toute la largeur. */
-  .tab-pane[data-pane="overview"] > :nth-child(1) { grid-area: 1 / 1; }
-  .tab-pane[data-pane="overview"] > :nth-child(2) { grid-area: 2 / 1; }
-  .tab-pane[data-pane="overview"] > :nth-child(3) { grid-area: 1 / 2; }
-  .tab-pane[data-pane="overview"] > :nth-child(4) { grid-area: 2 / 2; }
-  .tab-pane[data-pane="overview"] > :nth-child(n+5) { grid-column: 1 / -1; }
-}
 
 /* Téléphone : tout est empilé, carte en premier. */
 @media (max-width: 720px) {
@@ -872,14 +972,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .main { overflow: visible; }
   .layout {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 55vh auto auto;
-    grid-template-rows: 55dvh auto auto;
+    grid-template-rows: 55vh auto;
+    grid-template-rows: 55dvh auto;
     gap: 0.75rem;
     padding: 0.75rem;
   }
   .map-wrap { order: -1; border-radius: 14px; scroll-margin-top: 4.5rem; }
   .panel { overflow: visible; }
-  .tab-pane[data-pane="overview"]:not([hidden]) { display: block; }
+  .panel-resizer { display: none; }
   .name-fields { flex-direction: column; }
   .admin-user { grid-template-columns: auto minmax(0, 1fr); }
   .admin-user select { grid-column: 1 / -1; }
@@ -898,8 +998,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 
 @media (max-width: 400px) {
-  .donut-wrap { flex-direction: column; align-items: stretch; }
-  .donut { align-self: center; }
 }
 
 /* Écrans tactiles : cibles plus grandes. */

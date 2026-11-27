@@ -220,7 +220,8 @@ var Transports = []string{"driving-car", "cycling-regular", "foot-walking"}
 // CritereNature décrit, pour une nature d'établissement, les établissements
 // retenus et leur isochrone : secteurs (vide : tous), filières (lycées
 // seulement ; vide : pas de filtre, sinon au moins une en commun), plage de taux de
-// réussite en % (les établissements sans résultats ne sont pas filtrés),
+// réussite en % (un établissement sans résultats n'est retenu que si la plage
+// est complète, 0–100),
 // temps de trajet Dist (secondes) et mode de transport Transp.
 type CritereNature struct {
 	Nature  string   `json:"nature"`

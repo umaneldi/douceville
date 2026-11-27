@@ -132,11 +132,19 @@ func TestEtablissementsIntegration(t *testing.T) {
 	if got := fmt.Sprint(uais([]models.CritereNature{strict})); got != "[A]" {
 		t.Errorf("taux >= 88: %v, want [A]", got)
 	}
-	// B n'a pas de résultats : jamais exclu par le taux.
+	// B n'a pas de résultats : il ne satisfait un critère de taux que si sa
+	// plage est complète (0–100), faute de pouvoir vérifier qu'il y entre.
 	college := all("Collège")
-	college.TauxMin = 99
 	if got := fmt.Sprint(uais([]models.CritereNature{college})); got != "[B]" {
-		t.Errorf("no results: %v, want [B]", got)
+		t.Errorf("no results, 0–100: %v, want [B]", got)
+	}
+	college.TauxMin = 99
+	if got := fmt.Sprint(uais([]models.CritereNature{college})); got != "[]" {
+		t.Errorf("no results, taux >= 99: %v, want []", got)
+	}
+	college.TauxMin, college.TauxMax = 0, 99
+	if got := fmt.Sprint(uais([]models.CritereNature{college})); got != "[]" {
+		t.Errorf("no results, taux <= 99: %v, want []", got)
 	}
 }
 

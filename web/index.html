@@ -81,13 +81,13 @@
 
       <div class="layout">
         <aside class="panel card">
-          <h2 class="panel-title">Couches</h2>
-          <div id="layers-slot" class="layers-slot"></div>
-
-          <hr class="sep" />
+          <details id="layers-fold" class="fold" open>
+            <summary class="panel-title">Couches</summary>
+            <div id="layers-slot" class="layers-slot"></div>
+          </details>
 
           <details id="search-fold" class="fold" open>
-          <summary class="panel-title">Paramètres de recherche</summary>
+          <summary class="panel-title">Recherche</summary>
           <form id="search-form">
             <h3 class="lbl">Centre de la recherche</h3>
             <p class="hint">Les établissements sont cherchés dans ce rayon. La zone affichée est
@@ -130,46 +130,40 @@
           <div id="results-summary" class="results-summary" hidden></div>
           </details>
 
-          <details id="quartier-fold" class="fold" open>
-            <summary class="panel-title">Quartier sélectionné</summary>
-            <div id="quartier-info" class="quartier-info"></div>
+          <details id="data-fold" class="fold">
+            <summary class="panel-title">Données de la zone</summary>
+
+            <details id="stats-fold" class="subfold" open>
+              <summary>Statistiques générales</summary>
+              <h3 class="section-title">Répartition par nature</h3>
+              <div id="nature-chart" class="card chart-card"></div>
+
+              <h3 class="section-title">Taux de réussite</h3>
+              <div id="rate-chart" class="card chart-card"></div>
+
+              <h3 class="section-title">Sécurité des communes</h3>
+              <div id="secu-chart" class="card chart-card"></div>
+
+              <h3 class="section-title">Fiscalité des communes <span class="muted">(TFB + TEOM)</span></h3>
+              <div id="fisc-chart" class="card chart-card"></div>
+
+              <h3 class="section-title">Prix au m² des quartiers</h3>
+              <div id="prix-chart" class="card chart-card"></div>
+
+            </details>
+
+            <h3 class="section-title">Quartiers <span id="quartier-count" class="muted"></span></h3>
+            <ul id="quartier-tree" class="qt-tree"></ul>
           </details>
         </aside>
+        <!-- Poignée de largeur du volet (hors du volet, qui défile). -->
+        <div class="panel-resizer" role="separator" aria-orientation="vertical" tabindex="0"
+             aria-label="Largeur du volet (flèches gauche et droite, double-clic : largeur par défaut)"></div>
 
         <div class="map-wrap">
           <main id="map" class="map"></main>
         </div>
 
-        <aside class="insights">
-          <div class="tabs" role="tablist">
-            <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="overview">Aperçu</button>
-            <button type="button" class="tab" role="tab" aria-selected="false" data-tab="list">Établissements</button>
-          </div>
-
-          <section class="tab-pane" data-pane="overview" role="tabpanel">
-            <h3 class="section-title">Répartition par nature</h3>
-            <div id="nature-chart" class="card chart-card"></div>
-
-            <h3 class="section-title">Taux de réussite</h3>
-            <div id="rate-chart" class="card chart-card"></div>
-
-            <h3 class="section-title">Sécurité des communes</h3>
-            <div id="secu-chart" class="card chart-card"></div>
-
-            <h3 class="section-title">Fiscalité des communes <span class="muted">(TFB + TEOM)</span></h3>
-            <div id="fisc-chart" class="card chart-card"></div>
-
-            <h3 class="section-title">Prix au m² des quartiers</h3>
-            <div id="prix-chart" class="card chart-card"></div>
-
-            <h3 class="section-title">Meilleurs taux de réussite</h3>
-            <ul id="etab-top" class="etab-list"></ul>
-          </section>
-
-          <section class="tab-pane" data-pane="list" role="tabpanel" hidden>
-            <ul id="etab-list" class="etab-list"></ul>
-          </section>
-        </aside>
       </div>
     </div>
   </div>

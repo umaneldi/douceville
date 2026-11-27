@@ -105,19 +105,20 @@ func TestSelectSourceEtablissementsIntegration(t *testing.T) {
 	}
 
 	// Critères propres à chaque nature : lycées publics à 90 % et plus (F,
-	// sans résultats, reste) ; collèges en 15 min à pied (B à ~55 km : hors
-	// du rayon de 20 km, retenu à 60 km).
+	// sans résultats, est écarté : son taux ne peut pas être vérifié) ;
+	// collèges en 15 min à pied, plage 0–100 (B, sans résultats, retenu ; à
+	// ~55 km : hors du rayon de 20 km, retenu à 60 km).
 	public := lycee
 	public.Secteur = []string{"public"}
 	public.TauxMin = 90
 	college := models.CritereNature{Nature: "Collège", TauxMax: 100, Dist: 600, Transp: "foot-walking"}
 	src, err = s.SelectSourceEtablissements(ctx, centre, 20000, []models.CritereNature{public, college}, 10)
-	if err != nil || sourceUAIs(src) != "[D F]" {
-		t.Errorf("public >= 90 %% + collège at 20 km = %s, %v, want [D F]", sourceUAIs(src), err)
+	if err != nil || sourceUAIs(src) != "[D]" {
+		t.Errorf("public >= 90 %% + collège at 20 km = %s, %v, want [D]", sourceUAIs(src), err)
 	}
 	src, err = s.SelectSourceEtablissements(ctx, centre, 60000, []models.CritereNature{college, public}, 10)
-	if err != nil || sourceUAIs(src) != "[B G D F]" {
-		t.Fatalf("collège + lycée at 60 km = %s, %v, want [B G D F] (critère order, then taux)", sourceUAIs(src), err)
+	if err != nil || sourceUAIs(src) != "[B G D]" {
+		t.Fatalf("collège + lycée at 60 km = %s, %v, want [B G D] (critère order, then taux)", sourceUAIs(src), err)
 	}
 	if src[0].Dist != 600 || src[0].Transp != "foot-walking" || src[1].Transp != "driving-car" {
 		t.Errorf("each source must carry its own critère: %+v / %+v", src[0], src[1])
@@ -315,8 +316,8 @@ func TestQuartierProximiteIntegration(t *testing.T) {
 		t.Errorf("collège = %+v", p)
 	}
 
-	// Filtres propres à chaque nature : taux >= 90 écarte A (le plus proche
-	// devient C, à La Réunion) ; aucun collège public.
+	// Filtres propres à chaque nature : taux >= 90 écarte A (88,7 %) et C (à
+	// La Réunion, sans résultats : taux non vérifiable) ; aucun collège public.
 	strict := lycee
 	strict.TauxMin = 90
 	public := college
@@ -325,11 +326,23 @@ func TestQuartierProximiteIntegration(t *testing.T) {
 	if err != nil || len(q.Proches) != 2 {
 		t.Fatalf("filtered = %+v, %v", q, err)
 	}
-	if p := q.Proches[0]; p.UAI == nil || *p.UAI != "C" || *p.DistanceM < 1e6 {
-		t.Errorf("lycée >= 90 %% = %+v, want C (far away)", p)
+	if p := q.Proches[0]; p.Nature != "Lycée" || p.UAI != nil || p.DistanceM != nil {
+		t.Errorf("lycée >= 90 %% = %+v, want no match", p)
 	}
 	if p := q.Proches[1]; p.Nature != "Collège" || p.DistanceM != nil || p.UAI != nil || p.Lon != nil || p.Lat != nil {
 		t.Errorf("collège public = %+v, want no match", p)
+	}
+
+	// B, collège sans résultats : retenu pour une plage de taux complète,
+	// écarté dès qu'un taux minimum est exigé (non vérifiable).
+	exigeant := college
+	exigeant.TauxMin = 50
+	q, err = s.QuartierProximite(ctx, "750560001", []models.CritereNature{exigeant})
+	if err != nil || len(q.Proches) != 1 {
+		t.Fatalf("collège >= 50 %% = %+v, %v", q, err)
+	}
+	if p := q.Proches[0]; p.UAI != nil || p.DistanceM != nil {
+		t.Errorf("collège >= 50 %% = %+v, want no match (B has no results)", p)
 	}
 
 	// IRIS sans vente ni sécurité ni fiscalité, sans critère.

@@ -26,32 +26,77 @@ montre ce qu'elle contient :
   (les quartiers hors du filtre de prix ne sont pas colorés) ;
 - les **logements sociaux** (répertoire RPLS).
 
-Sur la carte, seule la zone retenue est tracée (contour orange épais, non
-rempli), avec le cercle du rayon de recherche ; les isochrones de chaque
+Sur la carte, seule la zone retenue est tracée (contour noir pointillé sur
+liseré blanc, non rempli), avec le cercle du rayon de recherche ; les isochrones de chaque
 établissement source et la zone avant filtres de zone ne sont pas affichées.
 
-Le panneau de gauche comporte deux zones repliables : les **paramètres de
-recherche** et le **quartier sélectionné**. Une recherche aboutie replie la
-première et déplie la seconde (si la zone est vide, les paramètres restent
-dépliés pour afficher l'explication). Un clic sur un quartier IRIS le
-sélectionne (contour en pointillés sur la carte) et affiche sa fiche dans cette
-seconde zone : prix au m², sécurité, fiscalité et **distance à l'établissement
-le plus proche de chaque nature** recherchée. Les **itinéraires** du quartier
-vers chacun de ces établissements (mode de transport du critère de la nature)
-sont tracés sur la carte, avec leur durée, tant que le quartier reste
-sélectionné. Sans quartier sélectionné (clic hors quartier, bouton « × »,
-nouvelle recherche), la zone est vide.
+Tout se trouve dans le volet de gauche, à côté de la carte. Sa **largeur se
+règle à la souris** en glissant la poignée entre le volet et la carte (ou au
+clavier avec les flèches gauche et droite sur la poignée ; double-clic : largeur
+par défaut). La largeur est conservée dans le navigateur. Le volet comporte
+trois zones repliables :
 
-Le panneau de droite résume la zone : répartition des établissements par
-nature, histogramme des taux de réussite (sélection de tranches mise en avant
-sur la carte et dans la liste), et histogrammes de la **sécurité** et de la
-**fiscalité** des communes et du **prix au m²** des quartiers IRIS, affichés
-même sans filtre (tranches hors du filtre actif atténuées).
+- **Couches** : choroplèthe affichée (sécurité, prix au m², fiscalité) et
+  logements sociaux ;
+- **Recherche** : centre, rayon, critères par nature et filtres de zone ;
+- **Données de la zone** : des **statistiques générales** repliables, puis
+  l'**arbre des quartiers**.
 
-L'état de la page (centre, critères, filtres, couches, onglet, tranches de taux
-sélectionnées) est reflété dans l'URL : un favori ou un lien partagé restaure
+Une recherche aboutie replie « Recherche » et déplie « Données de la zone ».
+Si la zone est vide, les paramètres restent dépliés pour afficher
+l'explication.
+
+Les statistiques générales comprennent :
+
+- la répartition des établissements par nature (total, barre segmentée et
+  légende avec effectifs et parts) ;
+- l'histogramme des taux de réussite. La sélection de tranches est mise en
+  avant sur la carte et dans les listes d'établissements ;
+- les histogrammes de la **sécurité** et de la **fiscalité** des communes et du
+  **prix au m²** des quartiers IRIS. Ils sont affichés même sans filtre, avec
+  les tranches hors du filtre actif atténuées.
+
+Chaque barre affiche une infobulle au survol comme au focus clavier, et chaque
+histogramme a une vue « Tableau » dépliable.
+
+L'arbre des quartiers liste tous les quartiers IRIS de la zone, triés par
+commune puis par nom, avec leur prix au m².
+**Déplier un quartier le sélectionne**, et un seul quartier peut l'être à la
+fois. Un clic sur un quartier de la carte fait de même et fait défiler l'arbre
+jusqu'au quartier.
+
+Le quartier sélectionné est entouré de pointillés sur la carte. Son nœud
+affiche :
+
+- sa fiche : prix au m², sécurité, fiscalité et **distance à l'établissement le
+  plus proche de chaque nature** recherchée ;
+- la liste dépliable des **établissements accessibles** depuis le quartier :
+  les établissements sources dont l'isochrone (temps et mode de transport de
+  leur critère) recouvre le quartier, triés par nature puis par taux de
+  réussite, avec le temps et le mode d'accès. C'est la seule liste
+  d'établissements du volet. Un clic sur un établissement ouvre sa fiche sur
+  la carte.
+
+Les **itinéraires** du quartier vers chacun des établissements les plus proches
+(mode de transport du critère de la nature) sont tracés sur la carte, avec
+leur durée, tant que le quartier reste sélectionné. Une texture animée y
+avance du quartier vers l'établissement (figée si le système demande de
+réduire les animations). Ces établissements les plus proches sont cherchés
+parmi tous les établissements, pas seulement ceux de la zone : quand l'un
+d'eux n'a pas de marqueur, une pastille est posée au bout de son itinéraire
+(avec sa fiche au clic), le temps de la sélection. Le quartier est
+désélectionné quand on replie son nœud, qu'on clique hors des quartiers ou
+qu'on lance une nouvelle recherche.
+
+Sur la carte, chaque établissement est une pastille ronde à la couleur de sa
+nature, portant l'initiale de celle-ci (M, É, P, C, L, A pour « Autres »).
+Les établissements sources, dont l'isochrone définit la zone, sont un peu plus
+grands et affichés au-dessus des autres.
+
+L'état de la page (centre, critères, filtres, couches, tranches de taux
+sélectionnées, quartier déplié) est reflété dans l'URL : un favori ou un lien partagé restaure
 la recherche. Exemple :
-`/?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100,Général+Technologique&prix=0-4000&securite=50&fiscalite=45&couche=prix&logements=1&onglet=list&taux=8,9`.
+`/?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100,Général+Technologique&prix=0-4000&securite=50&fiscalite=45&couche=prix&logements=1&taux=8,9&quartier=315550101`.
 
 ## Sommaire
 
@@ -112,7 +157,8 @@ navigateur ──► / (UI statique embarquée, web/)
 2. Pour chaque critère (une nature), PostGIS retient au plus 10 établissements
    **sources** dans le rayon : ceux de la nature, des secteurs et de la plage de
    taux de réussite demandés (taux = Σadmis / Σprésents, vue
-   `etablissement_taux` ; un établissement sans résultats n'est pas filtré),
+   `etablissement_taux` ; un établissement sans résultats n'est retenu que si
+   la plage est complète, 0–100 %, faute de pouvoir vérifier qu'il y entre),
    classés par taux décroissant puis par distance au centre. Une **école
    primaire** (nature `Primaire`) satisfait les critères `Maternelle` et
    `Elementaire` : elle peut être source de chacun. Si une nature n'a

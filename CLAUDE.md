@@ -122,6 +122,14 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
     qu'elle satisfait (`models.NaturesPrimaire`) sont utilisées par
     `critereMatch` (`internal/store/search.go`), et sa couleur est dans
     `NATURE_GROUPS` (`web/app.js`).
+- **Palettes du frontend** : `NATURE_GROUPS` et les rampes des choroplèthes
+  (`SECURITY_CLASSES`, `IMMO_COLORS`, `FISC_COLORS`, dont l'étape médiane colore
+  aussi l'histogramme correspondant) ont été calibrées au validateur du skill
+  `dataviz` : natures en paires adjacentes sur le panneau (`--mode dark
+  --surface "#14171f"`) et toutes paires sur les tuiles OSM (`--mode light
+  --surface "#f2efe9" --pairs all`) ; rampes en `--ordinal` sur les tuiles (la
+  classe la plus claire doit rester ≥ 2:1, sinon elle disparaît dans le fond de
+  carte). Toute nouvelle couleur repasse ces contrôles.
 - **Piège frontend** : `web/app.js` est un script classique exécuté de haut en
   bas ; un appel de niveau supérieur ne doit pas utiliser une variable
   `let`/`const` déclarée plus bas (erreur « Cannot access … before

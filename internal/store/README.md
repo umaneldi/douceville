@@ -44,7 +44,11 @@ documenté dans [`schema.md`](../../schema.md).
   école primaire (`models.NaturePrimaire`, voir migration 019) satisfait les
   critères des natures `models.NaturesPrimaire` (maternelle, élémentaire) ;
   `SelectSourceEtablissements` renseigne donc `Source.Critere` (nature du
-  critère qui a retenu la source), qui peut différer de `Nature`.
+  critère qui a retenu la source), qui peut différer de `Nature`. Un
+  établissement sans taux connu ne satisfait la plage de taux d'un critère
+  que si elle est complète (0–100). La même condition sert aux sources, aux
+  établissements de la zone et aux plus proches d'un quartier
+  (`QuartierProximite`).
 - **Taux de réussite** : vue `etablissement_taux` (migration 017), même
   définition que `successRate()` dans `web/app.js`. Dans
   `SelectSourceEtablissements`, les candidats du disque puis leur taux sont

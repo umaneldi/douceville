@@ -47,12 +47,14 @@ func criteresCTE(n int) string {
 // critère c » : même nature (une école primaire satisfait aussi les critères
 // maternelle et élémentaire), secteur parmi ceux du critère (tous si aucun),
 // au moins une filière parmi celles du critère (pas de filtre si aucune),
-// taux dans la plage du critère (non filtré si inconnu).
+// taux dans la plage du critère. Un établissement sans taux connu ne la
+// satisfait que si elle est complète (0–100) : on ne peut pas vérifier qu'il
+// y entre.
 var critereMatch = `(c.nature = e.nature OR (e.nature = '` + models.NaturePrimaire + `'
 		AND c.nature IN ('` + strings.Join(models.NaturesPrimaire, "', '") + `')))
 	AND (c.secteurs = '' OR e.secteur = ANY (string_to_array(c.secteurs, '` + secteurSep + `')))
 	AND (c.filieres = '' OR e.filieres && string_to_array(c.filieres, '` + secteurSep + `'))
-	AND (t.taux IS NULL OR t.taux BETWEEN c.tmin AND c.tmax)`
+	AND (t.taux BETWEEN c.tmin AND c.tmax OR (t.taux IS NULL AND c.tmin <= 0 AND c.tmax >= 100))`
 
 // criteresArgs convertit les critères en tableaux parallèles pour criteresCTE.
 func criteresArgs(criteres []models.CritereNature) []any {

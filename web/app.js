@@ -189,12 +189,13 @@ function startApp(user) {
 
 // ---------------------------------------------------------------------------
 // État de la page dans l'URL : centre, rayon, critères par nature, filtres de
-// zone, couches et onglet, pour qu'un favori ou un lien partagé restaure la
-// page (et relance la recherche). Ex. :
+// zone, couches et quartier déplié, pour qu'un favori ou un lien partagé
+// restaure la page (et relance la recherche). Ex. :
 // /?centre=Toulouse&rayon=10&critere=Lycée,20,voiture,public+privé,85-100
 // &critere=Collège,10,pied,public,0-100&prix=0-4000&securite=50&fiscalite=45
-// &couche=prix&logements=1&onglet=list&taux=8,9
-// (taux : tranches de 10 % sélectionnées dans l'histogramme des taux de réussite)
+// &couche=prix&logements=1&taux=8,9&quartier=315550101
+// (taux : tranches de 10 % sélectionnées dans l'histogramme des taux de réussite ;
+// quartier : code IRIS du quartier déplié dans l'arbre des quartiers)
 // ---------------------------------------------------------------------------
 const TRANSP_CODES = { "driving-car": "voiture", "cycling-regular": "velo", "foot-walking": "pied" };
 const TRANSP_BY_CODE = Object.fromEntries(Object.entries(TRANSP_CODES).map(([k, v]) => [v, k]));
@@ -203,6 +204,10 @@ let urlReady = false; // false tant que l'état de l'URL n'a pas été appliqué
 // Sélection de l'histogramme des taux lue dans l'URL, appliquée aux résultats
 // de la première recherche (null : aucune).
 let pendingRateSel = null;
+// Quartier (code IRIS) lu dans l'URL, déplié après la première recherche
+// (null : aucun).
+let pendingQuartier = null;
+let openIris = null; // code IRIS du quartier déplié (= sélectionné), null : aucun
 
 function pageQuery() {
   const q = new URLSearchParams();
@@ -229,12 +234,12 @@ function pageQuery() {
     if (couche !== "securite") q.set("couche", couche);
     if (map.hasLayer(logementLayer)) q.set("logements", "1");
   }
-  const tab = $(".tabs .tab.active");
-  if (tab && tab.dataset.tab !== "overview") q.set("onglet", tab.dataset.tab);
   // Sélection de l'histogramme des taux (en attente tant que la recherche
   // relancée depuis l'URL n'a pas répondu).
   const sel = pendingRateSel || rateSel;
   if (sel.size) q.set("taux", [...sel].sort((a, b) => a - b).join(","));
+  const iris = pendingQuartier || openIris;
+  if (iris) q.set("quartier", iris);
   return q;
 }
 
@@ -292,11 +297,9 @@ function applyQuery(params) {
   }
   if (params.get("logements") === "1") map.addLayer(logementLayer);
 
-  const tab = document.querySelector(`.tabs .tab[data-tab="${CSS.escape(params.get("onglet") || "")}"]`);
-  if (tab) tab.click();
-
   const taux = (params.get("taux") || "").split(",").filter((x) => /^\d$/.test(x)).map(Number);
   pendingRateSel = taux.length ? new Set(taux) : null;
+  pendingQuartier = params.get("quartier") || null;
 
   updateSearchCost();
   return !!$("#centre").value.trim() && collectCriteres().length > 0;
@@ -972,12 +975,16 @@ function initMap() {
 // Choroplèthe « sécurité des communes » (score 0–100, 100 = plus sûre)
 // ---------------------------------------------------------------------------
 // Rampe séquentielle bleue, du clair (moins sûre) au foncé (plus sûre).
+// Classe la plus claire ≥ 2:1 sur les tuiles OSM (#f2efe9), pour rester
+// distincte du fond de carte : rampe vérifiée avec le validateur dataviz
+// (--ordinal --surface "#f2efe9"). L'histogramme de la zone en reprend
+// l'étape médiane (≥ 3:1 sur le panneau #14171f).
 const SECURITY_CLASSES = [
   { min: 80, color: "#0d366b", label: "80–100 (plus sûre)" },
-  { min: 60, color: "#1c5cab", label: "60–79" },
-  { min: 40, color: "#3987e5", label: "40–59" },
-  { min: 20, color: "#86b6ef", label: "20–39" },
-  { min: 0, color: "#cde2fb", label: "0–19 (moins sûre)" },
+  { min: 60, color: "#1757ac", label: "60–79" },
+  { min: 40, color: "#2370cd", label: "40–59" },
+  { min: 20, color: "#4a8fe0", label: "20–39" },
+  { min: 0, color: "#78aced", label: "0–19 (moins sûre)" },
 ];
 const NO_DATA_COLOR = "#9a9a96";
 
@@ -1066,9 +1073,13 @@ function communeTooltip(p) {
 // ---------------------------------------------------------------------------
 // Isochrones et zone de recherche
 // ---------------------------------------------------------------------------
-// Zone retenue : non remplie (choroplèthes lisibles), contour orange épais.
-const ZONE_STROKE = "#f97316";
-const ZONE_WEIGHT = 4;
+// Zone retenue : non remplie (choroplèthes lisibles), contour noir pointillé
+// posé sur un liseré blanc qui le garde visible sur les classes foncées des
+// choroplèthes.
+const ZONE_STYLES = [
+  { color: "#ffffff", weight: 5, opacity: 0.7, fill: false },
+  { color: "#111111", weight: 2.5, opacity: 1, dashArray: "8 6", lineCap: "butt", fill: false },
+];
 
 function securityLegend() {
   const legend = L.control({ position: "bottomright" });
@@ -1112,7 +1123,11 @@ function renderCommunes(communes) {
 // par quartier IRIS.
 const IRIS_MIN_ZOOM = 12;
 // Rampe séquentielle orange/brun, du moins cher (clair) au plus cher (foncé).
-const IMMO_COLORS = ["#fdeed4", "#f9c98b", "#ee9a4a", "#c8651b", "#7f3b08"];
+// Classe la plus claire ≥ 2:1 sur les tuiles OSM (#f2efe9), pour rester
+// distincte du fond de carte : rampe vérifiée avec le validateur dataviz
+// (--ordinal --surface "#f2efe9"). L'histogramme de la zone en reprend
+// l'étape médiane (≥ 3:1 sur le panneau #14171f).
+const IMMO_COLORS = ["#e99649", "#d87524", "#bd5d18", "#984610", "#683006"];
 let immoData = null; // data.immobilier de la dernière recherche
 let immoCommunes = []; // data.communes (noms et contours des communes)
 let immoLevel = null; // "commune" | "iris" (niveau actuellement affiché)
@@ -1355,7 +1370,11 @@ function renderImmobilier(immo, communes) {
 // Choroplèthe « fiscalité » (taux global TFB + taux plein TEOM, dernier exercice)
 // ---------------------------------------------------------------------------
 // Rampe séquentielle violette, du moins taxé (clair) au plus taxé (foncé).
-const FISC_COLORS = ["#efedf5", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"];
+// Classe la plus claire ≥ 2:1 sur les tuiles OSM (#f2efe9), pour rester
+// distincte du fond de carte : rampe vérifiée avec le validateur dataviz
+// (--ordinal --surface "#f2efe9"). L'histogramme de la zone en reprend
+// l'étape médiane (≥ 3:1 sur le panneau #14171f).
+const FISC_COLORS = ["#a9a3d4", "#8a82c2", "#6f63ae", "#56459a", "#3f1d78"];
 let fiscScale = null; // échelle courante (voir computeQuantileScale)
 
 const fmtNumTaux = (n) => n.toLocaleString("fr-FR", { maximumFractionDigits: 2 });
@@ -1450,11 +1469,11 @@ function renderFiscalite(communes) {
 }
 
 // ---------------------------------------------------------------------------
-// Quartier sélectionné : un clic sur une choroplèthe sélectionne le quartier
-// IRIS cliqué ; sa fiche (prix au m², sécurité, fiscalité, distance à vol
-// d'oiseau à l'établissement le plus proche de chaque nature recherchée et
-// itinéraires) s'affiche dans la zone « Quartier sélectionné » du panneau de
-// gauche, vide sans sélection.
+// Quartier sélectionné : un clic sur une choroplèthe, ou le dépliage de son
+// nœud dans l'arbre des quartiers, sélectionne un quartier IRIS (un seul à la
+// fois) ; sa fiche (prix au m², sécurité, fiscalité, distance à vol d'oiseau à
+// l'établissement le plus proche de chaque nature recherchée et itinéraires)
+// s'affiche dans le nœud déplié.
 // ---------------------------------------------------------------------------
 let lastCriteres = []; // critères de la dernière recherche
 let lastFiltres = {}; // filtres de zone de la dernière recherche
@@ -1545,15 +1564,11 @@ function prochesSection(proches, itineraires = new Map()) {
   return placeSection(`Établissements les plus proches <span class="muted">(à vol d'oiseau)</span>`, body);
 }
 
-function placeCardHtml(lon, lat, quartier, proches, itineraires) {
+function placeCardHtml(quartier, proches, itineraires) {
   const communes = lastData.communes || [];
-  const commune = communes.find((c) => pointInGeometry(lon, lat, c.contour));
+  const commune = communes.find((c) => c.code_commune === quartier.code_commune);
   const immo = immoData || {};
-  let html =
-    `<div class="quartier-head"><div class="popup-title">${esc(quartier.nom)}` +
-    `<div class="muted">${commune ? esc(commune.nom) : "Hors des communes de la zone"}</div></div>` +
-    `<button type="button" class="quartier-clear" aria-label="Désélectionner le quartier" ` +
-    `title="Désélectionner">×</button></div>`;
+  let html = "";
 
   // Prix au m² : médiane de la commune et, si disponible, du quartier IRIS.
   const y0 = immo.date_min ? immo.date_min.slice(0, 4) : "";
@@ -1592,28 +1607,70 @@ function placeCardHtml(lon, lat, quartier, proches, itineraires) {
   return html;
 }
 
-// Désélectionne le quartier : zone vidée, contour et itinéraires effacés,
+// Nœud de l'arbre des quartiers d'un code IRIS (null s'il n'y est pas).
+function quartierNode(iris) {
+  return document.querySelector(`#quartier-tree .qt-node[data-iris="${CSS.escape(iris)}"]`);
+}
+
+function zoneQuartiers() {
+  return (immoData && immoData.quartiers) || [];
+}
+
+// Désélectionne le quartier : nœud replié, contour et itinéraires effacés,
 // réponses en attente ignorées.
 function clearQuartier() {
   placeSeq++;
   if (routeLayer) routeLayer.clearLayers();
-  $("#quartier-info").innerHTML = "";
+  if (openIris == null) return;
+  const node = quartierNode(openIris);
+  openIris = null;
+  if (node) {
+    node.classList.remove("open");
+    node.querySelector(".qt-head").setAttribute("aria-expanded", "false");
+    node.querySelector(".qt-body").innerHTML = "";
+  }
+  syncUrl();
 }
 
-// Sélectionne le quartier IRIS sous le point cliqué (aucun : désélection) ;
-// les distances aux établissements sont demandées au serveur (non facturé),
-// puis l'itinéraire du point du quartier vers chacun (mode de transport de
-// son critère) est tracé sur la carte tant que le quartier reste sélectionné.
+// Clic sur la carte : sélectionne le quartier IRIS sous le point (aucun :
+// désélection), déplie son nœud et le fait défiler à l'écran.
 function selectQuartier(latlng) {
   if (!lastData) return;
-  clearQuartier();
   const { lng: lon, lat } = latlng;
-  const quartier = ((immoData && immoData.quartiers) || []).find((q) => pointInGeometry(lon, lat, q.contour));
-  if (!quartier) return;
+  const quartier = zoneQuartiers().find((q) => pointInGeometry(lon, lat, q.contour));
+  if (!quartier) {
+    clearQuartier();
+    return;
+  }
+  $("#data-fold").open = true;
+  openQuartier(quartier);
+  const node = quartierNode(quartier.iris);
+  if (node) node.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
 
-  const box = $("#quartier-info");
-  box.innerHTML = placeCardHtml(lon, lat, quartier, undefined);
-  $("#quartier-fold").open = true;
+// Sélectionne un quartier : nœud déplié (fiche + établissements), contour en
+// pointillés ; les distances aux établissements sont demandées au serveur
+// (non facturé), puis l'itinéraire du point du quartier vers chacun (mode de
+// transport de son critère) est tracé sur la carte tant que le quartier reste
+// sélectionné.
+function openQuartier(quartier) {
+  clearQuartier();
+  const node = quartierNode(quartier.iris);
+  if (!node) return;
+  openIris = quartier.iris;
+  node.classList.add("open");
+  node.querySelector(".qt-head").setAttribute("aria-expanded", "true");
+  openReachable = reachableSources(quartier);
+  const n = openReachable.length;
+  const body = node.querySelector(".qt-body");
+  body.innerHTML =
+    `<div class="qt-card"></div>` +
+    `<details class="subfold qt-etabs"><summary>Établissements accessibles (${n})</summary>` +
+    `<ul class="etab-list"></ul></details>`;
+  const card = body.querySelector(".qt-card");
+  card.innerHTML = placeCardHtml(quartier, undefined);
+  renderQuartierEtabs();
+  syncUrl();
   L.geoJSON(quartier.contour, {
     interactive: false,
     style: { color: "#f8fafc", weight: 2.5, dashArray: "6 4", fill: false },
@@ -1631,18 +1688,13 @@ function selectQuartier(latlng) {
       const proches = fiche ? fiche.proches : null;
       const itineraires = new Map();
       const refresh = () => {
-        if (current()) box.innerHTML = placeCardHtml(lon, lat, quartier, proches, itineraires);
+        if (current()) card.innerHTML = placeCardHtml(quartier, proches, itineraires);
       };
       refresh();
       if (!fiche) return;
       drawQuartierRoutes(fiche, itineraires, current, refresh);
     });
 }
-
-// Bouton « × » de la zone : désélection (le contenu est régénéré, d'où la délégation).
-$("#quartier-info").addEventListener("click", (e) => {
-  if (e.target.closest(".quartier-clear")) clearQuartier();
-});
 
 // Itinéraire (mis en cache) de from à to ([lon, lat]) pour un profil.
 function fetchRoute(from, to, transp) {
@@ -1656,6 +1708,36 @@ function fetchRoute(from, to, transp) {
     routeCache.set(key, req);
   }
   return routeCache.get(key);
+}
+
+// Pastilles des établissements les plus proches du quartier (fiche
+// /proximite) : cherchés parmi tous les établissements, ils sont souvent hors
+// de la zone et n'ont alors aucun marqueur ; on en pose un au bout de leur
+// itinéraire (dans routeLayer, effacé avec la sélection). Un même
+// établissement le plus proche pour Maternelle et Élémentaire est une école
+// primaire : une seule pastille « P ».
+function addProcheMarkers(proches) {
+  const onMap = new Set(
+    [...((lastData && lastData.etablissements) || []), ...((lastData && lastData.sources) || [])].map((e) => e.UAI),
+  );
+  const byUai = new Map();
+  for (const p of proches) {
+    if (!p.uai || onMap.has(p.uai)) continue;
+    if (!byUai.has(p.uai)) byUai.set(p.uai, { p, natures: [] });
+    byUai.get(p.uai).natures.push(p.nature);
+  }
+  for (const { p, natures } of byUai.values()) {
+    const g = natureGroup(natures.length > 1 ? "Primaire" : p.nature);
+    const html =
+      `<div class="popup-title">${esc(p.nom)}</div>` +
+      `<div>${[p.secteur, p.commune].filter(Boolean).map(esc).join(" · ")}</div>` +
+      (p.taux != null ? `<div>Taux de réussite : <strong>${fmtTaux(p.taux)}</strong></div>` : "") +
+      `<div class="popup-meta">Le plus proche du quartier pour : ${natures.map(natureLabel).join(", ")} ` +
+      `(hors des établissements de la zone).</div>`;
+    L.marker([p.lat, p.lon], { icon: etabIcon(g), title: `${p.nom} (${g.label})`, zIndexOffset: 1500 })
+      .bindPopup(html)
+      .addTo(routeLayer);
+  }
 }
 
 // Trace les itinéraires du point du quartier (fiche /proximite) vers chaque
@@ -1674,6 +1756,7 @@ function drawQuartierRoutes(fiche, itineraires, current, refresh) {
     fillOpacity: 1,
     interactive: false,
   }).addTo(routeLayer);
+  addProcheMarkers(proches);
   for (const p of proches) {
     const critere = lastCriteres.find((c) => c.nature === p.nature);
     const transp = critere ? critere.transp : "driving-car";
@@ -1686,10 +1769,22 @@ function drawQuartierRoutes(fiche, itineraires, current, refresh) {
         itineraires.set(p.nature, it);
         if (it && it.geometry && it.geometry.length) {
           // Non interactif : un clic sur le tracé ne doit pas changer la sélection.
-          L.polyline(it.geometry.map(([x, y]) => [y, x]), {
+          const line = it.geometry.map(([x, y]) => [y, x]);
+          L.polyline(line, {
             color: natureGroup(p.nature).color,
             weight: 4,
             opacity: 0.85,
+            interactive: false,
+          }).addTo(routeLayer);
+          // Texture animée (points blancs, voir .route-flow) : elle avance du
+          // quartier, origine du tracé, vers l'établissement.
+          L.polyline(line, {
+            color: "#ffffff",
+            weight: 2,
+            opacity: 0.95,
+            dashArray: "1 11",
+            lineCap: "round",
+            className: "route-flow",
             interactive: false,
           }).addTo(routeLayer);
         }
@@ -1884,11 +1979,11 @@ $("#search-form").addEventListener("submit", async (e) => {
     lastFiltres = filtres;
     immoFiltre = { min: filtres.prix_m2_min, max: filtres.prix_m2_max };
     render(data);
-    // Recherche aboutie : place à la carte et au quartier sélectionné. Zone
+    // Recherche aboutie : place à la carte et aux données de la zone. Zone
     // vide : les paramètres restent dépliés pour lire l'explication.
     if (data.zone) {
       $("#search-fold").open = false;
-      $("#quartier-fold").open = true;
+      $("#data-fold").open = true;
     }
   } catch (ex) {
     status.textContent = ex.message;
@@ -2148,26 +2243,26 @@ function render(data) {
 
   let zoneBounds = null;
   if (data.zone) {
-    const zone = L.geoJSON(data.zone, {
-      style: { color: ZONE_STROKE, weight: ZONE_WEIGHT, opacity: 1, fill: false },
-      interactive: false,
-    }).addTo(isoLayer);
-    zoneBounds = zone.getBounds();
+    for (const style of ZONE_STYLES) {
+      const zone = L.geoJSON(data.zone, { style, interactive: false }).addTo(isoLayer);
+      zoneBounds = zone.getBounds();
+    }
   }
 
   // Établissements sources : pastille à la couleur de la nature du critère.
+  sourceMarkerByUai = new Map();
   for (const src of sources) {
     const coords = src.position && src.position.coordinates;
     if (!coords) continue;
-    L.circleMarker([coords[1], coords[0]], {
-      radius: 6,
-      color: "#fff",
-      weight: 2,
-      fillColor: natureGroup(sourceNature(src)).color,
-      fillOpacity: 1,
+    const g = natureGroup(sourceNature(src));
+    const marker = L.marker([coords[1], coords[0]], {
+      icon: etabIcon(g, true),
+      title: `Source (${g.label})`,
+      zIndexOffset: 2000, // au-dessus des établissements de la zone
     })
       .bindPopup(() => sourcePopupHtml(src))
       .addTo(isoLayer);
+    sourceMarkerByUai.set(src.UAI, marker);
   }
 
   lastData = data;
@@ -2209,6 +2304,21 @@ function sourcePopupHtml(src) {
     `${TRANSP_LABELS[src.transp] || esc(src.transp)}.</div>`;
 }
 
+// Pastille ronde d'un établissement, à la couleur de sa nature, portant son
+// initiale (la couleur seule ne suffit pas à distinguer les natures sur la
+// carte), anneau blanc. Source (son isochrone définit la zone) : un peu plus
+// grande.
+function etabIcon(g, source = false) {
+  const size = source ? 24 : 20;
+  return L.divIcon({
+    className: source ? "etab-pin source" : "etab-pin",
+    html: `<span style="background:${g.color};color:${g.ink || "#fff"}">${g.initial}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2],
+  });
+}
+
 // (Re)dessine les marqueurs des établissements de la zone ; renvoie leurs
 // positions.
 function renderMarkers() {
@@ -2223,7 +2333,10 @@ function renderMarkers() {
     if (!coords) continue;
     const [lon, lat] = coords;
     bounds.push([lat, lon]);
-    const marker = L.marker([lat, lon]).bindPopup(popupHtml(etab)).addTo(markerLayer);
+    const g = natureGroup(etab.nature);
+    const marker = L.marker([lat, lon], { icon: etabIcon(g), title: `${etab.nom} (${g.label})` })
+      .bindPopup(popupHtml(etab))
+      .addTo(markerLayer);
     markerByEtab.set(etab, marker);
   }
   renderInsights(etabs);
@@ -2327,9 +2440,11 @@ function logementPopupHtml(p) {
 }
 
 // ---------------------------------------------------------------------------
-// Panneau de droite : onglets, répartition par nature, taux, liste
+// Données de la zone : statistiques générales (répartition par nature, taux,
+// histogrammes) et arbre des quartiers
 // ---------------------------------------------------------------------------
 let markerByEtab = new Map();
+let sourceMarkerByUai = new Map(); // UAI → marqueur d'un établissement source
 let insightEtabs = []; // établissements de la zone affichés
 let rateSel = new Set(); // tranches (0–9) sélectionnées dans l'histogramme des taux
 
@@ -2351,31 +2466,104 @@ function showMapOnNarrow() {
   if (narrowQuery.matches) $(".map-wrap").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-document.querySelectorAll(".tabs .tab").forEach((tab) =>
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tabs .tab").forEach((t) => {
-      const on = t === tab;
-      t.classList.toggle("active", on);
-      t.setAttribute("aria-selected", on);
-    });
-    document.querySelectorAll(".tab-pane").forEach((pane) => {
-      pane.hidden = pane.dataset.pane !== tab.dataset.tab;
-    });
-    syncUrl();
-  }),
-);
+// ---------------------------------------------------------------------------
+// Largeur du volet de gauche, réglable à la souris (poignée entre le volet et
+// la carte) ou au clavier ; préférence d'affichage conservée dans le
+// navigateur (hors de l'URL partagée).
+// ---------------------------------------------------------------------------
+const PANEL_W_KEY = "douceville_panel_w";
+const PANEL_W_DEFAULT = 340;
+const PANEL_W_MIN = 260;
+
+// Applique une largeur (bornée à [PANEL_W_MIN, 60 % de la fenêtre]) ; renvoie
+// la largeur retenue.
+function setPanelWidth(w) {
+  const max = Math.max(PANEL_W_MIN, Math.round(window.innerWidth * 0.6));
+  const width = Math.round(Math.min(max, Math.max(PANEL_W_MIN, w)));
+  $(".layout").style.setProperty("--panel-w", `${width}px`);
+  $(".panel-resizer").setAttribute("aria-valuenow", width);
+  return width;
+}
+
+function savePanelWidth(w) {
+  try {
+    localStorage.setItem(PANEL_W_KEY, String(w));
+  } catch {
+    /* stockage indisponible : préférence non conservée */
+  }
+}
+
+let mapResizeFrame = 0;
+// Redimensionne la carte au plus une fois par image.
+function refreshMapSize() {
+  if (mapResizeFrame) return;
+  mapResizeFrame = requestAnimationFrame(() => {
+    mapResizeFrame = 0;
+    if (map) map.invalidateSize();
+  });
+}
+
+{
+  const resizer = $(".panel-resizer");
+  resizer.setAttribute("aria-valuemin", PANEL_W_MIN);
+  let saved = NaN;
+  try {
+    saved = parseInt(localStorage.getItem(PANEL_W_KEY), 10);
+  } catch {
+    /* stockage indisponible */
+  }
+  setPanelWidth(Number.isFinite(saved) ? saved : PANEL_W_DEFAULT);
+
+  let drag = null; // { x, w } au début du glissement
+  resizer.addEventListener("pointerdown", (ev) => {
+    if (ev.button !== 0) return;
+    drag = { x: ev.clientX, w: $(".panel").getBoundingClientRect().width };
+    resizer.setPointerCapture(ev.pointerId);
+    document.body.classList.add("resizing");
+    ev.preventDefault();
+  });
+  resizer.addEventListener("pointermove", (ev) => {
+    if (!drag) return;
+    setPanelWidth(drag.w + ev.clientX - drag.x);
+    refreshMapSize();
+  });
+  const end = () => {
+    if (!drag) return;
+    drag = null;
+    document.body.classList.remove("resizing");
+    savePanelWidth($(".panel").getBoundingClientRect().width);
+    refreshMapSize();
+  };
+  resizer.addEventListener("pointerup", end);
+  resizer.addEventListener("pointercancel", end);
+  resizer.addEventListener("dblclick", () => {
+    savePanelWidth(setPanelWidth(PANEL_W_DEFAULT));
+    refreshMapSize();
+  });
+  resizer.addEventListener("keydown", (ev) => {
+    const step = ev.key === "ArrowLeft" ? -20 : ev.key === "ArrowRight" ? 20 : 0;
+    if (!step) return;
+    ev.preventDefault();
+    savePanelWidth(setPanelWidth($(".panel").getBoundingClientRect().width + step));
+    refreshMapSize();
+  });
+}
 
 // Couleur attachée à la nature (jamais au rang) : ordre catégoriel fixe.
+// Palette vérifiée avec le validateur dataviz : paires adjacentes sur le
+// panneau (#14171f) et toutes les paires sur les tuiles OSM (#f2efe9), où
+// l'initiale des marqueurs source sert d'encodage secondaire (ink : couleur
+// de l'initiale quand le blanc manque de contraste).
 const NATURE_GROUPS = [
-  { key: "matern", label: "Maternelle", color: "#3987e5" },
-  { key: "elem", label: "Élémentaire", color: "#d95926" },
+  { key: "matern", label: "Maternelle", color: "#3987e5", initial: "M" },
+  { key: "elem", label: "Élémentaire", color: "#d4492f", initial: "É" },
   // Écoles primaires (nature « Primaire ») : retenues par les critères
   // maternelle et élémentaire (voir critereMatch dans internal/store/search.go).
-  { key: "primaire", label: "Primaire", color: "#8e44ad" },
-  { key: "coll", label: "Collège", color: "#199e70" },
-  { key: "lycee", label: "Lycée", color: "#c98500" },
+  { key: "primaire", label: "Primaire", color: "#8e44ad", initial: "P" },
+  { key: "coll", label: "Collège", color: "#199e70", initial: "C" },
+  { key: "lycee", label: "Lycée", color: "#c49600", initial: "L", ink: "#0b0b0b" },
 ];
-const OTHER_GROUP = { key: "", label: "Autres", color: "#6b7280" };
+const OTHER_GROUP = { key: "", label: "Autres", color: "#6b7280", initial: "A" };
 
 function natureGroup(nature) {
   const n = String(nature || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -2384,10 +2572,94 @@ function natureGroup(nature) {
 
 const EMPTY_HINT = `<p class="empty">Lancez une recherche pour afficher les statistiques.</p>`;
 
+// Infobulle partagée des graphiques : tout élément portant data-tip l'affiche
+// au survol comme au focus clavier (elle complète l'aria-label et la vue
+// tableau, sans s'y substituer).
+const chartTip = document.createElement("div");
+chartTip.className = "chart-tip";
+chartTip.setAttribute("role", "tooltip");
+chartTip.hidden = true;
+document.body.appendChild(chartTip);
+
+function showChartTip(target) {
+  chartTip.textContent = target.dataset.tip;
+  chartTip.hidden = false;
+  const r = target.getBoundingClientRect();
+  const w = chartTip.offsetWidth;
+  const h = chartTip.offsetHeight;
+  const x = Math.min(Math.max(4, r.left + r.width / 2 - w / 2), window.innerWidth - w - 4);
+  const y = r.top - h - 6 < 4 ? r.bottom + 6 : r.top - h - 6;
+  chartTip.style.left = `${x}px`;
+  chartTip.style.top = `${y}px`;
+}
+
+function hideChartTip() {
+  chartTip.hidden = true;
+}
+
+for (const type of ["pointerover", "focusin"]) {
+  document.addEventListener(type, (ev) => {
+    const t = ev.target.closest && ev.target.closest("[data-tip]");
+    if (t) showChartTip(t);
+  });
+}
+for (const type of ["pointerout", "focusout"]) {
+  document.addEventListener(type, (ev) => {
+    if (ev.target.closest && ev.target.closest("[data-tip]")) hideChartTip();
+  });
+}
+window.addEventListener("scroll", hideChartTip, true);
+
+// Vue tableau d'un graphique (équivalent accessible) : head = [colonne
+// libellé, colonne valeur], rows = [[libellé, valeur], …].
+function chartTable(head, rows) {
+  const tr = (cells, tag) => `<tr>${cells.map((c) => `<${tag}>${c}</${tag}>`).join("")}</tr>`;
+  return (
+    `<details class="chart-table"><summary>Tableau</summary><table>` +
+    `<thead>${tr(head, "th")}</thead><tbody>${rows.map((r) => tr(r, "td")).join("")}</tbody>` +
+    `</table></details>`
+  );
+}
+
+// Colonnes d'un histogramme. bins : effectifs ; label(i, n) : libellé de la
+// tranche i ; slot : "button" (cliquable) ou "span" (statique) ; color : couleur
+// des barres (défaut : accent) ; dimmed(i) : tranche atténuée.
+function histogramBars(bins, { label, slot, color, dimmed }) {
+  const max = Math.max(...bins);
+  return bins
+    .map((n, i) => {
+      const h = n ? Math.max(2, (100 * n) / max) : 0;
+      const tip = esc(label(i, n));
+      const bg = color ? `;background:${color}` : "";
+      const attrs = `data-bin="${i}" data-tip="${tip}" aria-label="${tip}"`;
+      const bar = `<span class="bar" style="height:${h}%${bg}"></span>`;
+      return slot === "button"
+        ? `<button type="button" class="bar-slot" ${attrs} aria-pressed="false">${bar}</button>`
+        : `<span class="bar-slot static${dimmed && dimmed(i) ? " dimmed" : ""}" tabindex="0" role="img" ${attrs}>${bar}</span>`;
+    })
+    .join("");
+}
+
+// Axe des abscisses d'un histogramme de n tranches : ticks = [[indice de
+// borne (0…n), libellé], …], placés en proportion de la largeur.
+function histogramAxis(n, ticks) {
+  return (
+    `<div class="bars-axis">` +
+    ticks
+      .map(([i, t]) => {
+        const edge = i === 0 ? " first" : i === n ? " last" : "";
+        return `<span class="tick${edge}" style="left:${(100 * i) / n}%">${t}</span>`;
+      })
+      .join("") +
+    `</div>`
+  );
+}
+
 function renderInsights(etabs) {
   renderNatureChart(etabs);
   renderRateChart(etabs);
   insightEtabs = etabs;
+  renderQuartierTree();
   // Nouvel ensemble d'établissements : sélection effacée, sauf celle lue
   // dans l'URL, appliquée aux premiers résultats.
   rateSel = new Set();
@@ -2411,14 +2683,7 @@ function applyRateSelection() {
   const clear = $("#rate-chart .bars-clear");
   if (clear) clear.hidden = !active;
 
-  const rated = insightEtabs
-    .filter(inRateSel)
-    .map((e) => ({ e, r: successRate(e) }))
-    .filter((x) => x.r != null)
-    .sort((a, b) => b.r - a.r)
-    .slice(0, 5);
-  renderEtabList($("#etab-top"), rated.map((x) => x.e), true);
-  renderEtabList($("#etab-list"), insightEtabs, false, active);
+  renderQuartierEtabs();
 
   for (const [e, m] of markerByEtab) {
     const on = inRateSel(e);
@@ -2449,6 +2714,8 @@ $("#rate-chart").addEventListener("click", (ev) => {
   applyRateSelection();
 });
 
+// Répartition par nature : total en chiffre vedette, barre segmentée fine
+// (part-à-tout lu d'un coup d'œil) et légende qui porte noms, effectifs et parts.
 function renderNatureChart(etabs) {
   const el = $("#nature-chart");
   if (!etabs.length) {
@@ -2462,20 +2729,15 @@ function renderNatureChart(etabs) {
   }
   const groups = [...NATURE_GROUPS, OTHER_GROUP].filter((g) => counts.has(g));
   const total = etabs.length;
-  const R = 52;
-  const C = 2 * Math.PI * R;
-  const gap = groups.length > 1 ? 3 : 0; // espace (surface) entre segments
-  let offset = 0;
-  const arcs = groups
+  const pct = (n) => `${Math.round((100 * n) / total)} %`;
+  const segs = groups
     .map((g) => {
       const n = counts.get(g);
-      const len = (n / total) * C;
-      const arc =
-        `<circle cx="64" cy="64" r="${R}" fill="none" stroke="${g.color}" stroke-width="12"` +
-        ` stroke-dasharray="${Math.max(0, len - gap)} ${C}" stroke-dashoffset="${-offset}"` +
-        ` transform="rotate(-90 64 64)"><title>${g.label} : ${n}</title></circle>`;
-      offset += len;
-      return arc;
+      const tip = `${g.label} : ${n} (${pct(n)})`;
+      return (
+        `<span class="seg" tabindex="0" role="img" data-tip="${tip}" aria-label="${tip}"` +
+        ` style="flex-grow:${n};background:${g.color}"></span>`
+      );
     })
     .join("");
   const legend = groups
@@ -2484,16 +2746,15 @@ function renderNatureChart(etabs) {
       return (
         `<li><span class="dot" style="background:${g.color}"></span>` +
         `<span class="lg-name">${g.label}</span>` +
-        `<span class="lg-val">${Math.round((100 * n) / total)} %</span></li>`
+        `<span class="lg-val">${n}</span><span class="lg-val lg-pct">${pct(n)}</span></li>`
       );
     })
     .join("");
   el.innerHTML =
-    `<div class="donut-wrap">` +
-    `<svg class="donut" viewBox="0 0 128 128" role="img" aria-label="Répartition des établissements par nature">` +
-    `${arcs}<text x="64" y="62" class="donut-num">${total}</text>` +
-    `<text x="64" y="80" class="donut-sub">établ.</text></svg>` +
-    `<ul class="chart-legend">${legend}</ul></div>`;
+    `<div class="stat"><span class="stat-num">${total.toLocaleString("fr-FR")}</span>` +
+    `<span class="stat-unit">établissement${total > 1 ? "s" : ""}</span></div>` +
+    `<div class="segbar">${segs}</div>` +
+    `<ul class="chart-legend">${legend}</ul>`;
 }
 
 function renderRateChart(etabs) {
@@ -2514,22 +2775,21 @@ function renderRateChart(etabs) {
     el.innerHTML = `<p class="empty">Aucun résultat d'examen pour ces établissements.</p>`;
     return;
   }
-  const bars = bins
-    .map((n, i) => {
-      const h = n ? Math.max(2, (100 * n) / max) : 0;
-      const label = `${i * 10}–${i * 10 + 10} % : ${n} établissement(s)`;
-      return (
-        `<button type="button" class="bar-slot" data-bin="${i}" title="${label}" aria-label="${label}" aria-pressed="false">` +
-        `<span class="bar" style="height:${h}%"></span></button>`
-      );
-    })
-    .join("");
+  const range = (i) => `${i * 10}–${i * 10 + 10} %`;
+  const bars = histogramBars(bins, {
+    slot: "button",
+    label: (i, n) => `${range(i)} : ${n} établissement(s)`,
+  });
+  const rows = bins.map((n, i) => [range(i), n]);
+  if (none) rows.push(["sans résultats", none]);
   el.innerHTML =
     `<div class="bars-head"><span>Établissements par tranche de taux</span>` +
     `<span><button type="button" class="bars-clear" hidden>Effacer la sélection</button> max ${max}</span></div>` +
     `<div class="bars">${bars}</div>` +
-    `<div class="bars-axis"><span>0 %</span><span>50 %</span><span>100 %</span></div>` +
-    (none ? `<p class="chart-note">${none} sans résultats d'examen</p>` : "");
+    // Unité sur la dernière graduation seulement : lisible dans un volet étroit.
+    histogramAxis(10, [0, 2, 4, 6, 8, 10].map((i) => [i, i === 10 ? "100 %" : String(i * 10)])) +
+    (none ? `<p class="chart-note">${none} sans résultats d'examen</p>` : "") +
+    chartTable(["Taux de réussite", "Établissements"], rows);
 }
 
 // ---------------------------------------------------------------------------
@@ -2542,10 +2802,11 @@ function niceStep(range, steps) {
   return steps.find((st) => range / st <= 10) || steps[steps.length - 1];
 }
 
-// values : valeurs (null : sans donnée) ; opts : {lo, hi} bornes fixes
-// (sinon tirées des valeurs), steps (pas candidats), fmt (libellé d'une
-// borne), unit (entités comptées), color, outside(a, b) (tranche [a, b[
-// hors filtre), filtre (libellé du filtre actif ou "").
+// values : valeurs (null : sans donnée) ; opts : {lo, hi, step} bornes fixes
+// (sinon tirées des valeurs), steps (pas candidats), tickEvery (graduation
+// toutes les k tranches ; défaut : début, milieu, fin), fmt (libellé d'une
+// borne), unit (entités comptées), color, outside(a, b) (tranche [a, b[ hors
+// filtre), filtre (libellé du filtre actif ou "").
 function renderHistogram(el, values, opts) {
   if (!lastData) {
     el.innerHTML = EMPTY_HINT;
@@ -2570,27 +2831,27 @@ function renderHistogram(el, values, opts) {
   const bins = new Array(n).fill(0);
   for (const v of known) bins[Math.min(n - 1, Math.max(0, Math.floor((v - lo) / step)))]++;
   const max = Math.max(...bins);
-  const bars = bins
-    .map((count, i) => {
-      const a = lo + i * step;
-      const b = a + step;
-      const h = count ? Math.max(2, (100 * count) / max) : 0;
-      const label = `${opts.fmt(a)} – ${opts.fmt(b)} : ${count} ${opts.unit}`;
-      const dim = opts.outside && opts.outside(a, b) ? " dimmed" : "";
-      return (
-        `<span class="bar-slot static${dim}" title="${label}" aria-label="${label}">` +
-        `<span class="bar" style="height:${h}%;background:${opts.color}"></span></span>`
-      );
-    })
-    .join("");
+  const range = (i) => `${opts.fmt(lo + i * step)} – ${opts.fmt(lo + (i + 1) * step)}`;
+  const bars = histogramBars(bins, {
+    slot: "span",
+    color: opts.color,
+    label: (i, c) => `${range(i)} : ${c} ${opts.unit}`,
+    dimmed: opts.outside ? (i) => opts.outside(lo + i * step, lo + (i + 1) * step) : null,
+  });
+  const idx = opts.tickEvery
+    ? Array.from({ length: Math.floor(n / opts.tickEvery) + 1 }, (_, k) => k * opts.tickEvery)
+    : [...new Set([0, Math.floor(n / 2), n])];
   const notes = [];
   if (opts.filtre) notes.push(`Filtre : ${opts.filtre} (tranches hors filtre atténuées)`);
   if (none) notes.push(`${none} ${opts.unit} sans donnée`);
+  const rows = bins.map((c, i) => [range(i), c]);
+  if (none) rows.push(["sans donnée", none]);
   el.innerHTML =
     `<div class="bars-head"><span>${known.length} ${opts.unit}</span><span>max ${max}</span></div>` +
-    `<div class="bars" role="img" aria-label="Histogramme : ${known.length} ${opts.unit}">${bars}</div>` +
-    `<div class="bars-axis"><span>${opts.fmt(lo)}</span><span>${opts.fmt(hi)}</span></div>` +
-    notes.map((t) => `<p class="chart-note">${t}</p>`).join("");
+    `<div class="bars" aria-label="Histogramme : ${known.length} ${opts.unit}">${bars}</div>` +
+    histogramAxis(n, idx.map((i) => [i, opts.fmt(lo + i * step)])) +
+    notes.map((t) => `<p class="chart-note">${t}</p>`).join("") +
+    chartTable(["Tranche", opts.unit[0].toUpperCase() + opts.unit.slice(1)], rows);
 }
 
 // Histogrammes de sécurité, fiscalité et prix de la dernière recherche.
@@ -2603,9 +2864,10 @@ function renderZoneCharts() {
     lo: 0,
     hi: 100,
     step: 10,
+    tickEvery: 2,
     fmt: (v) => String(v),
     unit: "commune(s)",
-    color: SECURITY_CLASSES[1].color,
+    color: SECURITY_CLASSES[2].color,
     outside: f.securite_min != null ? (a, b) => b <= f.securite_min : null,
     filtre: f.securite_min != null ? `score ≥ ${f.securite_min}` : "",
   });
@@ -2614,7 +2876,7 @@ function renderZoneCharts() {
     steps: [0.5, 1, 2, 5, 10],
     fmt: fmtTaux,
     unit: "commune(s)",
-    color: FISC_COLORS[3],
+    color: FISC_COLORS[2],
     outside: f.fiscalite_max != null ? (a) => a > f.fiscalite_max : null,
     filtre: f.fiscalite_max != null ? `≤ ${fmtTaux(f.fiscalite_max)}` : "",
   });
@@ -2627,7 +2889,7 @@ function renderZoneCharts() {
     steps: [100, 250, 500, 1000, 2000, 5000, 10000],
     fmt: fmtEur,
     unit: "quartier(s)",
-    color: IMMO_COLORS[3],
+    color: IMMO_COLORS[2],
     outside: prixFiltre ? (a, b) => (pmin != null && b <= pmin) || (pmax != null && a > pmax) : null,
     filtre: !prixFiltre ? ""
       : pmin != null && pmax != null ? `${fmtEur(pmin)} – ${fmtEur(pmax)} /m²`
@@ -2644,10 +2906,11 @@ function secteurClass(secteur) {
 }
 
 // highlight : marque les établissements retenus / écartés par la sélection
-// de l'histogramme des taux.
-function renderEtabList(ul, etabs, withRate, highlight = false) {
+// de l'histogramme des taux ; extra(e) : ligne de détail supplémentaire (HTML) ;
+// empty : message d'une liste vide.
+function renderEtabList(ul, etabs, { withRate = true, highlight = false, extra = null, empty = "Aucun établissement." } = {}) {
   if (!etabs.length) {
-    ul.innerHTML = `<li class="empty">${lastData ? "Aucun établissement." : "Aucune recherche."}</li>`;
+    ul.innerHTML = `<li class="empty">${empty}</li>`;
     return;
   }
   ul.innerHTML = "";
@@ -2660,13 +2923,15 @@ function renderEtabList(ul, etabs, withRate, highlight = false) {
     const sub = [e.nature, (e.filieres || []).join(", "), e.commune].filter(Boolean).join(" · ");
     li.innerHTML =
       `<div class="etab-main"><div class="etab-name">${esc(e.nom)}</div>` +
-      `<div class="etab-sub">${esc(sub)}</div></div>` +
+      `<div class="etab-sub">${esc(sub)}</div>` +
+      (extra ? `<div class="etab-sub etab-access">${extra(e)}</div>` : "") +
+      `</div>` +
       `<div class="etab-side">` +
       (withRate && rate != null ? `<span class="etab-rate">${rate.toFixed(0)} %</span>` : "") +
       (e.secteur ? `<span class="badge ${secteurClass(e.secteur)}">${esc(e.secteur)}</span>` : "") +
       `</div>`;
     const open = () => {
-      const m = markerByEtab.get(e);
+      const m = markerByEtab.get(e) || sourceMarkerByUai.get(e.UAI);
       if (!m) return;
       showMapOnNarrow();
       map.setView(m.getLatLng(), Math.max(map.getZoom(), 15));
@@ -2679,6 +2944,141 @@ function renderEtabList(ul, etabs, withRate, highlight = false) {
     ul.appendChild(li);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Arbre des quartiers : tous les quartiers IRIS de la zone, triés par commune
+// puis par nom ; déplier un nœud sélectionne le quartier (voir openQuartier).
+// ---------------------------------------------------------------------------
+// Établissements accessibles depuis le quartier déplié : [{ e, criteres:
+// [{ nature, dist, transp }] }] (voir reachableSources).
+let openReachable = [];
+
+// Emprise [minLon, minLat, maxLon, maxLat] d'une géométrie GeoJSON, ou d'un
+// tableau de positions [lon, lat] (préfiltre des tests de recouvrement).
+function geomBBox(geom) {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  const visit = (c) => {
+    if (typeof c[0] === "number") {
+      b[0] = Math.min(b[0], c[0]);
+      b[1] = Math.min(b[1], c[1]);
+      b[2] = Math.max(b[2], c[0]);
+      b[3] = Math.max(b[3], c[1]);
+    } else c.forEach(visit);
+  };
+  const coords = Array.isArray(geom) ? geom : geom && geom.coordinates;
+  if (coords) visit(coords);
+  return b;
+}
+
+// Indique si l'anneau ring ([[lon, lat], …]) recouvre une partie du contour
+// GeoJSON : un sommet de l'un dans l'autre (les recouvrements sans sommet
+// intérieur, rares à ces échelles, sont ignorés).
+function ringTouchesGeometry(ring, geom) {
+  const a = geomBBox(ring);
+  const b = geomBBox(geom);
+  if (a[0] > b[2] || b[0] > a[2] || a[1] > b[3] || b[1] > a[3]) return false;
+  let touches = false;
+  const visit = (c) => {
+    if (touches) return;
+    if (typeof c[0] === "number") touches = pointInRing(c[0], c[1], ring);
+    else c.forEach(visit);
+  };
+  visit(geom.coordinates);
+  return touches || ring.some(([lon, lat]) => pointInGeometry(lon, lat, geom));
+}
+
+// Établissements accessibles depuis un quartier : les sources dont l'isochrone
+// (temps et mode de transport de leur critère) recouvre le quartier, une
+// entrée par établissement (une école primaire peut l'être pour deux
+// critères), triées par nature puis par taux de réussite décroissant.
+function reachableSources(quartier) {
+  const byUai = new Map();
+  for (const src of (lastData && lastData.sources) || []) {
+    if (!src.isochrone || src.isochrone.length < 3 || !ringTouchesGeometry(src.isochrone, quartier.contour)) continue;
+    if (!byUai.has(src.UAI)) byUai.set(src.UAI, { e: src, criteres: [] });
+    byUai.get(src.UAI).criteres.push({ nature: sourceNature(src), dist: src.dist, transp: src.transp });
+  }
+  const rank = (x) => {
+    const i = NATURE_GROUPS.indexOf(natureGroup(x.criteres[0].nature));
+    return i < 0 ? NATURE_GROUPS.length : i;
+  };
+  return [...byUai.values()].sort(
+    (a, b) => rank(a) - rank(b) || (successRate(b.e) ?? -1) - (successRate(a.e) ?? -1),
+  );
+}
+
+function renderQuartierTree() {
+  const ul = $("#quartier-tree");
+  openIris = null; // nœuds régénérés : aucun déplié (sélection déjà effacée par render)
+  const quartiers = lastData ? zoneQuartiers() : [];
+  openReachable = [];
+  $("#quartier-count").textContent = quartiers.length ? `(${quartiers.length})` : "";
+  if (!quartiers.length) {
+    ul.innerHTML = `<li class="empty">${lastData ? "Aucun quartier dans la zone." : "Lancez une recherche pour afficher les quartiers."}</li>`;
+    return;
+  }
+  const communeNom = new Map(((lastData && lastData.communes) || []).map((c) => [c.code_commune, c.nom]));
+  const nomCommune = (q) => communeNom.get(q.code_commune) || "";
+  const sorted = [...quartiers].sort(
+    (a, b) => nomCommune(a).localeCompare(nomCommune(b), "fr") || a.nom.localeCompare(b.nom, "fr"),
+  );
+  ul.innerHTML =
+    sorted
+      .map((q) => {
+        const prix = q.prix ? `<span class="qt-prix">${q.prix.prix_m2.toLocaleString("fr-FR")} €/m²</span>` : "";
+        return (
+          `<li class="qt-node" data-iris="${esc(q.iris)}">` +
+          `<button type="button" class="qt-head" aria-expanded="false">` +
+          `<span class="qt-name">${esc(q.nom)}<span class="qt-commune">${esc(nomCommune(q))}</span></span>` +
+          `<span class="qt-meta">${prix}</span></button>` +
+          `<div class="qt-body"></div></li>`
+        );
+      })
+      .join("");
+
+  // Quartier lu dans l'URL : déplié avec les premiers résultats.
+  if (pendingQuartier) {
+    const q = quartiers.find((x) => x.iris === pendingQuartier);
+    pendingQuartier = null;
+    if (q) openQuartier(q);
+  }
+}
+
+// (Re)rend la liste des établissements accessibles depuis le quartier déplié
+// (mise en avant de la sélection de l'histogramme des taux).
+function renderQuartierEtabs() {
+  if (openIris == null) return;
+  const node = quartierNode(openIris);
+  const ul = node && node.querySelector(".qt-etabs .etab-list");
+  if (!ul) return;
+  const access = new Map(openReachable.map((x) => [x.e, x.criteres]));
+  renderEtabList(ul, openReachable.map((x) => x.e), {
+    highlight: rateSel.size > 0,
+    empty: "Aucun établissement source accessible depuis ce quartier.",
+    extra: (e) =>
+      "Accessible en " +
+      access.get(e)
+        .map((c) => `${Math.round(c.dist / 60)} min ${TRANSP_LABELS[c.transp] || esc(c.transp)} (${natureLabel(c.nature)})`)
+        .join(", "),
+  });
+}
+
+// En-tête d'un nœud : déplie (sélectionne et centre la carte sur le quartier)
+// ou replie (désélectionne).
+$("#quartier-tree").addEventListener("click", (ev) => {
+  const head = ev.target.closest(".qt-head");
+  if (!head) return;
+  const iris = head.parentElement.dataset.iris;
+  if (iris === openIris) {
+    clearQuartier();
+    return;
+  }
+  const q = zoneQuartiers().find((x) => x.iris === iris);
+  if (!q) return;
+  openQuartier(q);
+  const bounds = L.geoJSON(q.contour).getBounds();
+  if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+});
 
 renderInsights([]);
 renderZoneCharts();
