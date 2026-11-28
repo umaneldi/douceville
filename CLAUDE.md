@@ -166,7 +166,7 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   version de Valhalla (`VALHALLA_IMAGE`, dont le script lit l'étiquette, ou
   `VALHALLA_VERSION`). Le script n'utilise pas Docker (outils natifs ou
   `uvx` : `pyvalhalla`, `awscli`), lit sa configuration dans `.env`
-  (`VALHALLA_S3_URI`, `VALHALLA_S3_ENDPOINT`, `AWS_*`) et doit rester
+  (`VALHALLA_S3_URI`, `VALHALLA_S3_ENDPOINT`, `VALHALLA_S3_ACL`, `AWS_*`) et doit rester
   compatible bash 3.2 (macOS).
 - **Secrets** : ne jamais committer `.env` ni de clé (Mollie, ORS, OIDC…) ;
   `sample.env` ne contient que des valeurs d'exemple.

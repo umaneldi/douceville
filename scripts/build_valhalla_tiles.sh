@@ -30,8 +30,12 @@
 #                         fallback AWS_ENDPOINT_URL.
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
 #                         Credentials of the S3 storage (or AWS_PROFILE / ~/.aws).
+#   VALHALLA_S3_ACL       Canned ACL of the uploaded tiles (default public-read;
+#                         empty: none, e.g. for a storage without ACL support
+#                         whose bucket is made public otherwise).
 #   VALHALLA_TILE_URL     Public URL of the tiles (.../{tilePath}), as used by the
-#                         service: checked after publication if set.
+#                         service: anonymous reads are checked there after
+#                         publication (default: URLs derived from the endpoint).
 #   VALHALLA_VERSION      Valhalla version (default: tag of VALHALLA_IMAGE, i.e.
 #                         3.9.3). Use the SAME version as the service: the tile
 #                         format changes between Valhalla versions.
@@ -51,16 +55,24 @@
 #     then immediately synchronised to VALHALLA_S3_URI (aws s3 sync --delete).
 #   - The tiles are a directory of .gph files (no .tar: a tar cannot be loaded
 #     lazily over HTTP).
-#   - The bucket (or prefix) must be PUBLICLY READABLE over HTTP, or served by a
-#     proxy: Valhalla does not sign S3 requests (it only supports HTTP basic
-#     auth, see VALHALLA_TILE_URL_USER_PW).
+#   - The tiles must be PUBLICLY READABLE over HTTP, or served by a proxy:
+#     Valhalla does not sign S3 requests (it only supports HTTP basic auth, see
+#     VALHALLA_TILE_URL_USER_PW). A public-read bucket ACL only allows listing:
+#     each object needs its own ACL, hence VALHALLA_S3_ACL. aws s3 sync only
+#     uploads changed tiles: unchanged ones keep their previous ACL.
+#   - Some storages (e.g. OVHcloud) reject anonymous path-style URLs
+#     (endpoint/bucket/...) with HTTP 400: use the virtual-hosted form
+#     (https://bucket.endpoint-host/...) in VALHALLA_TILE_URL.
 #   - Publication is checked: bucket access before the upload, exit status of
 #     the sync, then the number of .gph objects listed in VALHALLA_S3_URI must
-#     equal the number of local tiles; any failure stops the script (exit 1).
+#     equal the number of local tiles, and a few tiles must be readable
+#     without credentials, as the service reads them; any failure stops the
+#     script (exit 1).
 #   - Recent AWS CLIs send integrity checksums that many S3-compatible storages
 #     reject or mishandle: AWS_REQUEST_CHECKSUM_CALCULATION and
 #     AWS_RESPONSE_CHECKSUM_VALIDATION default to when_required (overridable).
-#   - After an update, empty the tile cache of the service (./.valhalla/tiles)
+#   - After an update, or a change of VALHALLA_TILE_URL (the service then
+#     aborts with "Tile URL changed"), empty the tile cache of the service (./.valhalla/tiles)
 #     and restart it, otherwise it keeps serving the previously cached tiles.
 #   - The tiles are derived from OpenStreetMap data (ODbL): keep the
 #     attribution "© OpenStreetMap contributors".
@@ -120,6 +132,9 @@ s3_uri=${VALHALLA_S3_URI:-}
 s3_uri=${s3_uri%/}
 endpoint=${VALHALLA_S3_ENDPOINT:-${AWS_ENDPOINT_URL:-}}
 tile_url=${VALHALLA_TILE_URL:-}
+tile_auth=${VALHALLA_TILE_URL_USER_PW:-}
+# Unset: public-read; set but empty: no ACL sent.
+acl=${VALHALLA_S3_ACL-public-read}
 image=${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla:3.9.3}
 version=${VALHALLA_VERSION:-${image##*:}}
 
@@ -131,6 +146,8 @@ esac
 [ -n "$endpoint" ] || die "VALHALLA_S3_ENDPOINT (or AWS_ENDPOINT_URL) is not set in $env_file"
 bucket=${s3_uri#s3://}
 bucket=${bucket%%/*}
+prefix=${s3_uri#s3://"$bucket"}
+prefix=${prefix#/}
 # Checksums of recent AWS CLIs (CRC32, aws-chunked) break many S3-compatible
 # storages: only send them when the API requires it.
 export AWS_REQUEST_CHECKSUM_CALCULATION=${AWS_REQUEST_CHECKSUM_CALCULATION:-when_required}
@@ -247,11 +264,13 @@ fi
 
 # 3b. Upload. Exit status of aws s3 sync: 1 = some transfers failed,
 #     2 = some files skipped or invalid parameters.
-echo "+ ${aws_cmd[*]} s3 sync $workdir/tiles $s3_uri --endpoint-url $endpoint --delete --only-show-errors"
+acl_opt=()
+[ -z "$acl" ] || acl_opt=(--acl "$acl")
+echo "+ ${aws_cmd[*]} s3 sync $workdir/tiles $s3_uri --endpoint-url $endpoint --delete --only-show-errors${acl:+ --acl $acl}"
 if ! $dry_run; then
   rc=0
   "${aws_cmd[@]}" s3 sync "$workdir/tiles" "$s3_uri" \
-    --endpoint-url "$endpoint" --delete --only-show-errors || rc=$?
+    --endpoint-url "$endpoint" --delete --only-show-errors ${acl_opt[@]+"${acl_opt[@]}"} || rc=$?
   case $rc in
     0) ;;
     1) die "upload to $s3_uri failed for one or more tiles (aws s3 sync exit 1, see the messages above)" ;;
@@ -275,21 +294,70 @@ if ! $dry_run; then
   echo "= $remote tiles published in $s3_uri"
 fi
 
-# 4. Check that a tile is publicly readable, as the service will read it.
-if [ -z "$tile_url" ]; then
-  echo
-  echo "Tiles published. Configure the Valhalla service in .env with, e.g.:"
-  echo "  VALHALLA_TILE_URL=${endpoint%/}/${s3_uri#s3://}/{tilePath}"
-elif ! $dry_run; then
-  # -quit rather than `| head -n 1`: with pipefail, find killed by SIGPIPE
-  # would end the script silently.
-  sample=$(cd "$workdir/tiles" && find . -name '*.gph' -print -quit)
-  sample=${sample#./}
-  url=$(printf '%s' "$tile_url" | sed "s|{tilePath}|$sample|")
-  if curl -fsI -o /dev/null "$url"; then
-    echo "= tile readable at $url"
+# 4. Anonymous read of a few tiles (first, middle, last), as the service reads
+#    them (GET, no S3 signature): a private object or a URL form rejected by
+#    the storage would otherwise only show up as "No suitable edges near
+#    location" errors of the service.
+tile_status() { # URL -> HTTP status (000: no answer)
+  local auth=()
+  [ -z "$tile_auth" ] || auth=(-u "$tile_auth")
+  curl -s -m 30 -r 0-0 -o /dev/null -w '%{http_code}' ${auth[@]+"${auth[@]}"} "$1" || true
+}
+if ! $dry_run; then
+  tiles=$(cd "$workdir/tiles" && find . -name '*.gph' | sed 's|^\./||' | LC_ALL=C sort)
+  n=$(printf '%s\n' "$tiles" | wc -l | tr -d ' ')
+  samples=$(printf '%s\n' "$tiles" | sed -n "1p;$(( (n + 1) / 2 ))p;${n}p" | LC_ALL=C sort -u)
+
+  # Candidate URLs: VALHALLA_TILE_URL, else virtual-hosted then path-style.
+  if [ -n "$tile_url" ]; then
+    candidates=$tile_url
   else
-    warn "tile not readable at $url: the bucket must be public (or VALHALLA_TILE_URL is wrong)"
+    scheme=${endpoint%%://*}
+    host=${endpoint#*://}
+    host=${host%%/*}
+    candidates="$scheme://$bucket.$host/${prefix:+$prefix/}{tilePath}
+${endpoint%/}/$bucket/${prefix:+$prefix/}{tilePath}"
+  fi
+
+  readable=""
+  report=""
+  strong=""
+  weak=""
+  for candidate in $candidates; do
+    ok=true
+    for t in $samples; do
+      url=$(printf '%s' "$candidate" | sed "s|{tilePath}|$t|")
+      code=$(tile_status "$url")
+      report="$report
+  $code $url"
+      case $code in
+        200|206) continue ;;
+        # 400 / no answer: mostly a URL form of the other candidate.
+        400|000) [ -n "$weak" ] || weak=$code ;;
+        *) [ -n "$strong" ] || strong=$code ;;
+      esac
+      ok=false
+      break
+    done
+    if $ok; then readable=$candidate; break; fi
+  done
+
+  if [ -z "$readable" ]; then
+    echo "error: tiles published but NOT readable without credentials, the Valhalla service will not be able to route:$report" >&2
+    case ${strong:-$weak} in
+      400) echo "  HTTP 400: the storage rejects this URL form; use the virtual-hosted form https://$bucket.<endpoint host>/... in VALHALLA_TILE_URL" >&2 ;;
+      401|403) echo "  HTTP $last: the tiles are private. Make the objects public (a public bucket ACL alone only allows listing): set VALHALLA_S3_ACL=public-read and, for tiles already uploaded,
+    ${aws_cmd[*]} s3 cp $s3_uri $s3_uri --recursive --acl public-read --metadata-directive REPLACE --endpoint-url $endpoint" >&2 ;;
+      404) echo "  HTTP 404: no tile at this URL; check that VALHALLA_TILE_URL points to $s3_uri and ends with /{tilePath}" >&2 ;;
+      000) echo "  no HTTP answer: check the host of VALHALLA_TILE_URL (network, DNS, TLS)" >&2 ;;
+    esac
+    exit 1
+  fi
+  echo "= tiles readable without credentials at $readable"
+  if [ -z "$tile_url" ]; then
+    echo
+    echo "Tiles published. Configure the Valhalla service in .env with:"
+    echo "  VALHALLA_TILE_URL=$readable"
   fi
 fi
 echo "Then empty ./.valhalla/tiles and restart the service: docker compose --profile valhalla up -d --force-recreate valhalla"

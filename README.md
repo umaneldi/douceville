@@ -698,23 +698,36 @@ France, quelques Go de disque pour les seules régions interrogées).
    construit les tuiles dans `--workdir` (≈ 8–16 Go de RAM, 25–30 Go de disque,
    1 à 3 h pour la France ; `--region URL` pour un petit extrait de test ;
    Valhalla n'écrit que sur disque), puis les publie aussitôt dans
-   `VALHALLA_S3_URI` (`aws s3 sync --delete` : le préfixe est un miroir). Le
-   dépôt est contrôlé : accès au seau avant l'envoi, code de retour de la
-   synchronisation, puis nombre d'objets `.gph` listés égal au nombre de tuiles
-   locales ; tout écart arrête le script en erreur. Les sommes de contrôle des
+   `VALHALLA_S3_URI` (`aws s3 sync --delete` : le préfixe est un miroir), avec
+   l'ACL `VALHALLA_S3_ACL` (`public-read` par défaut). Le dépôt est contrôlé :
+   accès au seau avant l'envoi, code de retour de la synchronisation, nombre
+   d'objets `.gph` listés égal au nombre de tuiles locales, puis lecture
+   **anonyme** de trois tuiles (première, médiane, dernière), comme le service
+   les lit ; tout écart arrête le script en erreur, avec la correction à
+   apporter selon le code HTTP (400 : forme d'URL refusée ; 403 : tuiles
+   privées ; 404 : mauvais préfixe). Les sommes de contrôle des
    AWS CLI récentes, mal gérées par de nombreux stockages S3 compatibles, ne
    sont envoyées que si nécessaire (`AWS_REQUEST_CHECKSUM_CALCULATION` /
-   `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` par défaut). Si
-   `VALHALLA_TILE_URL` est définie, il vérifie qu'une tuile y est lisible ;
-   sinon il en affiche la valeur suggérée. `--help` détaille les options
+   `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` par défaut). La lecture
+   est vérifiée à `VALHALLA_TILE_URL` si elle est définie ; sinon le script
+   essaie les URL déduites de `VALHALLA_S3_ENDPOINT` et affiche celle qui
+   fonctionne. `--help` détaille les options
    (`--skip-build`, `--dry-run`, `--jobs`…).
-2. **Rendre les tuiles lisibles** : le seau (ou le préfixe) doit être en
-   **lecture publique** HTTP, ou servi par un proxy (authentification basique
+2. **Rendre les tuiles lisibles** : les tuiles doivent être en **lecture
+   publique** HTTP, ou servies par un proxy (authentification basique
    possible avec `VALHALLA_TILE_URL_USER_PW`) : Valhalla ne signe pas les
-   requêtes S3. Les tuiles sont des données OpenStreetMap (licence ODbL).
+   requêtes S3. Une ACL `public-read` sur le **seau** ne permet que de le
+   lister : chaque **objet** doit porter la sienne, d'où `VALHALLA_S3_ACL`.
+   `aws s3 sync` ne renvoie que les tuiles modifiées : les tuiles déjà
+   déposées sans ACL se rendent publiques une fois avec
+   `aws s3 cp s3://mon-seau/valhalla/fr s3://mon-seau/valhalla/fr --recursive --acl public-read --metadata-directive REPLACE`.
+   Certains stockages (OVHcloud…) refusent en anonyme les URL
+   `https://point-d-accès/seau/…` (HTTP 400, « Not S3 request ») : utiliser
+   la forme `https://seau.point-d-accès/…`. Les tuiles sont des données
+   OpenStreetMap (licence ODbL).
 3. **Lancer le service** et basculer Douceville :
    ```bash
-   VALHALLA_TILE_URL='https://s3.mon-fournisseur.example/mon-seau/valhalla/fr/{tilePath}' \
+   VALHALLA_TILE_URL='https://mon-seau.s3.mon-fournisseur.example/valhalla/fr/{tilePath}' \
      docker compose --profile valhalla up -d valhalla
    # puis, pour l'application : ROUTING_PROVIDER=valhalla (VALHALLA_URL=http://valhalla:8002)
    ```
@@ -731,6 +744,7 @@ France, quelques Go de disque pour les seules régions interrogées).
 | ---------------------------------- | ------ | ---- |
 | `VALHALLA_S3_URI`                  | — (requis) | Cible des tuiles (`s3://seau/préfixe`), synchronisée en miroir. |
 | `VALHALLA_S3_ENDPOINT`             | `AWS_ENDPOINT_URL` | URL du stockage S3 compatible. |
+| `VALHALLA_S3_ACL`                  | `public-read` | ACL des tuiles déposées ; vide : aucune (stockage sans ACL, rendu public autrement). |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | — | Identifiants S3 (vides : `AWS_PROFILE` / `~/.aws`). |
 | `VALHALLA_VERSION`                 | étiquette de `VALHALLA_IMAGE` | Version des outils Valhalla (`pyvalhalla`, ou vérifiée pour ceux du `PATH` ; `VALHALLA_ALLOW_VERSION_MISMATCH=1` pour passer outre). |
 
@@ -739,6 +753,10 @@ France, quelques Go de disque pour les seules régions interrogées).
   (`docker compose --profile valhalla up -d --force-recreate valhalla`), sinon
   les anciennes tuiles en cache restent servies. Les isochrones en cache de
   Douceville (`ISOCHRONE_CACHE_DAYS`) expirent d'elles-mêmes.
+- **Changement de `VALHALLA_TILE_URL`** : vider aussi `./.valhalla/tiles`.
+  Le cache retient l'URL d'origine (`id.txt`) ; sinon Valhalla s'arrête à
+  chaque requête (« Tile URL changed, configure a different
+  mjolnir.tile_dir ») et le service ne répond plus.
 - La **carte de connectivité** de Valhalla est désactivée
   (`loki.use_connectivity`) : construite au démarrage à partir des seules
   tuiles locales, elle ferait rejeter tous les itinéraires d'un cache vide
