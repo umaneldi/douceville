@@ -1,46 +1,54 @@
 #!/usr/bin/env bash
-# Build Valhalla routing tiles from OpenStreetMap extracts and upload them to an
-# S3-compatible object storage, from which the Valhalla service of Douceville
-# downloads them on demand (mjolnir.tile_url).
+# Build Valhalla routing tiles from OpenStreetMap extracts and publish them to
+# the S3-compatible object storage configured in .env, from which the Valhalla
+# service of Douceville downloads them on demand (mjolnir.tile_url).
 #
-# This script runs on a BUILD machine, never in the production image: the
-# production Valhalla container only reads the tiles from S3.
+# This script runs on a BUILD machine (Linux or macOS), never in the production
+# image: the production Valhalla container only reads the tiles from S3. It
+# uses no Docker: the Valhalla tools and the AWS CLI run natively.
 #
 # Usage:
 #   scripts/build_valhalla_tiles.sh [options]
 #
 # Options:
+#   --env-file PATH       Configuration file (default: .env at the repository root).
 #   --region URL          OSM extract (.osm.pbf) to build; repeatable.
 #                         Default: Geofabrik France (mainland + Corsica).
 #   --drom                Also build the overseas departments (Guadeloupe,
 #                         Martinique, Guyane, Réunion, Mayotte).
-#   --workdir DIR         Working directory (default: ./.valhalla-build).
-#   --upload S3_URI       Upload the tiles to S3_URI (e.g. s3://bucket/valhalla/fr).
-#   --endpoint URL        S3 endpoint URL (any S3-compatible storage), required
-#                         with --upload unless AWS_ENDPOINT_URL is set.
-#   --public-url URL      Public HTTP URL of S3_URI, used to print the
-#                         VALHALLA_TILE_URL value (default: <endpoint>/<bucket>/<prefix>).
-#   --docker-network NET  Docker network of the upload container (when the S3
-#                         storage is itself a local container).
-#   --skip-build          Only upload the tiles already in --workdir.
+#   --workdir DIR         Local working directory: OSM extracts and tiles being
+#                         built (default: ./.valhalla-build).
+#   --jobs N              Build threads (default: number of CPUs).
+#   --skip-build          Only publish the tiles already built in --workdir.
 #   --dry-run             Print the commands without running them.
 #   -h, --help            Show this help.
 #
-# Environment:
-#   VALHALLA_IMAGE        Valhalla image (default ghcr.io/valhalla/valhalla:3.9.3).
-#                         Use the SAME version as the service: the tile format
-#                         changes between Valhalla versions.
+# Configuration (read from the env file; the environment is used as fallback):
+#   VALHALLA_S3_URI       Required. Target of the tiles, e.g. s3://bucket/valhalla/fr.
+#                         Its content is MIRRORED (stale tiles are deleted).
+#   VALHALLA_S3_ENDPOINT  Required. S3 endpoint URL (any S3-compatible storage);
+#                         fallback AWS_ENDPOINT_URL.
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
-#                         Credentials of the S3 storage (upload only), passed
-#                         to the amazon/aws-cli container.
-#   AWS_ENDPOINT_URL      Default for --endpoint.
+#                         Credentials of the S3 storage (or AWS_PROFILE / ~/.aws).
+#   VALHALLA_TILE_URL     Public URL of the tiles (.../{tilePath}), as used by the
+#                         service: checked after publication if set.
+#   VALHALLA_VERSION      Valhalla version (default: tag of VALHALLA_IMAGE, i.e.
+#                         3.9.3). Use the SAME version as the service: the tile
+#                         format changes between Valhalla versions.
+#   VALHALLA_ALLOW_VERSION_MISMATCH=1
+#                         Accept installed Valhalla tools of another version.
 #
 # Requirements and notes:
-#   - Docker. For all of France: about 8-16 GB of RAM, 25-30 GB of free disk
-#     and 1-3 hours on 4-8 cores (much less for a small --region).
-#   - Linux or macOS (bash 3.2+, curl). On macOS, raise the memory limit of
-#     Docker Desktop (Settings > Resources) and keep --workdir in a directory
-#     shared with Docker (under /Users by default).
+#   - bash 3.2+, curl, and either:
+#       * uv (macOS: `brew install uv`): the tools come from the pyvalhalla
+#         package of the right version (wheels: Linux x86_64/arm64, macOS 15+
+#         on Apple Silicon) and the AWS CLI from the awscli package; or
+#       * Valhalla tools of the same version on PATH (e.g. `brew install
+#         valhalla`, needed on Intel Macs) and the AWS CLI (`brew install awscli`).
+#   - For all of France: about 8-16 GB of RAM, 25-30 GB of free disk and 1-3
+#     hours on 4-8 cores (much less for a small --region).
+#   - Valhalla only writes tiles to a local disk: they are built in --workdir,
+#     then immediately synchronised to VALHALLA_S3_URI (aws s3 sync --delete).
 #   - The tiles are a directory of .gph files (no .tar: a tar cannot be loaded
 #     lazily over HTTP).
 #   - The bucket (or prefix) must be PUBLICLY READABLE over HTTP, or served by a
@@ -52,8 +60,7 @@
 #     attribution "© OpenStreetMap contributors".
 set -euo pipefail
 
-VALHALLA_IMAGE=${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla:3.9.3}
-AWS_IMAGE=${AWS_IMAGE:-amazon/aws-cli:latest}
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
 GEOFABRIK=https://download.geofabrik.de
 FRANCE=$GEOFABRIK/europe/france-latest.osm.pbf
 DROM=(
@@ -64,28 +71,25 @@ DROM=(
   "$GEOFABRIK/europe/france/mayotte-latest.osm.pbf"
 )
 
+env_file=$ROOT/.env
 regions=()
 drom=false
 workdir=./.valhalla-build
-upload=""
-endpoint=${AWS_ENDPOINT_URL:-}
-public_url=""
-docker_network=""
+jobs=""
 skip_build=false
 dry_run=false
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 die() { echo "error: $*" >&2; exit 1; }
+warn() { echo "warning: $*" >&2; }
 
 while [ $# -gt 0 ]; do
   case $1 in
+    --env-file) env_file=${2:?--env-file needs a path}; shift 2 ;;
     --region) regions+=("${2:?--region needs a URL}"); shift 2 ;;
     --drom) drom=true; shift ;;
     --workdir) workdir=${2:?--workdir needs a directory}; shift 2 ;;
-    --upload) upload=${2:?--upload needs an s3:// URI}; shift 2 ;;
-    --endpoint) endpoint=${2:?--endpoint needs a URL}; shift 2 ;;
-    --public-url) public_url=${2:?--public-url needs a URL}; shift 2 ;;
-    --docker-network) docker_network=${2:?--docker-network needs a network}; shift 2 ;;
+    --jobs) jobs=${2:?--jobs needs a number}; shift 2 ;;
     --skip-build) skip_build=true; shift ;;
     --dry-run) dry_run=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -93,21 +97,89 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --- Configuration (.env), checked before any download ---------------------
+[ -f "$env_file" ] || die "$env_file not found (copy sample.env to .env and fill the Valhalla section)"
+set -a
+# shellcheck disable=SC1090
+. "$env_file"
+set +a
+# Empty credentials (as in sample.env) would hide AWS_PROFILE / ~/.aws.
+for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION AWS_PROFILE; do
+  eval "[ -n \"\${$v:-}\" ] || unset $v"
+done
+
+s3_uri=${VALHALLA_S3_URI:-}
+endpoint=${VALHALLA_S3_ENDPOINT:-${AWS_ENDPOINT_URL:-}}
+tile_url=${VALHALLA_TILE_URL:-}
+image=${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla:3.9.3}
+version=${VALHALLA_VERSION:-${image##*:}}
+
+[ -n "$s3_uri" ] || die "VALHALLA_S3_URI is not set in $env_file (e.g. s3://bucket/valhalla/fr)"
+case $s3_uri in
+  s3://?*) ;;
+  *) die "VALHALLA_S3_URI must be an s3:// URI (got $s3_uri)" ;;
+esac
+[ -n "$endpoint" ] || die "VALHALLA_S3_ENDPOINT (or AWS_ENDPOINT_URL) is not set in $env_file"
+case $version in
+  [0-9]*.[0-9]*) ;;
+  *) die "cannot infer the Valhalla version from VALHALLA_IMAGE=$image: set VALHALLA_VERSION" ;;
+esac
+if [ -n "$jobs" ]; then
+  case $jobs in *[!0-9]*|0) die "--jobs must be a positive number (got $jobs)" ;; esac
+else
+  jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+fi
+
 [ ${#regions[@]} -gt 0 ] || regions=("$FRANCE")
 if $drom; then regions+=("${DROM[@]}"); fi
-if [ -n "$upload" ]; then
-  [[ $upload == s3://*/* || $upload == s3://* ]] || die "--upload must be an s3:// URI (got $upload)"
-  [ -n "$endpoint" ] || die "--endpoint (or AWS_ENDPOINT_URL) is required with --upload"
-fi
-$skip_build && [ -z "$upload" ] && die "--skip-build without --upload does nothing"
 
 run() {
   echo "+ $*"
   $dry_run || "$@"
 }
 
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# --- Tools (no Docker) ------------------------------------------------------
+# valhalla_cmd / aws_cmd: command prefix of the Valhalla tools and of the AWS CLI.
+valhalla_cmd=()
+resolve_valhalla() {
+  if have valhalla_build_tiles && have valhalla_build_admins && have valhalla_build_config; then
+    local installed
+    installed=$(valhalla_build_tiles --version 2>&1 | head -n 1 || true)
+    case " $installed " in
+      *[!0-9.]"$version"[!0-9.]*) ;;
+      *)
+        [ "${VALHALLA_ALLOW_VERSION_MISMATCH:-}" = 1 ] ||
+          die "installed Valhalla tools report '$installed', expected $version (same version as the service); remove them from PATH to use uv, or set VALHALLA_ALLOW_VERSION_MISMATCH=1"
+        warn "using Valhalla '$installed' instead of $version"
+        ;;
+    esac
+    valhalla_cmd=()
+  elif have uvx; then
+    valhalla_cmd=(uvx --from "pyvalhalla==$version")
+  else
+    die "Valhalla tools not found: install uv (macOS: brew install uv) or Valhalla $version itself (brew install valhalla)"
+  fi
+}
+
+aws_cmd=()
+resolve_aws() {
+  if have aws; then
+    aws_cmd=(aws)
+  elif have uvx; then
+    aws_cmd=(uvx --from awscli aws)
+  else
+    die "AWS CLI not found: install uv (macOS: brew install uv) or the AWS CLI (brew install awscli)"
+  fi
+}
+
+have curl || die "curl not found"
+$skip_build || resolve_valhalla
+resolve_aws
+
 $dry_run || mkdir -p "$workdir"
-# Absolute path for the docker volumes (no `realpath -m`: absent on macOS).
+# Absolute path (no `realpath -m`: absent on macOS).
 case $workdir in
   /*) ;;
   *) workdir=$PWD/${workdir#./} ;;
@@ -119,7 +191,7 @@ if ! $skip_build; then
   pbfs=()
   for url in "${regions[@]}"; do
     f=$(basename "$url")
-    pbfs+=("/build/pbf/$f")
+    pbfs+=("$workdir/pbf/$f")
     if [ -s "$workdir/pbf/$f" ]; then
       echo "= $f already downloaded"
     else
@@ -129,35 +201,44 @@ if ! $skip_build; then
     fi
   done
 
-  # 2. Configuration, administrative areas and tiles, in the Valhalla image.
-  #    Previous tiles are removed: valhalla_build_tiles does not delete tiles
-  #    of roads that disappeared.
+  # 2. Configuration, administrative areas and tiles. Previous tiles are
+  #    removed: valhalla_build_tiles does not delete tiles of roads that
+  #    disappeared.
   run rm -rf "$workdir/tiles"
-  run docker run --rm -v "$workdir:/build" "$VALHALLA_IMAGE" bash -euc "
-    valhalla_build_config --mjolnir-tile-dir /build/tiles --mjolnir-tile-extract '' \
-      --mjolnir-traffic-extract '' --mjolnir-admin /build/admin.sqlite \
-      --mjolnir-timezone '' > /build/valhalla.json
-    valhalla_build_admins -c /build/valhalla.json ${pbfs[*]}
-    valhalla_build_tiles -c /build/valhalla.json ${pbfs[*]}
-    find /build/tiles -name '*.gph' | wc -l | xargs echo 'tiles built:'
-  "
-fi
-
-# 3. Upload to the S3-compatible storage (tiles directory, mirrored).
-if [ -n "$upload" ]; then
-  [ $dry_run = true ] || [ -d "$workdir/tiles" ] || die "no tiles in $workdir/tiles (build them first)"
-  net=()
-  [ -z "$docker_network" ] || net=(--network "$docker_network")
-  # ${net[@]+...}: bash 3.2 (macOS) rejects an empty "${net[@]}" under set -u.
-  run docker run --rm ${net[@]+"${net[@]}"} -v "$workdir/tiles:/tiles:ro" \
-    -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
-    "$AWS_IMAGE" s3 sync /tiles "$upload" --endpoint-url "$endpoint" --delete --only-show-errors
-
-  if [ -z "$public_url" ]; then
-    public_url="${endpoint%/}/${upload#s3://}"
+  echo "+ ${valhalla_cmd[*]+${valhalla_cmd[*]} }valhalla_build_config ... > $workdir/valhalla.json"
+  if ! $dry_run; then
+    ${valhalla_cmd[@]+"${valhalla_cmd[@]}"} valhalla_build_config \
+      --mjolnir-tile-dir "$workdir/tiles" --mjolnir-tile-extract '' \
+      --mjolnir-traffic-extract '' --mjolnir-admin "$workdir/admin.sqlite" \
+      --mjolnir-timezone '' --mjolnir-concurrency "$jobs" > "$workdir/valhalla.json"
   fi
-  echo
-  echo "Tiles uploaded. Configure the Valhalla service with:"
-  echo "  VALHALLA_TILE_URL=${public_url%/}/{tilePath}"
-  echo "then empty ./.valhalla/tiles and restart it: docker compose --profile valhalla up -d --force-recreate valhalla"
+  run ${valhalla_cmd[@]+"${valhalla_cmd[@]}"} valhalla_build_admins -c "$workdir/valhalla.json" "${pbfs[@]}"
+  run ${valhalla_cmd[@]+"${valhalla_cmd[@]}"} valhalla_build_tiles -c "$workdir/valhalla.json" "${pbfs[@]}"
 fi
+
+# 3. Publication to the S3-compatible storage (tiles directory, mirrored).
+if ! $dry_run; then
+  [ -d "$workdir/tiles" ] || die "no tiles in $workdir/tiles (build them first)"
+  count=$(find "$workdir/tiles" -name '*.gph' | wc -l | tr -d ' ')
+  [ "$count" -gt 0 ] || die "no .gph tile in $workdir/tiles: refusing to mirror an empty directory to $s3_uri"
+  echo "= $count tiles to publish"
+fi
+run "${aws_cmd[@]}" s3 sync "$workdir/tiles" "$s3_uri" \
+  --endpoint-url "$endpoint" --delete --only-show-errors
+
+# 4. Check that a tile is publicly readable, as the service will read it.
+if [ -z "$tile_url" ]; then
+  echo
+  echo "Tiles published. Configure the Valhalla service in .env with, e.g.:"
+  echo "  VALHALLA_TILE_URL=${endpoint%/}/${s3_uri#s3://}/{tilePath}"
+elif ! $dry_run; then
+  sample=$(cd "$workdir/tiles" && find . -name '*.gph' | head -n 1)
+  sample=${sample#./}
+  url=$(printf '%s' "$tile_url" | sed "s|{tilePath}|$sample|")
+  if curl -fsI -o /dev/null "$url"; then
+    echo "= tile readable at $url"
+  else
+    warn "tile not readable at $url: the bucket must be public (or VALHALLA_TILE_URL is wrong)"
+  fi
+fi
+echo "Then empty ./.valhalla/tiles and restart the service: docker compose --profile valhalla up -d --force-recreate valhalla"

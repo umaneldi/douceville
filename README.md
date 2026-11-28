@@ -680,19 +680,28 @@ France, quelques Go de disque pour les seules régions interrogées).
 
 1. **Construire et déposer les tuiles**, sur une machine de build (pas dans
    l'image de prod), avec
-   [`scripts/build_valhalla_tiles.sh`](scripts/build_valhalla_tiles.sh) :
+   [`scripts/build_valhalla_tiles.sh`](scripts/build_valhalla_tiles.sh), sans
+   Docker, sous Linux ou macOS. Prérequis : `curl` et
+   [uv](https://docs.astral.sh/uv/) (macOS : `brew install uv`), qui fournit
+   les outils Valhalla (paquet `pyvalhalla` de la même version que le service ;
+   roues Linux x86_64/arm64 et macOS 15+ Apple Silicon) et l'AWS CLI (`awscli`).
+   À défaut (Mac Intel…), des outils `valhalla_*` de la **même version** et
+   `aws` dans le `PATH` (`brew install valhalla awscli`). La configuration est
+   lue dans `.env` (`--env-file` pour un autre fichier) :
    ```bash
-   AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_DEFAULT_REGION=… \
-     scripts/build_valhalla_tiles.sh --drom \
-       --upload s3://mon-seau/valhalla/fr --endpoint https://s3.mon-fournisseur.example
+   # .env : VALHALLA_S3_URI=s3://mon-seau/valhalla/fr
+   #        VALHALLA_S3_ENDPOINT=https://s3.mon-fournisseur.example
+   #        AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_DEFAULT_REGION=…
+   scripts/build_valhalla_tiles.sh --drom
    ```
    Le script télécharge les extraits Geofabrik (France ; `--drom` : outre-mer),
-   construit les tuiles dans un conteneur `ghcr.io/valhalla/valhalla` (≈ 8–16 Go
-   de RAM, 25–30 Go de disque, 1 à 3 h pour la France ; `--region URL` pour un
-   petit extrait de test), puis les synchronise vers le S3 (`aws s3 sync`, dans
-   le conteneur `amazon/aws-cli`). Il affiche la valeur de `VALHALLA_TILE_URL`.
-   `--help` détaille les options (`--skip-build`, `--dry-run`, `--public-url`,
-   `--docker-network`…).
+   construit les tuiles dans `--workdir` (≈ 8–16 Go de RAM, 25–30 Go de disque,
+   1 à 3 h pour la France ; `--region URL` pour un petit extrait de test ;
+   Valhalla n'écrit que sur disque), puis les publie aussitôt dans
+   `VALHALLA_S3_URI` (`aws s3 sync --delete` : le préfixe est un miroir). Si
+   `VALHALLA_TILE_URL` est définie, il vérifie qu'une tuile y est lisible ;
+   sinon il en affiche la valeur suggérée. `--help` détaille les options
+   (`--skip-build`, `--dry-run`, `--jobs`…).
 2. **Rendre les tuiles lisibles** : le seau (ou le préfixe) doit être en
    **lecture publique** HTTP, ou servi par un proxy (authentification basique
    possible avec `VALHALLA_TILE_URL_USER_PW`) : Valhalla ne signe pas les
@@ -710,7 +719,14 @@ France, quelques Go de disque pour les seules régions interrogées).
 | `VALHALLA_TILE_URL_USER_PW`    | — (vide)   | `utilisateur:motdepasse` d'un proxy à authentification basique. |
 | `VALHALLA_CACHE_BYTES`         | `300000000` | Taille maximale du cache mémoire des tuiles décodées. |
 | `VALHALLA_THREADS`             | `4`        | Fils de calcul du service. |
-| `VALHALLA_IMAGE`               | `ghcr.io/valhalla/valhalla:3.9.3` | Image du service **et** du script : la même version doit construire et lire les tuiles (leur format change entre versions). |
+| `VALHALLA_IMAGE`               | `ghcr.io/valhalla/valhalla:3.9.3` | Image du service ; son étiquette fixe aussi la version des outils du script : la même version doit construire et lire les tuiles (leur format change entre versions). |
+
+| Variable du script de construction | Défaut | Rôle |
+| ---------------------------------- | ------ | ---- |
+| `VALHALLA_S3_URI`                  | — (requis) | Cible des tuiles (`s3://seau/préfixe`), synchronisée en miroir. |
+| `VALHALLA_S3_ENDPOINT`             | `AWS_ENDPOINT_URL` | URL du stockage S3 compatible. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | — | Identifiants S3 (vides : `AWS_PROFILE` / `~/.aws`). |
+| `VALHALLA_VERSION`                 | étiquette de `VALHALLA_IMAGE` | Version des outils Valhalla (`pyvalhalla`, ou vérifiée pour ceux du `PATH` ; `VALHALLA_ALLOW_VERSION_MISMATCH=1` pour passer outre). |
 
 - **Mise à jour** (mensuelle, par exemple) : relancer le script, puis **vider
   `./.valhalla/tiles`** et recréer le service

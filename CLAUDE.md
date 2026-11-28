@@ -163,7 +163,11 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   des tuiles Valhalla (`scripts/build_valhalla_tiles.sh`) ne doit **jamais**
   entrer dans l'image de prod ni dans le service compose `valhalla`, qui ne
   fait que lire les tuiles sur S3 ; service et script utilisent la même
-  version d'image (`VALHALLA_IMAGE`).
+  version de Valhalla (`VALHALLA_IMAGE`, dont le script lit l'étiquette, ou
+  `VALHALLA_VERSION`). Le script n'utilise pas Docker (outils natifs ou
+  `uvx` : `pyvalhalla`, `awscli`), lit sa configuration dans `.env`
+  (`VALHALLA_S3_URI`, `VALHALLA_S3_ENDPOINT`, `AWS_*`) et doit rester
+  compatible bash 3.2 (macOS).
 - **Secrets** : ne jamais committer `.env` ni de clé (Mollie, ORS, OIDC…) ;
   `sample.env` ne contient que des valeurs d'exemple.
 
