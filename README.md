@@ -698,7 +698,13 @@ France, quelques Go de disque pour les seules régions interrogées).
    construit les tuiles dans `--workdir` (≈ 8–16 Go de RAM, 25–30 Go de disque,
    1 à 3 h pour la France ; `--region URL` pour un petit extrait de test ;
    Valhalla n'écrit que sur disque), puis les publie aussitôt dans
-   `VALHALLA_S3_URI` (`aws s3 sync --delete` : le préfixe est un miroir). Si
+   `VALHALLA_S3_URI` (`aws s3 sync --delete` : le préfixe est un miroir). Le
+   dépôt est contrôlé : accès au seau avant l'envoi, code de retour de la
+   synchronisation, puis nombre d'objets `.gph` listés égal au nombre de tuiles
+   locales ; tout écart arrête le script en erreur. Les sommes de contrôle des
+   AWS CLI récentes, mal gérées par de nombreux stockages S3 compatibles, ne
+   sont envoyées que si nécessaire (`AWS_REQUEST_CHECKSUM_CALCULATION` /
+   `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` par défaut). Si
    `VALHALLA_TILE_URL` est définie, il vérifie qu'une tuile y est lisible ;
    sinon il en affiche la valeur suggérée. `--help` détaille les options
    (`--skip-build`, `--dry-run`, `--jobs`…).

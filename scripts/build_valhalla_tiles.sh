@@ -54,6 +54,12 @@
 #   - The bucket (or prefix) must be PUBLICLY READABLE over HTTP, or served by a
 #     proxy: Valhalla does not sign S3 requests (it only supports HTTP basic
 #     auth, see VALHALLA_TILE_URL_USER_PW).
+#   - Publication is checked: bucket access before the upload, exit status of
+#     the sync, then the number of .gph objects listed in VALHALLA_S3_URI must
+#     equal the number of local tiles; any failure stops the script (exit 1).
+#   - Recent AWS CLIs send integrity checksums that many S3-compatible storages
+#     reject or mishandle: AWS_REQUEST_CHECKSUM_CALCULATION and
+#     AWS_RESPONSE_CHECKSUM_VALIDATION default to when_required (overridable).
 #   - After an update, empty the tile cache of the service (./.valhalla/tiles)
 #     and restart it, otherwise it keeps serving the previously cached tiles.
 #   - The tiles are derived from OpenStreetMap data (ODbL): keep the
@@ -82,6 +88,8 @@ dry_run=false
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 die() { echo "error: $*" >&2; exit 1; }
 warn() { echo "warning: $*" >&2; }
+# With set -e, a failing command would otherwise stop the script silently.
+trap 'rc=$?; echo "error: command failed (exit $rc) at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -109,6 +117,7 @@ for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION AWS_PROFILE;
 done
 
 s3_uri=${VALHALLA_S3_URI:-}
+s3_uri=${s3_uri%/}
 endpoint=${VALHALLA_S3_ENDPOINT:-${AWS_ENDPOINT_URL:-}}
 tile_url=${VALHALLA_TILE_URL:-}
 image=${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla:3.9.3}
@@ -120,6 +129,12 @@ case $s3_uri in
   *) die "VALHALLA_S3_URI must be an s3:// URI (got $s3_uri)" ;;
 esac
 [ -n "$endpoint" ] || die "VALHALLA_S3_ENDPOINT (or AWS_ENDPOINT_URL) is not set in $env_file"
+bucket=${s3_uri#s3://}
+bucket=${bucket%%/*}
+# Checksums of recent AWS CLIs (CRC32, aws-chunked) break many S3-compatible
+# storages: only send them when the API requires it.
+export AWS_REQUEST_CHECKSUM_CALCULATION=${AWS_REQUEST_CHECKSUM_CALCULATION:-when_required}
+export AWS_RESPONSE_CHECKSUM_VALIDATION=${AWS_RESPONSE_CHECKSUM_VALIDATION:-when_required}
 case $version in
   [0-9]*.[0-9]*) ;;
   *) die "cannot infer the Valhalla version from VALHALLA_IMAGE=$image: set VALHALLA_VERSION" ;;
@@ -222,9 +237,43 @@ if ! $dry_run; then
   count=$(find "$workdir/tiles" -name '*.gph' | wc -l | tr -d ' ')
   [ "$count" -gt 0 ] || die "no .gph tile in $workdir/tiles: refusing to mirror an empty directory to $s3_uri"
   echo "= $count tiles to publish"
+
+  # 3a. Access to the bucket (credentials, endpoint, bucket name), before
+  #     uploading anything.
+  echo "+ ${aws_cmd[*]} s3api head-bucket --bucket $bucket --endpoint-url $endpoint"
+  "${aws_cmd[@]}" s3api head-bucket --bucket "$bucket" --endpoint-url "$endpoint" ||
+    die "bucket '$bucket' not reachable at $endpoint (see the AWS CLI message above): check VALHALLA_S3_URI, VALHALLA_S3_ENDPOINT and the AWS_* credentials"
 fi
-run "${aws_cmd[@]}" s3 sync "$workdir/tiles" "$s3_uri" \
-  --endpoint-url "$endpoint" --delete --only-show-errors
+
+# 3b. Upload. Exit status of aws s3 sync: 1 = some transfers failed,
+#     2 = some files skipped or invalid parameters.
+echo "+ ${aws_cmd[*]} s3 sync $workdir/tiles $s3_uri --endpoint-url $endpoint --delete --only-show-errors"
+if ! $dry_run; then
+  rc=0
+  "${aws_cmd[@]}" s3 sync "$workdir/tiles" "$s3_uri" \
+    --endpoint-url "$endpoint" --delete --only-show-errors || rc=$?
+  case $rc in
+    0) ;;
+    1) die "upload to $s3_uri failed for one or more tiles (aws s3 sync exit 1, see the messages above)" ;;
+    2) die "upload to $s3_uri incomplete: files skipped or invalid parameters (aws s3 sync exit 2, see the messages above)" ;;
+    *) die "upload to $s3_uri failed (aws s3 sync exit $rc)" ;;
+  esac
+
+  # 3c. The tiles must really be in the bucket: compare the number of .gph
+  #     objects listed under the prefix with the local count. `aws s3 ls`
+  #     exits 1 without message when the prefix is empty: only stderr tells an
+  #     error apart.
+  ls_err=$workdir/s3-ls.err
+  listing=$("${aws_cmd[@]}" s3 ls "$s3_uri/" --recursive --endpoint-url "$endpoint" 2>"$ls_err") ||
+    [ ! -s "$ls_err" ] || die "cannot list $s3_uri after the upload: $(cat "$ls_err")"
+  rm -f "$ls_err"
+  remote=$(printf '%s\n' "$listing" | grep -c '\.gph$' || true)
+  [ "$remote" -gt 0 ] ||
+    die "aws s3 sync reported success but no .gph object is listed in $s3_uri: check that VALHALLA_S3_ENDPOINT is the storage the bucket belongs to"
+  [ "$remote" -eq "$count" ] ||
+    die "$remote .gph objects in $s3_uri, $count expected: publication incomplete, run again with --skip-build"
+  echo "= $remote tiles published in $s3_uri"
+fi
 
 # 4. Check that a tile is publicly readable, as the service will read it.
 if [ -z "$tile_url" ]; then
@@ -232,7 +281,9 @@ if [ -z "$tile_url" ]; then
   echo "Tiles published. Configure the Valhalla service in .env with, e.g.:"
   echo "  VALHALLA_TILE_URL=${endpoint%/}/${s3_uri#s3://}/{tilePath}"
 elif ! $dry_run; then
-  sample=$(cd "$workdir/tiles" && find . -name '*.gph' | head -n 1)
+  # -quit rather than `| head -n 1`: with pipefail, find killed by SIGPIPE
+  # would end the script silently.
+  sample=$(cd "$workdir/tiles" && find . -name '*.gph' -print -quit)
   sample=${sample#./}
   url=$(printf '%s' "$tile_url" | sed "s|{tilePath}|$sample|")
   if curl -fsI -o /dev/null "$url"; then
