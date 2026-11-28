@@ -38,6 +38,9 @@
 # Requirements and notes:
 #   - Docker. For all of France: about 8-16 GB of RAM, 25-30 GB of free disk
 #     and 1-3 hours on 4-8 cores (much less for a small --region).
+#   - Linux or macOS (bash 3.2+, curl). On macOS, raise the memory limit of
+#     Docker Desktop (Settings > Resources) and keep --workdir in a directory
+#     shared with Docker (under /Users by default).
 #   - The tiles are a directory of .gph files (no .tar: a tar cannot be loaded
 #     lazily over HTTP).
 #   - The bucket (or prefix) must be PUBLICLY READABLE over HTTP, or served by a
@@ -104,7 +107,12 @@ run() {
 }
 
 $dry_run || mkdir -p "$workdir"
-workdir=$(realpath -m "$workdir")
+# Absolute path for the docker volumes (no `realpath -m`: absent on macOS).
+case $workdir in
+  /*) ;;
+  *) workdir=$PWD/${workdir#./} ;;
+esac
+workdir=${workdir%/}
 
 if ! $skip_build; then
   # 1. OSM extracts.
@@ -140,7 +148,8 @@ if [ -n "$upload" ]; then
   [ $dry_run = true ] || [ -d "$workdir/tiles" ] || die "no tiles in $workdir/tiles (build them first)"
   net=()
   [ -z "$docker_network" ] || net=(--network "$docker_network")
-  run docker run --rm "${net[@]}" -v "$workdir/tiles:/tiles:ro" \
+  # ${net[@]+...}: bash 3.2 (macOS) rejects an empty "${net[@]}" under set -u.
+  run docker run --rm ${net[@]+"${net[@]}"} -v "$workdir/tiles:/tiles:ro" \
     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
     "$AWS_IMAGE" s3 sync /tiles "$upload" --endpoint-url "$endpoint" --delete --only-show-errors
 
