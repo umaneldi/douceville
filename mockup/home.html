@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Douceville — maquette de la page d'accueil</title>
+<style>
+  :root {
+    --blue: #1f4fe0; --blue-dark: #163bb0; --ink: #14171f; --muted: #6b7280;
+    --line: #e5e7eb; --pill: #ffffff; --radius: 999px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink);
+    min-height: 100vh;
+    background: linear-gradient(180deg, #3c7fd6 0%, #5a9ae6 35%, #bcd8f3 70%, #e8f0f6 100%);
+  }
+  /* En-tête */
+  header { display: flex; align-items: center; justify-content: space-between; padding: 20px 32px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: #fff; font-weight: 800; font-size: 22px; }
+  .brand .logo { width: 36px; height: 36px; border-radius: 10px; background: #fff; color: var(--blue);
+    display: grid; place-items: center; font-weight: 900; }
+  .top-actions { display: flex; gap: 10px; }
+  .top-btn { border: 0; background: #fff; border-radius: var(--radius); padding: 10px 18px; font: inherit;
+    font-weight: 600; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.08); display: flex; gap: 8px; align-items: center; }
+  .top-btn.round { width: 44px; height: 44px; padding: 0; justify-content: center; }
+
+  h1 { text-align: center; color: #fff; font-size: clamp(36px, 6vw, 72px); letter-spacing: -1.5px;
+    margin: 56px 0 8px; text-shadow: 0 4px 18px rgba(0,0,0,.18); font-weight: 900; }
+  .sub { text-align: center; color: #eef4ff; margin: 0 0 40px; font-size: 18px; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px 60px; }
+
+  /* Barre 1 */
+  .bar { background: var(--pill); border-radius: 48px; box-shadow: 0 10px 30px rgba(20,40,90,.18);
+    display: flex; align-items: center; padding: 10px 10px 10px 28px; gap: 0; position: relative; }
+  .seg { padding: 4px 22px; display: flex; flex-direction: column; gap: 2px; position: relative; }
+  .seg + .seg { border-left: 1px solid var(--line); }
+  .seg label, .seg .lbl { font-size: 13px; color: var(--muted); }
+  .seg input[type=text] { border: 0; outline: 0; font: inherit; font-size: 17px; font-weight: 600; padding: 0;
+    background: transparent; width: 100%; }
+  .seg input[type=text]::placeholder { color: #9aa1ad; font-style: italic; font-weight: 500; }
+  .seg-centre { flex: 1.6; padding-left: 0; }
+  .seg-rayon { flex: 1.1; }
+  .seg-rayon .val { font-size: 17px; font-weight: 600; }
+  .seg-rayon input[type=range] { width: 100%; accent-color: var(--blue); margin: 2px 0 0; }
+  .seg-couches { flex: 1.2; cursor: pointer; }
+  .seg-couches .val { font-size: 17px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cta { border: 0; background: var(--blue); color: #fff; font: inherit; font-weight: 700; font-size: 18px;
+    padding: 16px 32px; border-radius: 40px; cursor: pointer; display: flex; gap: 10px; align-items: center; white-space: nowrap; }
+  .cta:hover { background: var(--blue-dark); }
+
+  .menu { position: absolute; top: calc(100% + 10px); left: 0; z-index: 20; background: #fff; border-radius: 16px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.16); padding: 10px; min-width: 280px; }
+  .menu label { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 15px; color: var(--ink); }
+  .menu label:hover { background: #f3f5fa; }
+  .menu .hint { font-size: 12px; color: var(--muted); padding: 4px 10px 0; }
+  .menu .sep { border-top: 1px solid var(--line); margin: 6px 0; }
+
+  /* Autocomplétion */
+  .ac-list { position: absolute; top: calc(100% + 12px); left: 0; right: 0; min-width: 320px; z-index: 30; list-style: none;
+    margin: 0; padding: 6px; background: #fff; border-radius: 14px; box-shadow: 0 12px 30px rgba(0,0,0,.16); }
+  .ac-list li { padding: 8px 12px; border-radius: 10px; cursor: pointer; display: flex; flex-direction: column; }
+  .ac-list li small { color: var(--muted); }
+  .ac-list li.active, .ac-list li:hover { background: #eef3ff; }
+
+  /* Barre 2 : points de départ */
+  .bar2 { margin-top: 18px; background: rgba(255,255,255,.75); backdrop-filter: blur(8px); border-radius: 28px;
+    padding: 14px 16px; box-shadow: 0 6px 20px rgba(20,40,90,.10); }
+  .bar2-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .bar2-head .title { font-weight: 700; margin-right: auto; padding-left: 8px; }
+  .add-btn { border: 1px dashed #9db4ee; background: #fff; color: var(--blue); font: inherit; font-weight: 600;
+    border-radius: var(--radius); padding: 9px 16px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+  .add-btn:hover { background: #eef3ff; }
+  .rows { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .rows:empty::before { content: "Ajoutez un lieu où vous vous rendez souvent (travail, sport…) ou un type d'établissement à proximité."; color: var(--muted); padding: 6px 10px; font-size: 14px; }
+
+  .row { background: #fff; border-radius: 22px; display: flex; align-items: center; gap: 0; padding: 8px 8px 8px 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.06); position: relative; }
+  .row .ico { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 18px; }
+  .row.depart .ico { background: #eef3ff; }
+  .row .f { padding: 2px 16px; display: flex; flex-direction: column; gap: 2px; position: relative; min-width: 0; }
+  .row .f + .f { border-left: 1px solid var(--line); }
+  .row .f > span { font-size: 12px; color: var(--muted); }
+  .row input[type=text], .row select { border: 0; outline: 0; font: inherit; font-weight: 600; background: transparent; padding: 0; width: 100%; }
+  .row input[type=text]::placeholder { color: #9aa1ad; font-weight: 500; font-style: italic; }
+  .row .f-label { flex: 0 0 190px; }
+  .row .f-addr { flex: 1; }
+  .row .f-nature { flex: 1; }
+  .row .f-secteur { flex: 0 0 150px; }
+  .row .f-time { flex: 0 0 170px; }
+  .row .f-time input { width: 100%; accent-color: var(--blue); margin: 0; }
+  .row .f-transp { flex: 0 0 120px; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .chip { border: 1px solid var(--line); background: #f8fafc; border-radius: var(--radius); font: inherit; font-size: 12px;
+    padding: 2px 9px; cursor: pointer; color: var(--ink); }
+  .chip:hover, .chip.on { background: #eef3ff; border-color: #9db4ee; color: var(--blue); }
+  .del { border: 0; background: #f3f4f6; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 18px; color: var(--muted); flex: none; margin-left: 6px; }
+  .del:hover { background: #fee2e2; color: #b91c1c; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+
+  .example { margin: 40px auto 0; width: fit-content; max-width: 100%; background: #fff; border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 10px 20px; font-size: 15px; }
+  details.state { margin-top: 24px; background: #fff; border-radius: 16px; padding: 10px 16px; font-size: 13px; }
+  details.state summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+  details.state pre { margin: 8px 0 0; white-space: pre-wrap; }
+
+  @media (max-width: 900px) {
+    .bar, .row { flex-direction: column; align-items: stretch; border-radius: 24px; padding: 14px; }
+    .seg, .row .f { padding: 8px 4px; flex: none !important; }
+    .seg + .seg, .row .f + .f { border-left: 0; border-top: 1px solid var(--line); }
+    .cta { justify-content: center; margin-top: 8px; }
+    .row .ico { position: absolute; right: 52px; top: 12px; }
+    .del { position: absolute; right: 12px; top: 14px; }
+    .top-btn .txt { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">D</span> Douceville</div>
+  <div class="top-actions">
+    <button class="top-btn round" title="Rechercher" aria-label="Rechercher">🔍</button>
+    <button class="top-btn">♡ <span class="txt">Favoris</span></button>
+    <button class="top-btn">☰ <span class="txt">Menu</span></button>
+  </div>
+</header>
+
+<h1>Trouvez où habiter</h1>
+<p class="sub">À portée de votre travail, de vos activités et des bonnes écoles.</p>
+
+<div class="wrap">
+  <!-- Barre 1 : centre, rayon, couches -->
+  <form class="bar" id="bar" onsubmit="event.preventDefault(); alert('Recherche (maquette) :\n' + JSON.stringify(state(), null, 2));">
+    <div class="seg seg-centre ac-wrap">
+      <label for="centre">Autour de</label>
+      <input id="centre" type="text" placeholder="Adresse ou commune" autocomplete="off" />
+    </div>
+    <div class="seg seg-rayon">
+      <span class="lbl">Rayon</span>
+      <span class="val"><span id="rayon-val">10</span> km</span>
+      <input id="rayon" type="range" min="1" max="50" step="1" value="10" aria-label="Rayon (km)" />
+    </div>
+    <div class="seg seg-couches" id="couches-seg" tabindex="0" role="button" aria-haspopup="true">
+      <span class="lbl">Couches</span>
+      <span class="val" id="couches-val">Sécurité</span>
+      <div class="menu" id="couches-menu" hidden>
+        <label><input type="radio" name="choro" value="securite" checked /> Sécurité</label>
+        <label><input type="radio" name="choro" value="prix" /> Prix au m²</label>
+        <label><input type="radio" name="choro" value="fiscalite" /> Fiscalité</label>
+        <label><input type="radio" name="choro" value="" /> Aucune carte de fond</label>
+        <p class="hint">Une seule carte colorée à la fois.</p>
+        <div class="sep"></div>
+        <label><input type="checkbox" id="logements" /> Logements sociaux</label>
+      </div>
+    </div>
+    <button class="cta" type="submit">Voir la zone 🔍</button>
+  </form>
+
+  <!-- Barre 2 : points de départ et lieux d'intérêt -->
+  <section class="bar2">
+    <div class="bar2-head">
+      <span class="title">Mes trajets</span>
+      <button class="add-btn" id="add-depart" type="button">📍 + Point de départ</button>
+      <button class="add-btn" id="add-interet" type="button">🏫 + Lieu d'intérêt</button>
+    </div>
+    <div class="rows" id="rows"></div>
+  </section>
+
+  <p class="example"><strong>Exemple.</strong> La zone affichée est accessible depuis <em>tous</em> vos points de départ et lieux d'intérêt, dans le temps choisi.</p>
+
+  <details class="state" open>
+    <summary>État de la recherche (aperçu maquette)</summary>
+    <pre id="state"></pre>
+  </details>
+</div>
+
+<datalist id="labels">
+  <option value="Travail"></option><option value="Sport"></option><option value="Hôpital"></option>
+  <option value="École"></option><option value="Famille"></option><option value="Gare"></option>
+</datalist>
+
+<template id="depart-tpl">
+  <div class="row depart">
+    <span class="ico" aria-hidden="true">📍</span>
+    <div class="f f-label">
+      <span>Étiquette</span>
+      <input type="text" class="label" list="labels" placeholder="Ex. Travail" />
+      <div class="chips"></div>
+    </div>
+    <div class="f f-addr ac-wrap">
+      <span>Adresse</span>
+      <input type="text" class="addr" placeholder="Saisissez une adresse" autocomplete="off" />
+    </div>
+    <div class="f f-time">
+      <span>Temps max : <strong class="tval">20</strong> min</span>
+      <input type="range" class="time" min="5" max="60" step="5" value="20" />
+    </div>
+    <div class="f f-transp">
+      <span>Mode</span>
+      <select class="transp">
+        <option value="driving-car">🚗 Voiture</option>
+        <option value="cycling-regular">🚲 Vélo</option>
+        <option value="foot-walking">🚶 À pied</option>
+      </select>
+    </div>
+    <button class="del" type="button" title="Supprimer" aria-label="Supprimer">×</button>
+  </div>
+</template>
+
+<template id="interet-tpl">
+  <div class="row interet">
+    <span class="ico" aria-hidden="true">🏫</span>
+    <div class="f f-nature">
+      <span>Établissement</span>
+      <select class="nature"></select>
+    </div>
+    <div class="f f-secteur">
+      <span>Secteur</span>
+      <select class="secteur">
+        <option value="">Tous</option>
+        <option value="public">Public</option>
+        <option value="privé">Privé</option>
+        <option value="hors contrat">Hors contrat</option>
+      </select>
+    </div>
+    <div class="f f-time">
+      <span>Temps max : <strong class="tval">15</strong> min</span>
+      <input type="range" class="time" min="5" max="60" step="5" value="15" />
+    </div>
+    <div class="f f-transp">
+      <span>Mode</span>
+      <select class="transp">
+        <option value="driving-car">🚗 Voiture</option>
+        <option value="cycling-regular">🚲 Vélo</option>
+        <option value="foot-walking">🚶 À pied</option>
+      </select>
+    </div>
+    <button class="del" type="button" title="Supprimer" aria-label="Supprimer">×</button>
+  </div>
+</template>
+
+<script>
+// Données factices de la maquette.
+const ADDRESSES = [
+  ["10 Rue de Rivoli", "75004 Paris"], ["1 Place de la Bastille", "75011 Paris"],
+  ["24 Rue du Faubourg Saint-Antoine", "75012 Paris"], ["5 Avenue de l'Opéra", "75001 Paris"],
+  ["Gare de Lyon", "75012 Paris"], ["Hôpital Necker", "75015 Paris"],
+  ["12 Rue de la République", "69002 Lyon"], ["Gare Part-Dieu", "69003 Lyon"],
+  ["3 Cours Mirabeau", "13100 Aix-en-Provence"], ["8 Rue Sainte-Catherine", "33000 Bordeaux"],
+  ["Versailles", "78000 Yvelines"], ["Vincennes", "94300 Val-de-Marne"],
+  ["Montreuil", "93100 Seine-Saint-Denis"], ["Nantes", "44000 Loire-Atlantique"],
+  ["15 Boulevard Haussmann", "75009 Paris"], ["Stade de France", "93200 Saint-Denis"],
+];
+const LABELS = ["Travail", "Sport", "Hôpital", "École", "Famille", "Gare"];
+// Natures et couleurs reprises de NATURE_GROUPS / CRITERES (web/app.js).
+const NATURES = [
+  { nature: "Maternelle", color: "#3987e5", min: 10, transp: "foot-walking" },
+  { nature: "Élémentaire", color: "#d4492f", min: 10, transp: "foot-walking" },
+  { nature: "Collège", color: "#199e70", min: 15, transp: "foot-walking" },
+  { nature: "Lycée", color: "#c49600", min: 20, transp: "driving-car" },
+];
+
+const $ = (s, r = document) => r.querySelector(s);
+const norm = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+// Autocomplétion simulée sur un champ texte (souris + ↑/↓/Entrée/Échap).
+function autocomplete(input) {
+  const list = document.createElement("ul");
+  list.className = "ac-list"; list.hidden = true;
+  input.parentElement.appendChild(list);
+  let items = [], active = -1;
+  const close = () => { list.hidden = true; active = -1; };
+  const pick = (i) => { input.value = items[i].join(", "); close(); render(); };
+  const paint = () => [...list.children].forEach((li, i) => li.classList.toggle("active", i === active));
+  input.addEventListener("input", () => {
+    const q = norm(input.value.trim());
+    if (q.length < 2) return close();
+    items = ADDRESSES.filter(([a, c]) => norm(a + " " + c).includes(q)).slice(0, 6);
+    list.innerHTML = "";
+    items.forEach(([a, c], i) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<strong></strong><small></small>`;
+      li.firstChild.textContent = a; li.lastChild.textContent = c;
+      li.addEventListener("mousedown", (e) => { e.preventDefault(); pick(i); });
+      list.appendChild(li);
+    });
+    active = -1; list.hidden = items.length === 0;
+  });
+  input.addEventListener("keydown", (e) => {
+    if (list.hidden) return;
+    if (e.key === "ArrowDown") { active = (active + 1) % items.length; paint(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { active = (active - 1 + items.length) % items.length; paint(); e.preventDefault(); }
+    else if (e.key === "Enter" && active >= 0) { pick(active); e.preventDefault(); }
+    else if (e.key === "Escape") close();
+  });
+  input.addEventListener("blur", () => setTimeout(close, 100));
+}
+
+// Barre 1.
+autocomplete($("#centre"));
+$("#rayon").addEventListener("input", (e) => { $("#rayon-val").textContent = e.target.value; render(); });
+const seg = $("#couches-seg"), menu = $("#couches-menu");
+seg.addEventListener("click", (e) => { if (!menu.contains(e.target)) menu.hidden = !menu.hidden; });
+document.addEventListener("click", (e) => { if (!seg.contains(e.target)) menu.hidden = true; });
+menu.addEventListener("change", () => {
+  const names = state().couches.map((c) => ({ securite: "Sécurité", prix: "Prix au m²", fiscalite: "Fiscalité", logements: "Logements sociaux" })[c]);
+  $("#couches-val").textContent = names.join(" + ") || "Aucune";
+  render();
+});
+
+// Barre 2.
+const rows = $("#rows");
+function wireCommon(row) {
+  const time = $(".time", row);
+  time.addEventListener("input", () => { $(".tval", row).textContent = time.value; });
+  $(".del", row).addEventListener("click", () => { row.remove(); render(); });
+  row.addEventListener("input", render);
+  row.addEventListener("change", render);
+}
+function addDepart(label = "") {
+  const row = $("#depart-tpl").content.firstElementChild.cloneNode(true);
+  const input = $(".label", row), chips = $(".chips", row);
+  input.value = label;
+  const sync = () => [...chips.children].forEach((c) => c.classList.toggle("on", c.textContent === input.value));
+  for (const l of LABELS) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = l;
+    b.addEventListener("click", () => { input.value = l; sync(); render(); $(".addr", row).focus(); });
+    chips.appendChild(b);
+  }
+  input.addEventListener("input", sync); sync();
+  wireCommon(row);
+  rows.appendChild(row);
+  autocomplete($(".addr", row));
+  (label ? $(".addr", row) : input).focus();
+  render();
+}
+function addInteret(nature = "Collège") {
+  const row = $("#interet-tpl").content.firstElementChild.cloneNode(true);
+  const sel = $(".nature", row), ico = $(".ico", row);
+  for (const n of NATURES) sel.add(new Option(n.nature, n.nature));
+  const apply = () => {
+    const n = NATURES.find((x) => x.nature === sel.value);
+    ico.style.background = n.color + "22";
+    ico.innerHTML = `<span class="dot" style="background:${n.color};margin:0"></span>`;
+    $(".time", row).value = n.min; $(".tval", row).textContent = n.min;
+    $(".transp", row).value = n.transp;
+  };
+  sel.value = nature; apply();
+  sel.addEventListener("change", apply);
+  wireCommon(row);
+  rows.appendChild(row);
+  render();
+}
+$("#add-depart").addEventListener("click", () => addDepart());
+$("#add-interet").addEventListener("click", () => addInteret());
+
+// État courant (modèle de données à valider).
+function state() {
+  const choro = $("input[name=choro]:checked").value;
+  return {
+    centre: $("#centre").value,
+    rayon: +$("#rayon").value,
+    couches: [choro, $("#logements").checked && "logements"].filter(Boolean),
+    departs: [...rows.querySelectorAll(".depart")].map((r) => ({
+      label: $(".label", r).value, adresse: $(".addr", r).value,
+      temps: +$(".time", r).value, transport: $(".transp", r).value,
+    })),
+    interets: [...rows.querySelectorAll(".interet")].map((r) => ({
+      nature: $(".nature", r).value, secteur: $(".secteur", r).value || null,
+      temps: +$(".time", r).value, transport: $(".transp", r).value,
+    })),
+  };
+}
+function render() { $("#state").textContent = JSON.stringify(state(), null, 2); }
+$("#centre").addEventListener("input", render);
+
+// Exemple pré-rempli.
+addDepart("Travail");
+$(".row.depart .addr").value = "15 Boulevard Haussmann, 75009 Paris";
+addInteret("Collège");
+$("#centre").focus();
+render();
+</script>
+</body>
+</html>

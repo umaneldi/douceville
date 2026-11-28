@@ -61,14 +61,12 @@ services:
       ISOCHRONE_CACHE_MAX: ${ISOCHRONE_CACHE_MAX:-20000}
       OIDC_DEFAULT_PERMS: ${OIDC_DEFAULT_PERMS:-verified}
 
-  # Valhalla (ROUTING_PROVIDER=valhalla) : lit les tuiles à la demande sur un
-  # stockage S3 compatible (VALHALLA_TILE_URL, terminée par /{tilePath}) et les
-  # garde dans ./.valhalla/tiles. La carte de connectivité est désactivée :
-  # Valhalla la construit au démarrage à partir des seules tuiles locales
-  # (aucune ici au départ) et rejetterait alors tous les itinéraires
-  # (« unconnected regions »). Aucune construction de tuiles ici : elles
-  # sont produites et déposées par scripts/build_valhalla_tiles.sh, sur une
-  # machine de build. Démarrage : docker compose --profile valhalla up -d
+  # Valhalla (ROUTING_PROVIDER=valhalla) : lit les tuiles locales de
+  # ./.valhalla/tiles (/data/tiles). Aucune construction de tuiles ici : elles
+  # sont produites par scripts/build_valhalla_tiles.sh, sur une machine de
+  # build, puis copiées dans ./.valhalla/tiles (rsync --delete). Le service
+  # refuse de démarrer sans tuiles. Démarrage : docker compose --profile
+  # valhalla up -d ; après une mise à jour des tuiles : --force-recreate.
   valhalla:
     image: ${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla:3.9.3}
     profiles: [valhalla]
@@ -78,26 +76,20 @@ services:
     volumes:
       - ./.valhalla:/data
     environment:
-      VALHALLA_TILE_URL: ${VALHALLA_TILE_URL:-}
-      VALHALLA_TILE_URL_USER_PW: ${VALHALLA_TILE_URL_USER_PW:-}
       VALHALLA_CACHE_BYTES: ${VALHALLA_CACHE_BYTES:-300000000}
       VALHALLA_THREADS: ${VALHALLA_THREADS:-4}
     command:
       - bash
       - -euc
       - |
-        : "$${VALHALLA_TILE_URL:?VALHALLA_TILE_URL is required (public S3 URL ending with /{tilePath})}"
-        mkdir -p /data/tiles
-        auth=()
-        if [ -n "$$VALHALLA_TILE_URL_USER_PW" ]; then
-          auth=(--mjolnir-tile-url-user-pw "$$VALHALLA_TILE_URL_USER_PW")
+        if [ -z "$$(find /data/tiles -name '*.gph' 2>/dev/null | head -n 1)" ]; then
+          echo "error: no tiles in ./.valhalla/tiles: build them with scripts/build_valhalla_tiles.sh and copy them there" >&2
+          exit 1
         fi
         valhalla_build_config \
           --mjolnir-tile-dir /data/tiles --mjolnir-tile-extract '' --mjolnir-traffic-extract '' \
-          --mjolnir-tile-url "$$VALHALLA_TILE_URL" "$${auth[@]}" \
           --mjolnir-use-lru-mem-cache True --mjolnir-max-cache-size "$$VALHALLA_CACHE_BYTES" \
           --mjolnir-admin '' --mjolnir-timezone '' \
-          --loki-use-connectivity False \
           --service-limits-isochrone-max-contours 12 --service-limits-isochrone-max-time-contour 120 \
           > /data/valhalla.json
         exec valhalla_service /data/valhalla.json "$$VALHALLA_THREADS"

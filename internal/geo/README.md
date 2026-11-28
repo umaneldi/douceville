@@ -29,9 +29,9 @@ conversion en WKT.
 - Les noms de profils de l'API (`models.Transports`) restent ceux
   d'OpenRouteService ; `valhallaCosting` les traduit pour Valhalla (un nouveau
   mode s'ajoute aux deux).
-- Le service Valhalla lit ses tuiles à la demande sur S3 (voir la section
-  *Valhalla* du `README.md` racine) ; sa carte de connectivité doit rester
-  désactivée, sinon tout itinéraire échoue tant que le cache est vide.
+- Le service Valhalla lit ses tuiles dans le répertoire local
+  `./.valhalla/tiles` (voir la section *Valhalla* du `README.md` racine) ;
+  sa carte de connectivité est active.
 - ORS renvoie du GeoJSON : l'en-tête `Accept` doit accepter
   `application/geo+json` (sinon `406`).
 - Les niveaux d'une isochrone sont triés par temps croissant ; `Geometry` est

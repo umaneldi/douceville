@@ -24,7 +24,7 @@ DV_TEST_DSN=postgres://user:pass@localhost:5432/postgres go test -cover ./...   
 go test -coverprofile=/tmp/cov.out ./... && go tool cover -func=/tmp/cov.out    # couverture par fonction
 ./restart.sh                         # (re)lance PostGIS en local (docker compose)
 ./launch_server.sh                   # lance le serveur avec les variables de .env
-scripts/build_valhalla_tiles.sh --help   # tuiles Valhalla : construction + dépôt S3 (machine de build)
+scripts/build_valhalla_tiles.sh --help   # tuiles Valhalla : construction locale (machine de build)
 ```
 
 Pour les tests d'intégration, une base PostGIS jetable suffit (chaque test y
@@ -58,7 +58,7 @@ sur GHCR que pour un tag `v*`.
 | `internal/models` | Structures JSON échangées par l'API et entre paquets. |
 | `internal/store` | Interface `Store`, implémentation pgx `PgStore`, migrations SQL embarquées. |
 | `web/` | Frontend HTML/CSS/JS sans build (Leaflet), embarqué via `//go:embed`. |
-| `scripts/` | Scripts Python (`uv run`) d'import de données et d'administration ; `build_valhalla_tiles.sh` (bash) construit les tuiles Valhalla et les dépose sur S3, sur une machine de build. |
+| `scripts/` | Scripts Python (`uv run`) d'import de données et d'administration ; `build_valhalla_tiles.sh` (bash) construit les tuiles Valhalla sur une machine de build et indique comment les copier dans `./.valhalla/tiles` du serveur. |
 | `analyse_securite.py` | Script Python (`uv run`, plotly) : analyse nationale du score de sécurité affiché par la carte. |
 
 Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
@@ -162,12 +162,13 @@ Sens des dépendances : `cmd/server` → `api` → (`auth`, `billing`, `geo`,
   `POST /api/etablissements/estimation` pour afficher le coût. La construction
   des tuiles Valhalla (`scripts/build_valhalla_tiles.sh`) ne doit **jamais**
   entrer dans l'image de prod ni dans le service compose `valhalla`, qui ne
-  fait que lire les tuiles sur S3 ; service et script utilisent la même
-  version de Valhalla (`VALHALLA_IMAGE`, dont le script lit l'étiquette, ou
+  fait que lire les tuiles locales de `./.valhalla/tiles` (copiées par
+  `rsync --delete`) ; service et script utilisent la même version de
+  Valhalla (`VALHALLA_IMAGE`, dont le script lit l'étiquette, ou
   `VALHALLA_VERSION`). Le script n'utilise pas Docker (outils natifs ou
-  `uvx` : `pyvalhalla`, `awscli`), lit sa configuration dans `.env`
-  (`VALHALLA_S3_URI`, `VALHALLA_S3_ENDPOINT`, `VALHALLA_S3_ACL`, `AWS_*`) et doit rester
-  compatible bash 3.2 (macOS).
+  `uvx` : `pyvalhalla`), lit `.env` s'il existe (version seulement), laisse
+  les tuiles dans `<workdir>/tiles` et doit rester compatible bash 3.2
+  (macOS).
 - **Secrets** : ne jamais committer `.env` ni de clé (Mollie, ORS, OIDC…) ;
   `sample.env` ne contient que des valeurs d'exemple.
 

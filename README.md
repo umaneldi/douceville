@@ -152,7 +152,7 @@ navigateur ──► / (UI statique embarquée, web/)
                     ├── PostgreSQL + PostGIS (internal/store)
                     ├── routage : isochrones et itinéraires (internal/geo)
                     │     OpenRouteService ou Valhalla (ROUTING_PROVIDER)
-                    │     Valhalla ── tuiles lues à la demande sur un stockage S3
+                    │     Valhalla ── tuiles locales (./.valhalla/tiles)
                     ├── addok / Base Adresse Nationale : géocodage (internal/geo)
                     ├── SMTP : e-mails transactionnels (internal/mail)
                     ├── fournisseur OpenID Connect, optionnel (internal/auth)
@@ -672,95 +672,65 @@ minute, 500 par jour) : elle impose un plafond de 10 sources par nature. Avec
 [Valhalla](https://github.com/valhalla/valhalla) auto-hébergé, sans quota, et
 toutes les sources du rayon sont gardées.
 
-Le service ne **construit** rien : il **lit à la demande** les tuiles de routage
-(graphe routier issu d'OpenStreetMap, découpé en carreaux) sur un **stockage S3
-compatible** quelconque (`mjolnir.tile_url`), les garde dans `./.valhalla/tiles`
-et borne leur cache mémoire. Une machine modeste suffit (≈ 1–2 Go de RAM pour la
-France, quelques Go de disque pour les seules régions interrogées).
+Le service ne **construit** rien : il lit les tuiles de routage (graphe
+routier issu d'OpenStreetMap, découpé en carreaux) dans le répertoire local
+`./.valhalla/tiles` et borne leur cache mémoire. Une machine modeste suffit
+pour le servir (≈ 1–2 Go de RAM et quelques Go de disque pour la France) ;
+la construction, elle, demande une machine plus grosse.
 
-1. **Construire et déposer les tuiles**, sur une machine de build (pas dans
-   l'image de prod), avec
+1. **Construire les tuiles**, sur une machine de build (ou sur le serveur
+   s'il en a les ressources ; jamais dans l'image de prod), avec
    [`scripts/build_valhalla_tiles.sh`](scripts/build_valhalla_tiles.sh), sans
    Docker, sous Linux ou macOS. Prérequis : `curl` et
    [uv](https://docs.astral.sh/uv/) (macOS : `brew install uv`), qui fournit
    les outils Valhalla (paquet `pyvalhalla` de la même version que le service ;
-   roues Linux x86_64/arm64 et macOS 15+ Apple Silicon) et l'AWS CLI (`awscli`).
-   À défaut (Mac Intel…), des outils `valhalla_*` de la **même version** et
-   `aws` dans le `PATH` (`brew install valhalla awscli`). La configuration est
-   lue dans `.env` (`--env-file` pour un autre fichier) :
+   roues Linux x86_64/arm64 et macOS 15+ Apple Silicon). À défaut (Mac
+   Intel…), des outils `valhalla_*` de la **même version** dans le `PATH`
+   (`brew install valhalla`). Le script lit `.env` s'il existe
+   (`--env-file` pour un autre fichier), pour la seule version de Valhalla :
    ```bash
-   # .env : VALHALLA_S3_URI=s3://mon-seau/valhalla/fr
-   #        VALHALLA_S3_ENDPOINT=https://s3.mon-fournisseur.example
-   #        AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_DEFAULT_REGION=…
    scripts/build_valhalla_tiles.sh --drom
    ```
-   Le script télécharge les extraits Geofabrik (France ; `--drom` : outre-mer),
-   construit les tuiles dans `--workdir` (≈ 8–16 Go de RAM, 25–30 Go de disque,
-   1 à 3 h pour la France ; `--region URL` pour un petit extrait de test ;
-   Valhalla n'écrit que sur disque), puis les publie aussitôt dans
-   `VALHALLA_S3_URI` (`aws s3 sync --delete` : le préfixe est un miroir), avec
-   l'ACL `VALHALLA_S3_ACL` (`public-read` par défaut). Le dépôt est contrôlé :
-   accès au seau avant l'envoi, code de retour de la synchronisation, nombre
-   d'objets `.gph` listés égal au nombre de tuiles locales, puis lecture
-   **anonyme** de trois tuiles (première, médiane, dernière), comme le service
-   les lit ; tout écart arrête le script en erreur, avec la correction à
-   apporter selon le code HTTP (400 : forme d'URL refusée ; 403 : tuiles
-   privées ; 404 : mauvais préfixe). Les sommes de contrôle des
-   AWS CLI récentes, mal gérées par de nombreux stockages S3 compatibles, ne
-   sont envoyées que si nécessaire (`AWS_REQUEST_CHECKSUM_CALCULATION` /
-   `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` par défaut). La lecture
-   est vérifiée à `VALHALLA_TILE_URL` si elle est définie ; sinon le script
-   essaie les URL déduites de `VALHALLA_S3_ENDPOINT` et affiche celle qui
-   fonctionne. `--help` détaille les options
-   (`--skip-build`, `--dry-run`, `--jobs`…).
-2. **Rendre les tuiles lisibles** : les tuiles doivent être en **lecture
-   publique** HTTP, ou servies par un proxy (authentification basique
-   possible avec `VALHALLA_TILE_URL_USER_PW`) : Valhalla ne signe pas les
-   requêtes S3. Une ACL `public-read` sur le **seau** ne permet que de le
-   lister : chaque **objet** doit porter la sienne, d'où `VALHALLA_S3_ACL`.
-   `aws s3 sync` ne renvoie que les tuiles modifiées : les tuiles déjà
-   déposées sans ACL se rendent publiques une fois avec
-   `aws s3 cp s3://mon-seau/valhalla/fr s3://mon-seau/valhalla/fr --recursive --acl public-read --metadata-directive REPLACE`.
-   Certains stockages (OVHcloud…) refusent en anonyme les URL
-   `https://point-d-accès/seau/…` (HTTP 400, « Not S3 request ») : utiliser
-   la forme `https://seau.point-d-accès/…`. Les tuiles sont des données
-   OpenStreetMap (licence ODbL).
+   Le script télécharge les extraits Geofabrik (France ; `--drom` : outre-mer)
+   et construit les tuiles dans `--workdir` (`./.valhalla-build` par défaut ;
+   ≈ 8–16 Go de RAM, 25–30 Go de disque, 1 à 3 h pour la France ; `--region
+   URL` pour un petit extrait de test). Les tuiles **restent sur place**, dans
+   `<workdir>/tiles` (reconstruit de zéro à chaque exécution) ; le script
+   vérifie qu'il y en a, puis affiche leur nombre, leur taille et les
+   commandes de copie. `--help` détaille les options (`--dry-run`,
+   `--jobs`…).
+2. **Copier les tuiles** dans `.valhalla/tiles/` du dépôt Douceville du
+   serveur qui fait tourner le service, en supprimant les tuiles périmées :
+   ```bash
+   rsync -a --delete --delay-updates ./.valhalla-build/tiles/ serveur:/chemin/douceville/.valhalla/tiles/
+   ```
+   Les tuiles sont des données OpenStreetMap (licence ODbL).
 3. **Lancer le service** et basculer Douceville :
    ```bash
-   VALHALLA_TILE_URL='https://mon-seau.s3.mon-fournisseur.example/valhalla/fr/{tilePath}' \
-     docker compose --profile valhalla up -d valhalla
+   docker compose --profile valhalla up -d --force-recreate valhalla
    # puis, pour l'application : ROUTING_PROVIDER=valhalla (VALHALLA_URL=http://valhalla:8002)
    ```
+   Sans tuile dans `./.valhalla/tiles`, le service s'arrête aussitôt avec un
+   message explicite (`docker compose logs valhalla`).
 
 | Variable du service `valhalla` | Défaut | Rôle |
 | ------------------------------ | ------ | ---- |
-| `VALHALLA_TILE_URL`            | — (requis) | URL HTTP publique des tuiles, terminée par `/{tilePath}`. |
-| `VALHALLA_TILE_URL_USER_PW`    | — (vide)   | `utilisateur:motdepasse` d'un proxy à authentification basique. |
 | `VALHALLA_CACHE_BYTES`         | `300000000` | Taille maximale du cache mémoire des tuiles décodées. |
 | `VALHALLA_THREADS`             | `4`        | Fils de calcul du service. |
 | `VALHALLA_IMAGE`               | `ghcr.io/valhalla/valhalla:3.9.3` | Image du service ; son étiquette fixe aussi la version des outils du script : la même version doit construire et lire les tuiles (leur format change entre versions). |
 
 | Variable du script de construction | Défaut | Rôle |
 | ---------------------------------- | ------ | ---- |
-| `VALHALLA_S3_URI`                  | — (requis) | Cible des tuiles (`s3://seau/préfixe`), synchronisée en miroir. |
-| `VALHALLA_S3_ENDPOINT`             | `AWS_ENDPOINT_URL` | URL du stockage S3 compatible. |
-| `VALHALLA_S3_ACL`                  | `public-read` | ACL des tuiles déposées ; vide : aucune (stockage sans ACL, rendu public autrement). |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | — | Identifiants S3 (vides : `AWS_PROFILE` / `~/.aws`). |
 | `VALHALLA_VERSION`                 | étiquette de `VALHALLA_IMAGE` | Version des outils Valhalla (`pyvalhalla`, ou vérifiée pour ceux du `PATH` ; `VALHALLA_ALLOW_VERSION_MISMATCH=1` pour passer outre). |
 
-- **Mise à jour** (mensuelle, par exemple) : relancer le script, puis **vider
-  `./.valhalla/tiles`** et recréer le service
-  (`docker compose --profile valhalla up -d --force-recreate valhalla`), sinon
-  les anciennes tuiles en cache restent servies. Les isochrones en cache de
-  Douceville (`ISOCHRONE_CACHE_DAYS`) expirent d'elles-mêmes.
-- **Changement de `VALHALLA_TILE_URL`** : vider aussi `./.valhalla/tiles`.
-  Le cache retient l'URL d'origine (`id.txt`) ; sinon Valhalla s'arrête à
-  chaque requête (« Tile URL changed, configure a different
-  mjolnir.tile_dir ») et le service ne répond plus.
-- La **carte de connectivité** de Valhalla est désactivée
-  (`loki.use_connectivity`) : construite au démarrage à partir des seules
-  tuiles locales, elle ferait rejeter tous les itinéraires d'un cache vide
-  (« unconnected regions »).
+- **Mise à jour** (mensuelle, par exemple) : relancer le script, recopier les
+  tuiles avec `rsync --delete`, puis recréer le service
+  (`docker compose --profile valhalla up -d --force-recreate valhalla`) : il
+  garde tuiles et carte de connectivité en mémoire. Les isochrones en cache
+  de Douceville (`ISOCHRONE_CACHE_DAYS`) expirent d'elles-mêmes.
+- La **carte de connectivité** de Valhalla (`loki.use_connectivity`) est
+  active : construite au démarrage à partir des tuiles locales, elle rejette
+  vite les points sans route vers la destination.
 - Le service n'écoute que sur `127.0.0.1:8002` (et sur le réseau compose pour
   l'application).
 
